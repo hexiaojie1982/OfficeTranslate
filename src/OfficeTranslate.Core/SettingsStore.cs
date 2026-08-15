@@ -18,7 +18,10 @@ namespace OfficeTranslate.Core
             try
             {
                 if (!File.Exists(_path)) return new TranslationSettings();
-                var settings = _json.Deserialize<TranslationSettings>(File.ReadAllText(_path, Encoding.UTF8)) ?? new TranslationSettings();
+                var raw = File.ReadAllText(_path, Encoding.UTF8);
+                var settings = _json.Deserialize<TranslationSettings>(raw) ?? new TranslationSettings();
+                if (raw.IndexOf("\"TranslationStyle\"", StringComparison.OrdinalIgnoreCase) < 0)
+                    settings.TranslationStyle = string.IsNullOrWhiteSpace(settings.CustomInstructions) ? "ProfessionalReport" : "Custom";
                 if (!string.IsNullOrEmpty(settings.ApiKey)) settings.ApiKey = Unprotect(settings.ApiKey);
                 return settings;
             }
