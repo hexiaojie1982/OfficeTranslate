@@ -84,7 +84,7 @@ namespace OfficeTranslate.PowerPointAddIn
             if (_host != null) _host.StatusBar = text;
 #endif
         }
-        public void OnConnection(object application, Extensibility.ext_ConnectMode mode, object instance, ref Array custom) { _host = (HostApplication)application; _settings = _store.Load(); }
+        public void OnConnection(object application, Extensibility.ext_ConnectMode mode, object instance, ref Array custom) { System.Windows.Forms.Application.EnableVisualStyles(); _host = (HostApplication)application; _settings = _store.Load(); }
         public void OnDisconnection(Extensibility.ext_DisconnectMode mode, ref Array custom) { _cancellation?.Cancel(); _host = null; }
         public void OnAddInsUpdate(ref Array custom) { } public void OnStartupComplete(ref Array custom) { } public void OnBeginShutdown(ref Array custom) => _cancellation?.Cancel();
     }

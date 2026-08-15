@@ -146,6 +146,7 @@ namespace OfficeTranslate.WordAddIn
 
         public void OnConnection(object application, Extensibility.ext_ConnectMode connectMode, object addInInst, ref Array custom)
         {
+            System.Windows.Forms.Application.EnableVisualStyles();
             _word = (WordApplication)application;
             _settings = _settingsStore.Load();
         }
