@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <?define ProductVersion="2.1.2.0" ?>
+  <Product Id="*" Name="OfficeTranslate for Microsoft Office" Language="2052" Codepage="936" Version="$(var.ProductVersion)" Manufacturer="OfficeTranslate" UpgradeCode="5D99BB0D-887E-4AA7-A504-B763AC97F899">
+    <Package InstallerVersion="500" Compressed="yes" InstallScope="perMachine" Platform="x64" />
+    <MajorUpgrade DowngradeErrorMessage="已安装更高版本的 OfficeTranslate。" />
+    <MediaTemplate EmbedCab="yes" />
+    <Feature Id="ProductFeature" Title="OfficeTranslate for Word" Level="1">
+      <ComponentGroupRef Id="ProductComponents" />
+    </Feature>
+  </Product>
+  <Fragment>
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="ProgramFiles64Folder">
+        <Directory Id="CompanyFolder" Name="OfficeTranslate">
+          <Directory Id="INSTALLFOLDER" Name="Word" />
+        </Directory>
+      </Directory>
+    </Directory>
+  </Fragment>
+  <Fragment>
+    <ComponentGroup Id="ProductComponents" Directory="INSTALLFOLDER">
+      <Component Id="AddInFiles" Guid="57E31EB0-9A59-4283-8A24-FF0DBE54665F" Win64="yes">
+        <File Id="WordAddInDll" Source="$(var.BuildOutput)\OfficeTranslate.WordAddIn.dll" KeyPath="yes" />
+        <File Id="CoreDll" Source="$(var.BuildOutput)\OfficeTranslate.Core.dll" />
+        <File Id="WordInteropDll" Source="$(var.BuildOutput)\Microsoft.Office.Interop.Word.dll" />
+        <RegistryKey Root="HKLM" Key="Software\Classes\CLSID\{7898D80A-8CB7-4E18-9D52-3DC5901786D7}">
+          <RegistryValue Type="string" Value="OfficeTranslate.WordAddIn" />
+          <RegistryKey Key="InprocServer32">
+            <RegistryValue Type="string" Value="mscoree.dll" />
+            <RegistryValue Name="ThreadingModel" Type="string" Value="Both" />
+            <RegistryValue Name="Class" Type="string" Value="OfficeTranslate.WordAddIn.AddIn" />
+            <RegistryValue Name="Assembly" Type="string" Value="OfficeTranslate.WordAddIn, Version=2.1.2.0, Culture=neutral, PublicKeyToken=null" />
+            <RegistryValue Name="RuntimeVersion" Type="string" Value="v4.0.30319" />
+            <RegistryValue Name="CodeBase" Type="string" Value="[#WordAddInDll]" />
+          </RegistryKey>
+          <RegistryKey Key="ProgId"><RegistryValue Type="string" Value="OfficeTranslate.WordAddIn" /></RegistryKey>
+        </RegistryKey>
+        <RegistryKey Root="HKLM" Key="Software\Classes\OfficeTranslate.WordAddIn">
+          <RegistryValue Type="string" Value="OfficeTranslate for Word" />
+          <RegistryKey Key="CLSID"><RegistryValue Type="string" Value="{7898D80A-8CB7-4E18-9D52-3DC5901786D7}" /></RegistryKey>
+        </RegistryKey>
+        <RegistryKey Root="HKLM" Key="Software\Microsoft\Office\Word\Addins\OfficeTranslate.WordAddIn">
+          <RegistryValue Name="Description" Type="string" Value="使用本地或自定义大模型翻译 Word 文档" />
+          <RegistryValue Name="FriendlyName" Type="string" Value="OfficeTranslate" />
+          <RegistryValue Name="LoadBehavior" Type="integer" Value="3" />
+        </RegistryKey>
+      </Component>
+      <Component Id="ExcelAddInFiles" Guid="D58E1C3A-02CC-4CC4-83C5-F22EC270E201" Win64="yes">
+        <File Id="ExcelAddInDll" Source="$(var.ExcelOutput)\OfficeTranslate.ExcelAddIn.dll" KeyPath="yes" />
+        <RegistryKey Root="HKLM" Key="Software\Classes\CLSID\{9F8BE921-0DAD-45A4-9B64-81AA2F8DE101}">
+          <RegistryValue Type="string" Value="OfficeTranslate.ExcelAddIn" />
+          <RegistryKey Key="InprocServer32">
+            <RegistryValue Type="string" Value="mscoree.dll" /><RegistryValue Name="ThreadingModel" Type="string" Value="Both" />
+            <RegistryValue Name="Class" Type="string" Value="OfficeTranslate.ExcelAddIn.AddIn" />
+            <RegistryValue Name="Assembly" Type="string" Value="OfficeTranslate.ExcelAddIn, Version=2.1.2.0, Culture=neutral, PublicKeyToken=null" />
+            <RegistryValue Name="RuntimeVersion" Type="string" Value="v4.0.30319" /><RegistryValue Name="CodeBase" Type="string" Value="[#ExcelAddInDll]" />
+          </RegistryKey><RegistryKey Key="ProgId"><RegistryValue Type="string" Value="OfficeTranslate.ExcelAddIn" /></RegistryKey>
+        </RegistryKey>
+        <RegistryKey Root="HKLM" Key="Software\Classes\OfficeTranslate.ExcelAddIn"><RegistryValue Type="string" Value="OfficeTranslate for Excel" /><RegistryKey Key="CLSID"><RegistryValue Type="string" Value="{9F8BE921-0DAD-45A4-9B64-81AA2F8DE101}" /></RegistryKey></RegistryKey>
+        <RegistryKey Root="HKLM" Key="Software\Microsoft\Office\Excel\Addins\OfficeTranslate.ExcelAddIn"><RegistryValue Name="Description" Type="string" Value="使用大模型翻译 Excel 工作表" /><RegistryValue Name="FriendlyName" Type="string" Value="OfficeTranslate" /><RegistryValue Name="LoadBehavior" Type="integer" Value="3" /></RegistryKey>
+      </Component>
+      <Component Id="PowerPointAddInFiles" Guid="013F3229-D73E-438B-8433-80B51053E202" Win64="yes">
+        <File Id="PowerPointAddInDll" Source="$(var.PowerPointOutput)\OfficeTranslate.PowerPointAddIn.dll" KeyPath="yes" />
+        <RegistryKey Root="HKLM" Key="Software\Classes\CLSID\{A56AA843-3192-4EE2-88AD-205E1B2D1102}">
+          <RegistryValue Type="string" Value="OfficeTranslate.PowerPointAddIn" />
+          <RegistryKey Key="InprocServer32">
+            <RegistryValue Type="string" Value="mscoree.dll" /><RegistryValue Name="ThreadingModel" Type="string" Value="Both" />
+            <RegistryValue Name="Class" Type="string" Value="OfficeTranslate.PowerPointAddIn.AddIn" />
+            <RegistryValue Name="Assembly" Type="string" Value="OfficeTranslate.PowerPointAddIn, Version=2.1.2.0, Culture=neutral, PublicKeyToken=null" />
+            <RegistryValue Name="RuntimeVersion" Type="string" Value="v4.0.30319" /><RegistryValue Name="CodeBase" Type="string" Value="[#PowerPointAddInDll]" />
+          </RegistryKey><RegistryKey Key="ProgId"><RegistryValue Type="string" Value="OfficeTranslate.PowerPointAddIn" /></RegistryKey>
+        </RegistryKey>
+        <RegistryKey Root="HKLM" Key="Software\Classes\OfficeTranslate.PowerPointAddIn"><RegistryValue Type="string" Value="OfficeTranslate for PowerPoint" /><RegistryKey Key="CLSID"><RegistryValue Type="string" Value="{A56AA843-3192-4EE2-88AD-205E1B2D1102}" /></RegistryKey></RegistryKey>
+        <RegistryKey Root="HKLM" Key="Software\Microsoft\Office\PowerPoint\Addins\OfficeTranslate.PowerPointAddIn"><RegistryValue Name="Description" Type="string" Value="使用大模型翻译 PowerPoint 演示文稿" /><RegistryValue Name="FriendlyName" Type="string" Value="OfficeTranslate" /><RegistryValue Name="LoadBehavior" Type="integer" Value="3" /></RegistryKey>
+      </Component>
+    </ComponentGroup>
+  </Fragment>
+</Wix>

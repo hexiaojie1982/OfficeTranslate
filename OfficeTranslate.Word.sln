@@ -1,0 +1,36 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OfficeTranslate.Core", "src\OfficeTranslate.Core\OfficeTranslate.Core.csproj", "{1B3C3C77-A1D2-4C17-A3B4-1144191A5D01}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OfficeTranslate.WordAddIn", "src\OfficeTranslate.WordAddIn\OfficeTranslate.WordAddIn.csproj", "{FD18219A-A931-468B-BD9C-73DF31301B52}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OfficeTranslate.ExcelAddIn", "src\OfficeTranslate.ExcelAddIn\OfficeTranslate.ExcelAddIn.csproj", "{DD284A34-3476-44CC-875D-47F6DC4BF101}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OfficeTranslate.PowerPointAddIn", "src\OfficeTranslate.PowerPointAddIn\OfficeTranslate.PowerPointAddIn.csproj", "{BF80E636-D436-44AE-A764-85F6C27C5102}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{1B3C3C77-A1D2-4C17-A3B4-1144191A5D01}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{1B3C3C77-A1D2-4C17-A3B4-1144191A5D01}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{1B3C3C77-A1D2-4C17-A3B4-1144191A5D01}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{1B3C3C77-A1D2-4C17-A3B4-1144191A5D01}.Release|Any CPU.Build.0 = Release|Any CPU
+		{FD18219A-A931-468B-BD9C-73DF31301B52}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{FD18219A-A931-468B-BD9C-73DF31301B52}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{FD18219A-A931-468B-BD9C-73DF31301B52}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{FD18219A-A931-468B-BD9C-73DF31301B52}.Release|Any CPU.Build.0 = Release|Any CPU
+		{DD284A34-3476-44CC-875D-47F6DC4BF101}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{DD284A34-3476-44CC-875D-47F6DC4BF101}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{DD284A34-3476-44CC-875D-47F6DC4BF101}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{DD284A34-3476-44CC-875D-47F6DC4BF101}.Release|Any CPU.Build.0 = Release|Any CPU
+		{BF80E636-D436-44AE-A764-85F6C27C5102}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{BF80E636-D436-44AE-A764-85F6C27C5102}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{BF80E636-D436-44AE-A764-85F6C27C5102}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{BF80E636-D436-44AE-A764-85F6C27C5102}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+EndGlobal

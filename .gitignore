@@ -1,0 +1,27 @@
+# Visual Studio / .NET build output
+**/bin/
+**/obj/
+artifacts/
+
+# Restored dependencies and local SDK state
+packages/
+dotnet-home/
+.vs/
+
+# User-specific IDE files
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Installer and diagnostic output
+*.msi
+*.msix
+*.exe
+*.log
+TestResults/
+
+# OS metadata
+Thumbs.db
+Desktop.ini
+.DS_Store

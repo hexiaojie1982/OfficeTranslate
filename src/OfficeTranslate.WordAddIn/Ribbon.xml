@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<customUI xmlns="http://schemas.microsoft.com/office/2009/07/customui" onLoad="OnRibbonLoad">
+  <ribbon>
+    <tabs>
+      <tab id="OfficeTranslate.Tab" label="OfficeTranslate">
+        <group id="OfficeTranslate.LanguageGroup" getLabel="GetRibbonLabel">
+          <box id="OfficeTranslate.LanguageRow" boxStyle="horizontal">
+            <menu id="OfficeTranslate.SourceLanguageMenu" getLabel="GetSourceLanguageMenuLabel" size="large" getImage="GetSourceLanguageImage" getScreentip="GetSourceLanguageTip">
+              <button id="OfficeTranslate.Source.Auto" getLabel="GetLanguageItemLabel" getImage="GetLanguageItemImage" tag="自动检测" onAction="SelectSourceLanguage" />
+              <button id="OfficeTranslate.Source.ZhHans" getLabel="GetLanguageItemLabel" getImage="GetLanguageItemImage" tag="简体中文" onAction="SelectSourceLanguage" />
+              <button id="OfficeTranslate.Source.ZhHant" getLabel="GetLanguageItemLabel" getImage="GetLanguageItemImage" tag="繁體中文" onAction="SelectSourceLanguage" />
+              <button id="OfficeTranslate.Source.En" getLabel="GetLanguageItemLabel" getImage="GetLanguageItemImage" tag="英语" onAction="SelectSourceLanguage" />
+              <button id="OfficeTranslate.Source.Ja" getLabel="GetLanguageItemLabel" getImage="GetLanguageItemImage" tag="日语" onAction="SelectSourceLanguage" />
+              <button id="OfficeTranslate.Source.Ko" getLabel="GetLanguageItemLabel" getImage="GetLanguageItemImage" tag="韩语" onAction="SelectSourceLanguage" />
+              <button id="OfficeTranslate.Source.Fr" getLabel="GetLanguageItemLabel" getImage="GetLanguageItemImage" tag="法语" onAction="SelectSourceLanguage" />
+              <button id="OfficeTranslate.Source.De" getLabel="GetLanguageItemLabel" getImage="GetLanguageItemImage" tag="德语" onAction="SelectSourceLanguage" />
+              <button id="OfficeTranslate.Source.Es" getLabel="GetLanguageItemLabel" getImage="GetLanguageItemImage" tag="西班牙语" onAction="SelectSourceLanguage" />
+              <button id="OfficeTranslate.Source.Ru" getLabel="GetLanguageItemLabel" getImage="GetLanguageItemImage" tag="俄语" onAction="SelectSourceLanguage" />
+              <button id="OfficeTranslate.Source.Pt" getLabel="GetLanguageItemLabel" getImage="GetLanguageItemImage" tag="葡萄牙语" onAction="SelectSourceLanguage" />
+              <button id="OfficeTranslate.Source.It" getLabel="GetLanguageItemLabel" getImage="GetLanguageItemImage" tag="意大利语" onAction="SelectSourceLanguage" />
+              <button id="OfficeTranslate.Source.Ar" getLabel="GetLanguageItemLabel" getImage="GetLanguageItemImage" tag="阿拉伯语" onAction="SelectSourceLanguage" />
+            </menu>
+            <button id="OfficeTranslate.SwapLanguages" getLabel="GetRibbonLabel" size="large" getImage="GetRibbonImage" onAction="SwapLanguages" />
+            <menu id="OfficeTranslate.TargetLanguageMenu" getLabel="GetTargetLanguageMenuLabel" size="large" getImage="GetTargetLanguageImage" getScreentip="GetTargetLanguageTip">
+              <button id="OfficeTranslate.Target.ZhHans" getLabel="GetLanguageItemLabel" getImage="GetLanguageItemImage" tag="简体中文" onAction="SelectTargetLanguage" />
+              <button id="OfficeTranslate.Target.ZhHant" getLabel="GetLanguageItemLabel" getImage="GetLanguageItemImage" tag="繁體中文" onAction="SelectTargetLanguage" />
+              <button id="OfficeTranslate.Target.En" getLabel="GetLanguageItemLabel" getImage="GetLanguageItemImage" tag="英语" onAction="SelectTargetLanguage" />
+              <button id="OfficeTranslate.Target.Ja" getLabel="GetLanguageItemLabel" getImage="GetLanguageItemImage" tag="日语" onAction="SelectTargetLanguage" />
+              <button id="OfficeTranslate.Target.Ko" getLabel="GetLanguageItemLabel" getImage="GetLanguageItemImage" tag="韩语" onAction="SelectTargetLanguage" />
+              <button id="OfficeTranslate.Target.Fr" getLabel="GetLanguageItemLabel" getImage="GetLanguageItemImage" tag="法语" onAction="SelectTargetLanguage" />
+              <button id="OfficeTranslate.Target.De" getLabel="GetLanguageItemLabel" getImage="GetLanguageItemImage" tag="德语" onAction="SelectTargetLanguage" />
+              <button id="OfficeTranslate.Target.Es" getLabel="GetLanguageItemLabel" getImage="GetLanguageItemImage" tag="西班牙语" onAction="SelectTargetLanguage" />
+              <button id="OfficeTranslate.Target.Ru" getLabel="GetLanguageItemLabel" getImage="GetLanguageItemImage" tag="俄语" onAction="SelectTargetLanguage" />
+              <button id="OfficeTranslate.Target.Pt" getLabel="GetLanguageItemLabel" getImage="GetLanguageItemImage" tag="葡萄牙语" onAction="SelectTargetLanguage" />
+              <button id="OfficeTranslate.Target.It" getLabel="GetLanguageItemLabel" getImage="GetLanguageItemImage" tag="意大利语" onAction="SelectTargetLanguage" />
+              <button id="OfficeTranslate.Target.Ar" getLabel="GetLanguageItemLabel" getImage="GetLanguageItemImage" tag="阿拉伯语" onAction="SelectTargetLanguage" />
+            </menu>
+          </box>
+        </group>
+        <group id="OfficeTranslate.TranslateGroup" getLabel="GetRibbonLabel">
+          <box id="OfficeTranslate.TranslateRow" boxStyle="horizontal">
+            <button id="OfficeTranslate.Selection" getLabel="GetRibbonLabel" size="large" getImage="GetRibbonImage" onAction="TranslateSelection" />
+            <button id="OfficeTranslate.Document" getLabel="GetRibbonLabel" size="large" getImage="GetRibbonImage" onAction="TranslateDocument" />
+            <toggleButton id="OfficeTranslate.Bilingual" getLabel="GetRibbonLabel" size="large" getImage="GetRibbonImage" getPressed="GetBilingualMode" onAction="BilingualModeChanged" />
+          </box>
+        </group>
+        <group id="OfficeTranslate.ToolsGroup" getLabel="GetRibbonLabel">
+          <box id="OfficeTranslate.ToolRow" boxStyle="horizontal">
+            <button id="OfficeTranslate.Cancel" getLabel="GetRibbonLabel" size="large" getImage="GetRibbonImage" onAction="CancelTranslation" />
+            <button id="OfficeTranslate.Settings" getLabel="GetRibbonLabel" size="large" getImage="GetRibbonImage" onAction="OpenSettings" />
+          </box>
+        </group>
+      </tab>
+    </tabs>
+  </ribbon>
+</customUI>
