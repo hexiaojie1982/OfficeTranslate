@@ -26,6 +26,7 @@ namespace OfficeTranslate.WordAddIn
             ["Provider"] = new[] { "服务类型", "服務類型", "서비스 유형", "サービス種類", "Provider" },
             ["Model"] = new[] { "模型", "模型", "모델", "モデル", "Model" },
             ["Chunk"] = new[] { "分块字符数", "分段字元數", "청크 문자 수", "分割文字数", "Chunk size" },
+            ["TranslationStyle"] = new[] { "翻译风格", "翻譯風格", "번역 스타일", "翻訳スタイル", "Translation style" },
             ["Instructions"] = new[] { "额外要求", "額外要求", "추가 지침", "追加指示", "Instructions" },
             ["Glossary"] = new[] { "术语表", "術語表", "용어집", "用語集", "Glossary" },
             ["Refresh"] = new[] { "↻  更新模型", "↻  更新模型", "↻  모델 새로 고침", "↻  モデル更新", "↻  Refresh models" },
@@ -68,6 +69,21 @@ namespace OfficeTranslate.WordAddIn
             };
             var index = System.Array.IndexOf(LanguageCodes, uiLanguage); if (index < 0) index = 0;
             return names.TryGetValue(internalName, out var values) ? values[index] : internalName;
+        }
+
+        public static string TranslationStyle(string uiLanguage, string id)
+        {
+            var names = new Dictionary<string, string[]>
+            {
+                ["ProfessionalReport"] = new[] { "专业报告翻译", "專業報告翻譯", "전문 보고서 번역", "専門レポート翻訳", "Professional report" },
+                ["AcademicPaper"] = new[] { "学术论文翻译", "學術論文翻譯", "학술 논문 번역", "学術論文翻訳", "Academic paper" },
+                ["Technology"] = new[] { "科技类翻译", "科技類翻譯", "기술 번역", "科学技術翻訳", "Technology" },
+                ["News"] = new[] { "新闻翻译", "新聞翻譯", "뉴스 번역", "ニュース翻訳", "News" },
+                ["FreeTranslation"] = new[] { "意译", "意譯", "의역", "意訳", "Free translation" },
+                ["Custom"] = new[] { "自定义风格", "自訂風格", "사용자 지정", "カスタム", "Custom" }
+            };
+            var index = System.Array.IndexOf(LanguageCodes, uiLanguage); if (index < 0) index = 0;
+            return names.TryGetValue(id, out var values) ? values[index] : id;
         }
     }
 }

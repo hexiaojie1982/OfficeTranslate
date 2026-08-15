@@ -48,8 +48,8 @@ dotnet build $solution -c $Configuration --no-restore
 if ($LASTEXITCODE -ne 0) { throw "dotnet build failed with exit code $LASTEXITCODE" }
 New-Item -ItemType Directory -Force -Path $artifacts | Out-Null
 
-& $candlePath (Join-Path $root 'installer\Product.wxs') ("-dBuildOutput={0}" -f $output) ("-dExcelOutput={0}" -f $excelOutput) ("-dPowerPointOutput={0}" -f $powerPointOutput) -out (Join-Path $artifacts 'Product.wixobj') -arch x64
+& $candlePath (Join-Path $root 'installer\Product.wxs') ("-dBuildOutput={0}" -f $output) ("-dExcelOutput={0}" -f $excelOutput) ("-dPowerPointOutput={0}" -f $powerPointOutput) ("-dLicenseRtf={0}" -f (Join-Path $root 'installer\License.rtf')) -out (Join-Path $artifacts 'Product.wixobj') -arch x64
 if ($LASTEXITCODE -ne 0) { throw "candle.exe failed with exit code $LASTEXITCODE" }
-& $lightPath (Join-Path $artifacts 'Product.wixobj') -out (Join-Path $artifacts 'OfficeTranslate.Office.x64.msi')
+& $lightPath (Join-Path $artifacts 'Product.wixobj') -ext WixUIExtension -cultures:zh-cn -sice:ICE61 -out (Join-Path $artifacts 'OfficeTranslate.Office.x64.msi')
 if ($LASTEXITCODE -ne 0) { throw "light.exe failed with exit code $LASTEXITCODE" }
 Write-Host "Created $artifacts\OfficeTranslate.Office.x64.msi"
