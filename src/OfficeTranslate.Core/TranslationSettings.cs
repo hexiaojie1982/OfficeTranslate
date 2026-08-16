@@ -1,4 +1,5 @@
 using System;
+using System.Web.Script.Serialization;
 
 namespace OfficeTranslate.Core
 {
@@ -10,9 +11,18 @@ namespace OfficeTranslate.Core
         public string BaseUrl { get; set; } = "http://localhost:11434";
         public string Model { get; set; } = "qwen2.5:7b";
         public string ApiKey { get; set; } = string.Empty;
+        public string OllamaBaseUrl { get; set; } = "http://localhost:11434";
+        public string OllamaApiKey { get; set; } = string.Empty;
+        public string OllamaModel { get; set; } = "qwen2.5:7b";
+        public string OpenAiBaseUrl { get; set; } = "https://api.openai.com/v1";
+        public string OpenAiApiKey { get; set; } = string.Empty;
+        public string OpenAiModel { get; set; } = string.Empty;
+        [ScriptIgnore]
         public string SourceLanguage { get; set; } = "自动检测";
+        [ScriptIgnore]
         public string TargetLanguage { get; set; } = "简体中文";
         public string UiLanguage { get; set; } = "zh-CN";
+        [ScriptIgnore]
         public bool BilingualMode { get; set; }
         public string TranslationStyle { get; set; } = "ProfessionalReport";
         public string CustomInstructions { get; set; } = string.Empty;

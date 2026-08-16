@@ -5,7 +5,7 @@ namespace OfficeTranslate.WordAddIn
 {
     internal sealed class AboutForm : Form
     {
-        public const string CurrentVersion = "2.1.3";
+        public const string CurrentVersion = "2.1.4";
         private readonly string _language;
         private readonly TextBox _content = new TextBox();
 
@@ -56,7 +56,7 @@ namespace OfficeTranslate.WordAddIn
 
         private string ChangelogText()
         {
-            return "OfficeTranslate 2.1.3\r\n• 新增翻译风格预设与可编辑 Prompt。\r\n• 优化安装界面、升级与同版本重装行为。\r\n\r\n2.1.2\r\n• 统一 Word、Excel、PowerPoint 关于窗口的按钮风格。\r\n• 修复打开窗口时正文被自动选中的问题。\r\n\r\n2.1.1\r\n• 修复设置窗口取消按钮被裁切的问题。\r\n\r\n2.1.0\r\n• 新增关于、更新日志和使用说明。\r\n\r\n2.0.0\r\n• 新增 Excel 与 PowerPoint 原生翻译加载项。\r\n• 三个 Office 应用共享设置和界面语言。\r\n\r\n1.5.x\r\n• 新增五种界面语言、语言旗帜及逐段实时写回。";
+            return "OfficeTranslate 2.1.4\r\n• 统一三个 Office 应用的翻译进度窗口，支持独立取消并保留已译内容。\r\n• 修复 Word 与 PowerPoint 表格翻译兼容问题。\r\n• 为不同服务类型分别保存连接配置。\r\n• 语言与双语模式改为会话设置，不再写入配置文件。\r\n\r\n2.1.3\r\n• 新增翻译风格预设与可编辑 Prompt。\r\n• 优化安装界面、升级与同版本重装行为。\r\n\r\n2.1.2\r\n• 统一 Word、Excel、PowerPoint 关于窗口的按钮风格。\r\n• 修复打开窗口时正文被自动选中的问题。\r\n\r\n2.1.1\r\n• 修复设置窗口取消按钮被裁切的问题。\r\n\r\n2.1.0\r\n• 新增关于、更新日志和使用说明。\r\n\r\n2.0.0\r\n• 新增 Excel 与 PowerPoint 原生翻译加载项。\r\n• 三个 Office 应用共享设置和界面语言。\r\n\r\n1.5.x\r\n• 新增五种界面语言、语言旗帜及逐段实时写回。";
         }
 
         private string GuideText()
