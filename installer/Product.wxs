@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
-  <?define ProductVersion="2.1.4.0" ?>
+  <?define ProductVersion="2.1.5.0" ?>
   <Product Id="*" Name="OfficeTranslate for Microsoft Office" Language="2052" Codepage="936" Version="$(var.ProductVersion)" Manufacturer="OfficeTranslate" UpgradeCode="5D99BB0D-887E-4AA7-A504-B763AC97F899">
-    <Package InstallerVersion="500" Compressed="yes" InstallScope="perMachine" Platform="x64" Description="OfficeTranslate 2.1.4" />
+    <Package InstallerVersion="500" Compressed="yes" InstallScope="perMachine" Platform="x64" Description="OfficeTranslate 2.1.5" />
     <MajorUpgrade AllowSameVersionUpgrades="yes" DowngradeErrorMessage="已安装更高版本的 OfficeTranslate。" />
     <MediaTemplate EmbedCab="yes" />
     <Property Id="ARPCOMMENTS" Value="Microsoft Word、Excel 和 PowerPoint 原生翻译加载项" />
@@ -34,7 +34,7 @@
             <RegistryValue Type="string" Value="mscoree.dll" />
             <RegistryValue Name="ThreadingModel" Type="string" Value="Both" />
             <RegistryValue Name="Class" Type="string" Value="OfficeTranslate.WordAddIn.AddIn" />
-            <RegistryValue Name="Assembly" Type="string" Value="OfficeTranslate.WordAddIn, Version=2.1.4.0, Culture=neutral, PublicKeyToken=null" />
+            <RegistryValue Name="Assembly" Type="string" Value="OfficeTranslate.WordAddIn, Version=2.1.5.0, Culture=neutral, PublicKeyToken=null" />
             <RegistryValue Name="RuntimeVersion" Type="string" Value="v4.0.30319" />
             <RegistryValue Name="CodeBase" Type="string" Value="[#WordAddInDll]" />
           </RegistryKey>
@@ -57,7 +57,7 @@
           <RegistryKey Key="InprocServer32">
             <RegistryValue Type="string" Value="mscoree.dll" /><RegistryValue Name="ThreadingModel" Type="string" Value="Both" />
             <RegistryValue Name="Class" Type="string" Value="OfficeTranslate.ExcelAddIn.AddIn" />
-            <RegistryValue Name="Assembly" Type="string" Value="OfficeTranslate.ExcelAddIn, Version=2.1.4.0, Culture=neutral, PublicKeyToken=null" />
+            <RegistryValue Name="Assembly" Type="string" Value="OfficeTranslate.ExcelAddIn, Version=2.1.5.0, Culture=neutral, PublicKeyToken=null" />
             <RegistryValue Name="RuntimeVersion" Type="string" Value="v4.0.30319" /><RegistryValue Name="CodeBase" Type="string" Value="[#ExcelAddInDll]" />
           </RegistryKey><RegistryKey Key="ProgId"><RegistryValue Type="string" Value="OfficeTranslate.ExcelAddIn" /></RegistryKey>
         </RegistryKey>
@@ -71,7 +71,7 @@
           <RegistryKey Key="InprocServer32">
             <RegistryValue Type="string" Value="mscoree.dll" /><RegistryValue Name="ThreadingModel" Type="string" Value="Both" />
             <RegistryValue Name="Class" Type="string" Value="OfficeTranslate.PowerPointAddIn.AddIn" />
-            <RegistryValue Name="Assembly" Type="string" Value="OfficeTranslate.PowerPointAddIn, Version=2.1.4.0, Culture=neutral, PublicKeyToken=null" />
+            <RegistryValue Name="Assembly" Type="string" Value="OfficeTranslate.PowerPointAddIn, Version=2.1.5.0, Culture=neutral, PublicKeyToken=null" />
             <RegistryValue Name="RuntimeVersion" Type="string" Value="v4.0.30319" /><RegistryValue Name="CodeBase" Type="string" Value="[#PowerPointAddInDll]" />
           </RegistryKey><RegistryKey Key="ProgId"><RegistryValue Type="string" Value="OfficeTranslate.PowerPointAddIn" /></RegistryKey>
         </RegistryKey>
