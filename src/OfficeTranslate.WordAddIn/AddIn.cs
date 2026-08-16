@@ -65,22 +65,20 @@ namespace OfficeTranslate.WordAddIn
         public void SelectSourceLanguage(Microsoft.Office.Core.IRibbonControl control)
         {
             _settings.SourceLanguage = control.Tag;
-            SaveLanguageSettings();
             _ribbon?.InvalidateControl("OfficeTranslate.SourceLanguageMenu");
         }
         public void SelectTargetLanguage(Microsoft.Office.Core.IRibbonControl control)
         {
             _settings.TargetLanguage = control.Tag;
-            SaveLanguageSettings();
             _ribbon?.InvalidateControl("OfficeTranslate.TargetLanguageMenu");
         }
         public void SourceLanguageChanged(Microsoft.Office.Core.IRibbonControl control, string selectedId, int selectedIndex)
         {
-            _settings.SourceLanguage = SourceLanguages[selectedIndex]; SaveLanguageSettings();
+            _settings.SourceLanguage = SourceLanguages[selectedIndex];
         }
         public void TargetLanguageChanged(Microsoft.Office.Core.IRibbonControl control, string selectedId, int selectedIndex)
         {
-            _settings.TargetLanguage = TargetLanguages[selectedIndex]; SaveLanguageSettings();
+            _settings.TargetLanguage = TargetLanguages[selectedIndex];
         }
         public void SwapLanguages(Microsoft.Office.Core.IRibbonControl control)
         {
@@ -95,7 +93,6 @@ namespace OfficeTranslate.WordAddIn
                 _settings.TargetLanguage = _settings.SourceLanguage;
                 _settings.SourceLanguage = oldTarget;
             }
-            SaveLanguageSettings();
             _ribbon?.InvalidateControl("OfficeTranslate.SourceLanguageMenu");
             _ribbon?.InvalidateControl("OfficeTranslate.TargetLanguageMenu");
         }
@@ -103,13 +100,6 @@ namespace OfficeTranslate.WordAddIn
         public void BilingualModeChanged(Microsoft.Office.Core.IRibbonControl control, bool pressed)
         {
             _settings.BilingualMode = pressed;
-            SaveLanguageSettings();
-        }
-
-        private void SaveLanguageSettings()
-        {
-            try { _settingsStore.Save(_settings); }
-            catch (Exception ex) { MessageBox.Show(ex.Message, "OfficeTranslate", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
         }
         public async void TranslateSelection(Microsoft.Office.Core.IRibbonControl control) => await RunAsync(false);
         public async void TranslateDocument(Microsoft.Office.Core.IRibbonControl control) => await RunAsync(true);
@@ -119,7 +109,7 @@ namespace OfficeTranslate.WordAddIn
             {
                 if (form.ShowDialog() == DialogResult.OK)
                 {
-                    _settings = _settingsStore.Load();
+                    ReloadPersistentSettings();
                     _ribbon?.Invalidate();
                 }
             }
@@ -131,7 +121,7 @@ namespace OfficeTranslate.WordAddIn
             _cancellation = new CancellationTokenSource();
             try
             {
-                var settings = _settingsStore.Load();
+                var settings = LoadForTranslation();
                 settings.Validate();
                 _progressForm = new TranslationProgressForm(settings.UiLanguage, () => _cancellation?.Cancel());
                 _progressForm.ShowFor(System.Diagnostics.Process.GetCurrentProcess().MainWindowHandle);
@@ -150,6 +140,20 @@ namespace OfficeTranslate.WordAddIn
             System.Windows.Forms.Application.EnableVisualStyles();
             _word = (WordApplication)application;
             _settings = _settingsStore.Load();
+        }
+        private TranslationSettings LoadForTranslation()
+        {
+            var settings = _settingsStore.Load();
+            settings.SourceLanguage = _settings.SourceLanguage;
+            settings.TargetLanguage = _settings.TargetLanguage;
+            settings.BilingualMode = _settings.BilingualMode;
+            return settings;
+        }
+        private void ReloadPersistentSettings()
+        {
+            var source = _settings.SourceLanguage; var target = _settings.TargetLanguage; var bilingual = _settings.BilingualMode;
+            _settings = _settingsStore.Load();
+            _settings.SourceLanguage = source; _settings.TargetLanguage = target; _settings.BilingualMode = bilingual;
         }
         public void OnDisconnection(Extensibility.ext_DisconnectMode removeMode, ref Array custom) { _cancellation?.Cancel(); _progressForm?.CloseSafely(); _word = null; }
         public void OnAddInsUpdate(ref Array custom) { }

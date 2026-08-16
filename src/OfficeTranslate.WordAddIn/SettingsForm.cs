@@ -23,6 +23,7 @@ namespace OfficeTranslate.WordAddIn
         private readonly CancellationTokenSource _cancellation = new CancellationTokenSource();
         private TranslationSettings _existing = new TranslationSettings();
         private bool _loading;
+        private ProviderKind _activeProvider;
 
         public SettingsForm(SettingsStore store)
         {
@@ -97,8 +98,8 @@ namespace OfficeTranslate.WordAddIn
         {
             _loading = true;
             var uiIndex = Array.IndexOf(UiText.LanguageCodes, _existing.UiLanguage); _uiLanguage.SelectedIndex = uiIndex >= 0 ? uiIndex : 0;
-            _provider.SelectedIndex = _existing.Provider == ProviderKind.Ollama ? 0 : 1; _baseUrl.Text = _existing.BaseUrl; _apiKey.Text = _existing.ApiKey;
-            SetModels(new[] { _existing.Model }, _existing.Model); _chunkSize.Value = Math.Max(_chunkSize.Minimum, Math.Min(_chunkSize.Maximum, _existing.MaxCharactersPerChunk));
+            _activeProvider = _existing.Provider; _provider.SelectedIndex = _activeProvider == ProviderKind.Ollama ? 0 : 1; ApplyProviderProfile(_activeProvider);
+            _chunkSize.Value = Math.Max(_chunkSize.Minimum, Math.Min(_chunkSize.Maximum, _existing.MaxCharactersPerChunk));
             var styleId = _existing.TranslationStyle;
             if (!string.IsNullOrWhiteSpace(_existing.CustomInstructions) && string.IsNullOrWhiteSpace(styleId)) styleId = "Custom";
             if (Array.IndexOf(TranslationStyleCatalog.Ids, styleId) < 0) styleId = "Custom";
@@ -119,9 +120,33 @@ namespace OfficeTranslate.WordAddIn
         private void ProviderChanged(object sender, EventArgs e)
         {
             if (_loading) return;
-            if (_provider.SelectedIndex == 0 && (_baseUrl.Text.Contains("openai") || string.IsNullOrWhiteSpace(_baseUrl.Text))) _baseUrl.Text = "http://localhost:11434";
-            if (_provider.SelectedIndex == 1 && _baseUrl.Text.Contains("localhost:11434")) _baseUrl.Text = "https://api.openai.com/v1";
-            _model.Items.Clear(); _status.Text = T("ProviderChanged");
+            CaptureProviderProfile(_activeProvider);
+            _activeProvider = _provider.SelectedIndex == 0 ? ProviderKind.Ollama : ProviderKind.OpenAiCompatible;
+            ApplyProviderProfile(_activeProvider); _status.Text = T("ProviderChanged");
+        }
+
+        private void CaptureProviderProfile(ProviderKind provider)
+        {
+            var model = _model.SelectedItem?.ToString() ?? string.Empty;
+            if (provider == ProviderKind.Ollama)
+            {
+                _existing.OllamaBaseUrl = _baseUrl.Text.Trim(); _existing.OllamaApiKey = _apiKey.Text;
+                if (!string.IsNullOrWhiteSpace(model)) _existing.OllamaModel = model;
+            }
+            else
+            {
+                _existing.OpenAiBaseUrl = _baseUrl.Text.Trim(); _existing.OpenAiApiKey = _apiKey.Text;
+                if (!string.IsNullOrWhiteSpace(model)) _existing.OpenAiModel = model;
+            }
+        }
+
+        private void ApplyProviderProfile(ProviderKind provider)
+        {
+            var ollama = provider == ProviderKind.Ollama;
+            _baseUrl.Text = ollama ? _existing.OllamaBaseUrl : _existing.OpenAiBaseUrl;
+            _apiKey.Text = ollama ? _existing.OllamaApiKey : _existing.OpenAiApiKey;
+            var model = ollama ? _existing.OllamaModel : _existing.OpenAiModel;
+            SetModels(new[] { model }, model);
         }
 
         private async void RefreshModelsClicked(object sender, EventArgs e)
@@ -133,7 +158,8 @@ namespace OfficeTranslate.WordAddIn
                 {
                     var models = await client.GetModelsAsync(BuildSettings(false), _cancellation.Token);
                     if (models.Count == 0) throw new InvalidOperationException(T("NoModels"));
-                    SetModels(models, _existing.Model); _status.ForeColor = Color.FromArgb(30, 130, 76); _status.Text = string.Format(T("ModelsLoaded"), models.Count);
+                    var selected = _activeProvider == ProviderKind.Ollama ? _existing.OllamaModel : _existing.OpenAiModel;
+                    SetModels(models, selected); _status.ForeColor = Color.FromArgb(30, 130, 76); _status.Text = string.Format(T("ModelsLoaded"), models.Count);
                 }
             }
             catch (OperationCanceledException) { }
@@ -149,6 +175,7 @@ namespace OfficeTranslate.WordAddIn
 
         private TranslationSettings BuildSettings(bool requireModel)
         {
+            CaptureProviderProfile(_activeProvider);
             var settings = new TranslationSettings {
                 Provider = _provider.SelectedIndex == 0 ? ProviderKind.Ollama : ProviderKind.OpenAiCompatible,
                 BaseUrl = _baseUrl.Text.Trim(), ApiKey = _apiKey.Text, Model = _model.SelectedItem?.ToString() ?? (requireModel ? string.Empty : "model-discovery"),
@@ -156,7 +183,9 @@ namespace OfficeTranslate.WordAddIn
                 UiLanguage = _uiLanguage.SelectedIndex >= 0 ? UiText.LanguageCodes[_uiLanguage.SelectedIndex] : _existing.UiLanguage,
                 BilingualMode = _existing.BilingualMode, MaxCharactersPerChunk = (int)_chunkSize.Value, TimeoutSeconds = _existing.TimeoutSeconds,
                 TranslationStyle = _translationStyle.SelectedIndex >= 0 ? TranslationStyleCatalog.Ids[_translationStyle.SelectedIndex] : "Custom",
-                CustomInstructions = _instructions.Text.Trim(), Glossary = _glossary.Text.Trim()
+                CustomInstructions = _instructions.Text.Trim(), Glossary = _glossary.Text.Trim(),
+                OllamaBaseUrl = _existing.OllamaBaseUrl, OllamaApiKey = _existing.OllamaApiKey, OllamaModel = _existing.OllamaModel,
+                OpenAiBaseUrl = _existing.OpenAiBaseUrl, OpenAiApiKey = _existing.OpenAiApiKey, OpenAiModel = _existing.OpenAiModel
             };
             if (requireModel) settings.Validate(); else settings.ValidateEndpoint(); return settings;
         }

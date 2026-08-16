@@ -57,24 +57,23 @@ namespace OfficeTranslate.PowerPointAddIn
             var id = c.Id; var key = id.EndsWith("LanguageGroup") ? "LanguageGroup" : id.EndsWith("TranslateGroup") ? "TranslateGroup" : id.EndsWith("ToolsGroup") ? "ToolsGroup" : id.EndsWith("SwapLanguages") ? "Swap" : id.EndsWith("Selection") ? "Selection" : id.EndsWith("Document") ? "Document" : id.EndsWith("Bilingual") ? "Bilingual" : id.EndsWith("Cancel") ? "Cancel" : "Settings";
             var value = UiText.Get(_settings.UiLanguage, key); return _settings.UiLanguage == "en" ? value : string.Join("\u2060", value.ToCharArray());
         }
-        public void SelectSourceLanguage(Microsoft.Office.Core.IRibbonControl c) { _settings.SourceLanguage = c.Tag; Save(); _ribbon?.InvalidateControl("OfficeTranslate.SourceLanguageMenu"); }
-        public void SelectTargetLanguage(Microsoft.Office.Core.IRibbonControl c) { _settings.TargetLanguage = c.Tag; Save(); _ribbon?.InvalidateControl("OfficeTranslate.TargetLanguageMenu"); }
+        public void SelectSourceLanguage(Microsoft.Office.Core.IRibbonControl c) { _settings.SourceLanguage = c.Tag; _ribbon?.InvalidateControl("OfficeTranslate.SourceLanguageMenu"); }
+        public void SelectTargetLanguage(Microsoft.Office.Core.IRibbonControl c) { _settings.TargetLanguage = c.Tag; _ribbon?.InvalidateControl("OfficeTranslate.TargetLanguageMenu"); }
         public void SwapLanguages(Microsoft.Office.Core.IRibbonControl c)
         {
             var target = _settings.TargetLanguage;
             if (_settings.SourceLanguage == "自动检测") { _settings.SourceLanguage = target; _settings.TargetLanguage = target == "简体中文" ? "英语" : "简体中文"; }
             else { _settings.TargetLanguage = _settings.SourceLanguage; _settings.SourceLanguage = target; }
-            Save(); _ribbon?.Invalidate();
+            _ribbon?.Invalidate();
         }
-        public void BilingualModeChanged(Microsoft.Office.Core.IRibbonControl c, bool pressed) { _settings.BilingualMode = pressed; Save(); }
-        private void Save() { try { _store.Save(_settings); } catch (Exception ex) { MessageBox.Show(ex.Message, "OfficeTranslate"); } }
+        public void BilingualModeChanged(Microsoft.Office.Core.IRibbonControl c, bool pressed) { _settings.BilingualMode = pressed; }
         public async void TranslateSelection(Microsoft.Office.Core.IRibbonControl c) => await RunAsync(false);
         public async void TranslateDocument(Microsoft.Office.Core.IRibbonControl c) => await RunAsync(true);
-        public void OpenSettings(Microsoft.Office.Core.IRibbonControl c) { using (var form = new SettingsForm(_store)) if (form.ShowDialog() == DialogResult.OK) { _settings = _store.Load(); _ribbon?.Invalidate(); } }
+        public void OpenSettings(Microsoft.Office.Core.IRibbonControl c) { using (var form = new SettingsForm(_store)) if (form.ShowDialog() == DialogResult.OK) { ReloadPersistentSettings(); _ribbon?.Invalidate(); } }
         private async Task RunAsync(bool whole)
         {
             if (_host == null || _cancellation != null) return; _cancellation = new CancellationTokenSource();
-            try { var settings = _store.Load(); settings.Validate(); _progressForm = new TranslationProgressForm(settings.UiLanguage, () => _cancellation?.Cancel()); _progressForm.ShowFor(GetHostWindow()); var service = new HostService(_host); SetStatus("OfficeTranslate：正在准备翻译…"); await service.TranslateAsync(whole, settings, _cancellation.Token, SetStatus); }
+            try { var settings = LoadForTranslation(); settings.Validate(); _progressForm = new TranslationProgressForm(settings.UiLanguage, () => _cancellation?.Cancel()); _progressForm.ShowFor(GetHostWindow()); var service = new HostService(_host); SetStatus("OfficeTranslate：正在准备翻译…"); await service.TranslateAsync(whole, settings, _cancellation.Token, SetStatus); }
             catch (OperationCanceledException) { SetStatus("OfficeTranslate：已取消"); }
             catch (Exception ex) { MessageBox.Show(ex.Message, "OfficeTranslate", MessageBoxButtons.OK, MessageBoxIcon.Error); }
             finally { CloseProgress(); _cancellation.Dispose(); _cancellation = null; }
@@ -87,6 +86,20 @@ namespace OfficeTranslate.PowerPointAddIn
 #endif
         }
         private void SetStatus(string text) => _progressForm?.SetStatus(text);
+        private TranslationSettings LoadForTranslation()
+        {
+            var settings = _store.Load();
+            settings.SourceLanguage = _settings.SourceLanguage;
+            settings.TargetLanguage = _settings.TargetLanguage;
+            settings.BilingualMode = _settings.BilingualMode;
+            return settings;
+        }
+        private void ReloadPersistentSettings()
+        {
+            var source = _settings.SourceLanguage; var target = _settings.TargetLanguage; var bilingual = _settings.BilingualMode;
+            _settings = _store.Load();
+            _settings.SourceLanguage = source; _settings.TargetLanguage = target; _settings.BilingualMode = bilingual;
+        }
         private void CloseProgress()
         {
             _progressForm?.CloseSafely(); _progressForm = null;
