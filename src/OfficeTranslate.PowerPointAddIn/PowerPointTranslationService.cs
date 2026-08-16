@@ -3,6 +3,7 @@ using PowerPoint = Microsoft.Office.Interop.PowerPoint;
 using OfficeTranslate.Core;
 using System;
 using System.Collections.Generic;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -26,7 +27,7 @@ namespace OfficeTranslate.PowerPointAddIn
                     progress($"OfficeTranslate：正在翻译 {i + 1}/{targets.Count}");
                     var translated = (await client.TranslateAsync(targets[i].Text, settings, token)).TrimEnd('\r', '\n');
                     token.ThrowIfCancellationRequested();
-                    targets[i].Range.Text = settings.BilingualMode ? targets[i].Text + "\r" + translated : translated;
+                    targets[i].Write(settings.BilingualMode ? targets[i].Text + "\r" + translated : translated);
                     progress($"OfficeTranslate：已完成 {i + 1}/{targets.Count}");
                 }
             }
@@ -47,6 +48,14 @@ namespace OfficeTranslate.PowerPointAddIn
             var selection = _powerPoint.ActiveWindow.Selection;
             if (selection.Type == PowerPoint.PpSelectionType.ppSelectionText)
             {
+                try
+                {
+                    if (selection.ShapeRange.Count > 0 && selection.ShapeRange[1].HasTable == Office.MsoTriState.msoTrue)
+                    {
+                        AddShape(selection.ShapeRange[1], result); return result;
+                    }
+                }
+                catch (COMException) { }
                 AddRange(selection.TextRange, result); return result;
             }
             if (selection.Type == PowerPoint.PpSelectionType.ppSelectionShapes)
@@ -71,9 +80,21 @@ namespace OfficeTranslate.PowerPointAddIn
             }
             if (shape.HasTable == Office.MsoTriState.msoTrue)
             {
+                var seenCells = new HashSet<IntPtr>();
                 for (var row = 1; row <= shape.Table.Rows.Count; row++)
                     for (var column = 1; column <= shape.Table.Columns.Count; column++)
-                        AddShape(shape.Table.Cell(row, column).Shape, result);
+                    {
+                        try
+                        {
+                            var cellShape = shape.Table.Cell(row, column).Shape;
+                            var identity = Marshal.GetIUnknownForObject(cellShape);
+                            try { if (!seenCells.Add(identity)) continue; }
+                            finally { Marshal.Release(identity); }
+                            if (cellShape.TextFrame2.HasText == Office.MsoTriState.msoTrue)
+                                AddRange(cellShape.TextFrame2.TextRange, result);
+                        }
+                        catch (COMException) { }
+                    }
                 return;
             }
             if (shape.HasTextFrame == Office.MsoTriState.msoTrue && shape.TextFrame.HasText == Office.MsoTriState.msoTrue)
@@ -83,13 +104,21 @@ namespace OfficeTranslate.PowerPointAddIn
         private static void AddRange(PowerPoint.TextRange range, List<Target> result)
         {
             var text = range.Text?.TrimEnd('\r', '\n') ?? string.Empty;
-            if (!string.IsNullOrWhiteSpace(text)) result.Add(new Target(range, text));
+            if (!string.IsNullOrWhiteSpace(text)) result.Add(new Target(text, value => range.Text = value));
+        }
+
+        private static void AddRange(Office.TextRange2 range, List<Target> result)
+        {
+            var text = range.Text?.TrimEnd('\r', '\n') ?? string.Empty;
+            if (!string.IsNullOrWhiteSpace(text)) result.Add(new Target(text, value => range.Text = value));
         }
 
         private sealed class Target
         {
-            public Target(PowerPoint.TextRange range, string text) { Range = range; Text = text; }
-            public PowerPoint.TextRange Range { get; } public string Text { get; }
+            private readonly Action<string> _write;
+            public Target(string text, Action<string> write) { Text = text; _write = write; }
+            public string Text { get; }
+            public void Write(string value) => _write(value);
         }
     }
 }

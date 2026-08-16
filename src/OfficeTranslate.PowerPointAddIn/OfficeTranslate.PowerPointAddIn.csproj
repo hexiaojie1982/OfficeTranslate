@@ -10,6 +10,7 @@
     <Compile Include="..\OfficeTranslate.WordAddIn\UiText.cs" Link="Shared\UiText.cs" />
     <Compile Include="..\OfficeTranslate.WordAddIn\RibbonImageFactory.cs" Link="Shared\RibbonImageFactory.cs" />
     <Compile Include="..\OfficeTranslate.WordAddIn\AboutForm.cs" Link="Shared\AboutForm.cs" />
+    <Compile Include="..\OfficeTranslate.WordAddIn\TranslationProgressForm.cs" Link="Shared\TranslationProgressForm.cs" />
     <Compile Include="..\OfficeTranslate.AddInShared\AddIn.cs" Link="AddIn.cs" />
     <EmbeddedResource Include="..\OfficeTranslate.WordAddIn\Ribbon.xml" Link="Ribbon.xml" />
   </ItemGroup>

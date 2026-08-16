@@ -22,6 +22,7 @@ namespace OfficeTranslate.WordAddIn
         private WordApplication? _word;
         private Microsoft.Office.Core.IRibbonUI? _ribbon;
         private CancellationTokenSource? _cancellation;
+        private TranslationProgressForm? _progressForm;
         private readonly SettingsStore _settingsStore = new SettingsStore();
         private TranslationSettings _settings = new TranslationSettings();
         private static readonly string[] SourceLanguages = { "自动检测", "简体中文", "繁體中文", "英语", "日语", "韩语", "法语", "德语", "西班牙语", "俄语", "葡萄牙语", "意大利语", "阿拉伯语" };
@@ -112,7 +113,6 @@ namespace OfficeTranslate.WordAddIn
         }
         public async void TranslateSelection(Microsoft.Office.Core.IRibbonControl control) => await RunAsync(false);
         public async void TranslateDocument(Microsoft.Office.Core.IRibbonControl control) => await RunAsync(true);
-        public void CancelTranslation(Microsoft.Office.Core.IRibbonControl control) => _cancellation?.Cancel();
         public void OpenSettings(Microsoft.Office.Core.IRibbonControl control)
         {
             using (var form = new SettingsForm(_settingsStore))
@@ -133,15 +133,16 @@ namespace OfficeTranslate.WordAddIn
             {
                 var settings = _settingsStore.Load();
                 settings.Validate();
+                _progressForm = new TranslationProgressForm(settings.UiLanguage, () => _cancellation?.Cancel());
+                _progressForm.ShowFor(System.Diagnostics.Process.GetCurrentProcess().MainWindowHandle);
                 var bilingual = settings.BilingualMode;
                 var service = new WordTranslationService(_word);
-                _word.StatusBar = "OfficeTranslate：正在读取文档…";
-                await service.TranslateAsync(wholeDocument, bilingual, settings, _cancellation.Token, status => _word.StatusBar = status);
-                _word.StatusBar = bilingual ? "OfficeTranslate：双语排版完成" : "OfficeTranslate：翻译完成";
+                _progressForm.SetStatus("OfficeTranslate：正在读取文档…");
+                await service.TranslateAsync(wholeDocument, bilingual, settings, _cancellation.Token, _progressForm.SetStatus);
             }
-            catch (OperationCanceledException) { if (_word != null) _word.StatusBar = "OfficeTranslate：已取消"; }
+            catch (OperationCanceledException) { }
             catch (Exception ex) { MessageBox.Show(ex.Message, "OfficeTranslate", MessageBoxButtons.OK, MessageBoxIcon.Error); }
-            finally { _cancellation.Dispose(); _cancellation = null; }
+            finally { _progressForm?.CloseSafely(); _progressForm = null; _cancellation.Dispose(); _cancellation = null; }
         }
 
         public void OnConnection(object application, Extensibility.ext_ConnectMode connectMode, object addInInst, ref Array custom)
@@ -150,9 +151,9 @@ namespace OfficeTranslate.WordAddIn
             _word = (WordApplication)application;
             _settings = _settingsStore.Load();
         }
-        public void OnDisconnection(Extensibility.ext_DisconnectMode removeMode, ref Array custom) { _cancellation?.Cancel(); _word = null; }
+        public void OnDisconnection(Extensibility.ext_DisconnectMode removeMode, ref Array custom) { _cancellation?.Cancel(); _progressForm?.CloseSafely(); _word = null; }
         public void OnAddInsUpdate(ref Array custom) { }
         public void OnStartupComplete(ref Array custom) { }
-        public void OnBeginShutdown(ref Array custom) => _cancellation?.Cancel();
+        public void OnBeginShutdown(ref Array custom) { _cancellation?.Cancel(); _progressForm?.CloseSafely(); }
     }
 }
