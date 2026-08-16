@@ -33,6 +33,7 @@ namespace OfficeTranslate.PowerPointAddIn
         private CancellationTokenSource? _cancellation;
         private readonly SettingsStore _store = new SettingsStore();
         private TranslationSettings _settings = new TranslationSettings();
+        private TranslationProgressForm? _progressForm;
 
         public string GetCustomUI(string ribbonId)
         {
@@ -69,23 +70,30 @@ namespace OfficeTranslate.PowerPointAddIn
         private void Save() { try { _store.Save(_settings); } catch (Exception ex) { MessageBox.Show(ex.Message, "OfficeTranslate"); } }
         public async void TranslateSelection(Microsoft.Office.Core.IRibbonControl c) => await RunAsync(false);
         public async void TranslateDocument(Microsoft.Office.Core.IRibbonControl c) => await RunAsync(true);
-        public void CancelTranslation(Microsoft.Office.Core.IRibbonControl c) => _cancellation?.Cancel();
         public void OpenSettings(Microsoft.Office.Core.IRibbonControl c) { using (var form = new SettingsForm(_store)) if (form.ShowDialog() == DialogResult.OK) { _settings = _store.Load(); _ribbon?.Invalidate(); } }
         private async Task RunAsync(bool whole)
         {
             if (_host == null || _cancellation != null) return; _cancellation = new CancellationTokenSource();
-            try { var settings = _store.Load(); settings.Validate(); var service = new HostService(_host); SetStatus("OfficeTranslate…"); await service.TranslateAsync(whole, settings, _cancellation.Token, SetStatus); SetStatus("OfficeTranslate：完成"); }
+            try { var settings = _store.Load(); settings.Validate(); _progressForm = new TranslationProgressForm(settings.UiLanguage, () => _cancellation?.Cancel()); _progressForm.ShowFor(GetHostWindow()); var service = new HostService(_host); SetStatus("OfficeTranslate：正在准备翻译…"); await service.TranslateAsync(whole, settings, _cancellation.Token, SetStatus); }
             catch (OperationCanceledException) { SetStatus("OfficeTranslate：已取消"); }
             catch (Exception ex) { MessageBox.Show(ex.Message, "OfficeTranslate", MessageBoxButtons.OK, MessageBoxIcon.Error); }
-            finally { _cancellation.Dispose(); _cancellation = null; }
+            finally { CloseProgress(); _cancellation.Dispose(); _cancellation = null; }
         }
-        private void SetStatus(string text) {
+        private IntPtr GetHostWindow() {
 #if EXCEL
-            if (_host != null) _host.StatusBar = text;
+            return _host == null ? IntPtr.Zero : new IntPtr(_host.Hwnd);
+#else
+            return _host == null ? IntPtr.Zero : new IntPtr(_host.HWND);
 #endif
         }
+        private void SetStatus(string text) => _progressForm?.SetStatus(text);
+        private void CloseProgress()
+        {
+            _progressForm?.CloseSafely(); _progressForm = null;
+        }
         public void OnConnection(object application, Extensibility.ext_ConnectMode mode, object instance, ref Array custom) { System.Windows.Forms.Application.EnableVisualStyles(); _host = (HostApplication)application; _settings = _store.Load(); }
-        public void OnDisconnection(Extensibility.ext_DisconnectMode mode, ref Array custom) { _cancellation?.Cancel(); _host = null; }
-        public void OnAddInsUpdate(ref Array custom) { } public void OnStartupComplete(ref Array custom) { } public void OnBeginShutdown(ref Array custom) => _cancellation?.Cancel();
+        public void OnDisconnection(Extensibility.ext_DisconnectMode mode, ref Array custom) { _cancellation?.Cancel(); CloseProgress(); _host = null; }
+        public void OnAddInsUpdate(ref Array custom) { } public void OnStartupComplete(ref Array custom) { } public void OnBeginShutdown(ref Array custom) { _cancellation?.Cancel(); CloseProgress(); }
+
     }
 }

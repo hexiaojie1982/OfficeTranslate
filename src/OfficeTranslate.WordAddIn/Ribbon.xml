@@ -46,7 +46,6 @@
         </group>
         <group id="OfficeTranslate.ToolsGroup" getLabel="GetRibbonLabel">
           <box id="OfficeTranslate.ToolRow" boxStyle="horizontal">
-            <button id="OfficeTranslate.Cancel" getLabel="GetRibbonLabel" size="large" getImage="GetRibbonImage" onAction="CancelTranslation" />
             <button id="OfficeTranslate.Settings" getLabel="GetRibbonLabel" size="large" getImage="GetRibbonImage" onAction="OpenSettings" />
           </box>
         </group>

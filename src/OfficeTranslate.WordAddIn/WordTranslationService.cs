@@ -18,8 +18,6 @@ namespace OfficeTranslate.WordAddIn
         {
             var targets = wholeDocument ? ReadDocumentParagraphs() : ReadSelection();
             if (targets.Count == 0) throw new InvalidOperationException(wholeDocument ? "文档中没有可翻译的正文。" : "请先选择需要翻译的文字。");
-            var document = _word.ActiveDocument;
-            var positionOffset = 0;
             using (var client = new TranslationClient())
             {
                 for (var i = 0; i < targets.Count; i++)
@@ -30,9 +28,6 @@ namespace OfficeTranslate.WordAddIn
                     token.ThrowIfCancellationRequested();
 
                     var translatedText = text.TrimEnd('\r', '\a');
-                    var start = targets[i].Start + positionOffset;
-                    var end = targets[i].End + positionOffset;
-                    var contentEndBefore = document.Content.End;
                     progress($"OfficeTranslate：正在写回 {i + 1}/{targets.Count}");
 
                     var undo = _word.UndoRecord;
@@ -40,16 +35,15 @@ namespace OfficeTranslate.WordAddIn
                     try
                     {
                         if (bilingual)
-                            document.Range(end, end).InsertAfter("\r" + translatedText);
+                        {
+                            var insertion = targets[i].Range.Duplicate;
+                            insertion.Collapse(WdCollapseDirection.wdCollapseEnd);
+                            insertion.InsertAfter("\r" + translatedText);
+                        }
                         else
-                            document.Range(start, end).Text = translatedText;
+                            targets[i].Range.Text = translatedText;
                     }
                     finally { undo.EndCustomRecord(); }
-
-                    // Every write can change all following Word character positions.
-                    // Use Word's actual content length instead of estimating from strings,
-                    // which also handles paragraph and table-cell markers correctly.
-                    positionOffset += document.Content.End - contentEndBefore;
                     progress($"OfficeTranslate：已完成 {i + 1}/{targets.Count}");
                 }
             }
@@ -78,16 +72,17 @@ namespace OfficeTranslate.WordAddIn
             var raw = range.Text ?? string.Empty;
             var contentLength = raw.Length;
             while (contentLength > 0 && (raw[contentLength - 1] == '\r' || raw[contentLength - 1] == '\a')) contentLength--;
-            return new Target(range.Start, range.Start + contentLength, raw.Substring(0, contentLength));
+            var liveRange = range.Duplicate;
+            liveRange.End = liveRange.Start + contentLength;
+            return new Target(liveRange, raw.Substring(0, contentLength));
         }
 
         private static string StripMarks(string text) => text.TrimEnd('\r', '\a');
 
         private sealed class Target
         {
-            public Target(int start, int end, string text) { Start = start; End = end; Text = text; }
-            public int Start { get; }
-            public int End { get; }
+            public Target(Range range, string text) { Range = range; Text = text; }
+            public Range Range { get; }
             public string Text { get; }
         }
     }
