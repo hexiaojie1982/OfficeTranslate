@@ -52,7 +52,9 @@ namespace OfficeTranslate.PowerPointAddIn
                 {
                     if (selection.ShapeRange.Count > 0 && selection.ShapeRange[1].HasTable == Office.MsoTriState.msoTrue)
                     {
-                        AddShape(selection.ShapeRange[1], result); return result;
+                        var selectedCells = AddSelectedTableCells(selection.ShapeRange[1], result);
+                        if (selectedCells > 1) return result;
+                        result.Clear();
                     }
                 }
                 catch (COMException) { }
@@ -60,7 +62,11 @@ namespace OfficeTranslate.PowerPointAddIn
             }
             if (selection.Type == PowerPoint.PpSelectionType.ppSelectionShapes)
             {
-                foreach (PowerPoint.Shape shape in selection.ShapeRange) AddShape(shape, result);
+                foreach (PowerPoint.Shape shape in selection.ShapeRange)
+                {
+                    if (shape.HasTable == Office.MsoTriState.msoTrue && AddSelectedTableCells(shape, result) > 0) continue;
+                    AddShape(shape, result);
+                }
             }
             else if (selection.Type == PowerPoint.PpSelectionType.ppSelectionSlides)
             {
@@ -68,6 +74,31 @@ namespace OfficeTranslate.PowerPointAddIn
                     foreach (PowerPoint.Shape shape in slide.Shapes) AddShape(shape, result);
             }
             return result;
+        }
+
+        private static int AddSelectedTableCells(PowerPoint.Shape shape, List<Target> result)
+        {
+            if (shape.HasTable != Office.MsoTriState.msoTrue) return 0;
+            var selected = 0;
+            var seenCells = new HashSet<IntPtr>();
+            for (var row = 1; row <= shape.Table.Rows.Count; row++)
+                for (var column = 1; column <= shape.Table.Columns.Count; column++)
+                {
+                    try
+                    {
+                        var cell = shape.Table.Cell(row, column);
+                        if (!cell.Selected) continue;
+                        var cellShape = cell.Shape;
+                        var identity = Marshal.GetIUnknownForObject(cellShape);
+                        try { if (!seenCells.Add(identity)) continue; }
+                        finally { Marshal.Release(identity); }
+                        selected++;
+                        if (cellShape.TextFrame2.HasText == Office.MsoTriState.msoTrue)
+                            AddRange(cellShape.TextFrame2.TextRange, result);
+                    }
+                    catch (COMException) { }
+                }
+            return selected;
         }
 
         private static void AddShape(PowerPoint.Shape shape, List<Target> result)
