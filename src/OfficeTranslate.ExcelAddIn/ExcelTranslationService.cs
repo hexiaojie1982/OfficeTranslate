@@ -3,6 +3,7 @@ using Office = Microsoft.Office.Core;
 using OfficeTranslate.Core;
 using System;
 using System.Collections.Generic;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
@@ -42,13 +43,30 @@ namespace OfficeTranslate.ExcelAddIn
             var result = new List<Target>();
             try
             {
-                var drawingObjects = (Excel.DrawingObjects)_excel.Selection;
-                Excel.ShapeRange shapes = drawingObjects.ShapeRange;
+                var shapes = GetSelectedShapeRange(_excel.Selection);
+                if (shapes == null) return result;
                 for (var i = 1; i <= shapes.Count; i++) AddShape(shapes.Item(i), result);
             }
             catch (COMException) { }
             catch (InvalidCastException) { }
+            catch (TargetInvocationException) { }
             return result;
+        }
+
+        private static Excel.ShapeRange? GetSelectedShapeRange(object selection)
+        {
+            if (selection is Excel.DrawingObjects drawingObjects) return drawingObjects.ShapeRange;
+
+            // When editing a grouped flowchart, Excel returns a GroupObject or another
+            // COM selection wrapper rather than DrawingObjects. Its ShapeRange property
+            // is still available through IDispatch and contains only the selected child shapes.
+            var value = selection.GetType().InvokeMember(
+                "ShapeRange",
+                BindingFlags.GetProperty,
+                null,
+                selection,
+                null);
+            return value as Excel.ShapeRange;
         }
 
         private static List<Target> ReadSheetTargets(Excel.Worksheet sheet)
