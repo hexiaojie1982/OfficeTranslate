@@ -75,7 +75,13 @@ namespace OfficeTranslate.PowerPointAddIn
             if (_host == null || _cancellation != null) return; _cancellation = new CancellationTokenSource();
             try { var settings = LoadForTranslation(); settings.Validate(); _progressForm = new TranslationProgressForm(settings.UiLanguage, () => _cancellation?.Cancel()); _progressForm.ShowFor(GetHostWindow()); var service = new HostService(_host); SetStatus("OfficeTranslate：正在准备翻译…"); await service.TranslateAsync(whole, settings, _cancellation.Token, SetStatus); }
             catch (OperationCanceledException) { SetStatus("OfficeTranslate：已取消"); }
-            catch (Exception ex) { MessageBox.Show(ex.Message, "OfficeTranslate", MessageBoxButtons.OK, MessageBoxIcon.Error); }
+            catch (Exception ex)
+            {
+                CloseProgress();
+                var owner = GetHostWindow();
+                if (owner != IntPtr.Zero) MessageBox.Show(new HostWindow(owner), ex.Message, "OfficeTranslate", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                else MessageBox.Show(ex.Message, "OfficeTranslate", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
             finally { CloseProgress(); _cancellation.Dispose(); _cancellation = null; }
         }
         private IntPtr GetHostWindow() {
@@ -103,6 +109,11 @@ namespace OfficeTranslate.PowerPointAddIn
         private void CloseProgress()
         {
             _progressForm?.CloseSafely(); _progressForm = null;
+        }
+        private sealed class HostWindow : IWin32Window
+        {
+            public HostWindow(IntPtr handle) { Handle = handle; }
+            public IntPtr Handle { get; }
         }
         public void OnConnection(object application, Extensibility.ext_ConnectMode mode, object instance, ref Array custom) { System.Windows.Forms.Application.EnableVisualStyles(); _host = (HostApplication)application; _settings = _store.Load(); }
         public void OnDisconnection(Extensibility.ext_DisconnectMode mode, ref Array custom) { _cancellation?.Cancel(); CloseProgress(); _host = null; }
