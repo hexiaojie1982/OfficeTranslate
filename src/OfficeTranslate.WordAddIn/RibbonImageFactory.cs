@@ -164,6 +164,7 @@ namespace OfficeTranslate.WordAddIn
                 else if (id.EndsWith("Selection", StringComparison.Ordinal)) DrawSelection(g);
                 else if (id.EndsWith("Document", StringComparison.Ordinal)) DrawDocument(g);
                 else if (id.EndsWith("Bilingual", StringComparison.Ordinal)) DrawBilingual(g);
+                else if (id.EndsWith("ImageOcr", StringComparison.Ordinal)) DrawImageOcr(g);
                 else if (id.EndsWith("Cancel", StringComparison.Ordinal)) DrawCancel(g);
                 else if (id.EndsWith("Settings", StringComparison.Ordinal)) DrawSettings(g);
                 else DrawSwap(g);
@@ -235,6 +236,18 @@ namespace OfficeTranslate.WordAddIn
                 g.DrawLine(pen, 8, 13, 17, 13);
                 g.DrawLine(bluePen, 8, 20, 24, 20);
                 g.DrawLine(bluePen, 8, 24, 21, 24);
+            }
+        }
+
+        private static void DrawImageOcr(Graphics g)
+        {
+            using (var pen = new Pen(Dark, 1.7F))
+            using (var accent = new Pen(Blue, 2F) { StartCap = LineCap.Round, EndCap = LineCap.Round })
+            {
+                g.DrawRectangle(pen, 4, 6, 24, 20);
+                g.DrawEllipse(pen, 8, 10, 5, 5);
+                g.DrawLine(pen, 5, 23, 12, 17); g.DrawLine(pen, 12, 17, 17, 21); g.DrawLine(pen, 17, 21, 22, 15); g.DrawLine(pen, 22, 15, 28, 22);
+                g.DrawLine(accent, 7, 29, 25, 29);
             }
         }
 

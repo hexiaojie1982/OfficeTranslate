@@ -52,9 +52,11 @@ namespace OfficeTranslate.PowerPointAddIn
         public string GetSourceLanguageTip(Microsoft.Office.Core.IRibbonControl c) => string.Format(UiText.Get(_settings.UiLanguage, "SourceTip"), UiText.Language(_settings.UiLanguage, _settings.SourceLanguage));
         public string GetTargetLanguageTip(Microsoft.Office.Core.IRibbonControl c) => string.Format(UiText.Get(_settings.UiLanguage, "TargetTip"), UiText.Language(_settings.UiLanguage, _settings.TargetLanguage));
         public bool GetBilingualMode(Microsoft.Office.Core.IRibbonControl c) => _settings.BilingualMode;
+        public bool GetImageOcrMode(Microsoft.Office.Core.IRibbonControl c) => _settings.ImageOcrEnabled;
+        public bool GetImageOcrVisible(Microsoft.Office.Core.IRibbonControl c) => true;
         public string GetRibbonLabel(Microsoft.Office.Core.IRibbonControl c)
         {
-            var id = c.Id; var key = id.EndsWith("LanguageGroup") ? "LanguageGroup" : id.EndsWith("TranslateGroup") ? "TranslateGroup" : id.EndsWith("ToolsGroup") ? "ToolsGroup" : id.EndsWith("SwapLanguages") ? "Swap" : id.EndsWith("Selection") ? "Selection" : id.EndsWith("Document") ? "Document" : id.EndsWith("Bilingual") ? "Bilingual" : id.EndsWith("Cancel") ? "Cancel" : "Settings";
+            var id = c.Id; var key = id.EndsWith("LanguageGroup") ? "LanguageGroup" : id.EndsWith("TranslateGroup") ? "TranslateGroup" : id.EndsWith("ToolsGroup") ? "ToolsGroup" : id.EndsWith("SwapLanguages") ? "Swap" : id.EndsWith("Selection") ? "Selection" : id.EndsWith("Document") ? "Document" : id.EndsWith("Bilingual") ? "Bilingual" : id.EndsWith("ImageOcr") ? "ImageOcr" : id.EndsWith("Cancel") ? "Cancel" : "Settings";
             var value = UiText.Get(_settings.UiLanguage, key); return _settings.UiLanguage == "en" ? value : string.Join("\u2060", value.ToCharArray());
         }
         public void SelectSourceLanguage(Microsoft.Office.Core.IRibbonControl c) { _settings.SourceLanguage = c.Tag; _ribbon?.InvalidateControl("OfficeTranslate.SourceLanguageMenu"); }
@@ -67,6 +69,7 @@ namespace OfficeTranslate.PowerPointAddIn
             _ribbon?.Invalidate();
         }
         public void BilingualModeChanged(Microsoft.Office.Core.IRibbonControl c, bool pressed) { _settings.BilingualMode = pressed; }
+        public void ImageOcrModeChanged(Microsoft.Office.Core.IRibbonControl c, bool pressed) { _settings.ImageOcrEnabled = pressed; }
         public async void TranslateSelection(Microsoft.Office.Core.IRibbonControl c) => await RunAsync(false);
         public async void TranslateDocument(Microsoft.Office.Core.IRibbonControl c) => await RunAsync(true);
         public void OpenSettings(Microsoft.Office.Core.IRibbonControl c) { using (var form = new SettingsForm(_store)) if (form.ShowDialog() == DialogResult.OK) { ReloadPersistentSettings(); _ribbon?.Invalidate(); } }
@@ -98,13 +101,15 @@ namespace OfficeTranslate.PowerPointAddIn
             settings.SourceLanguage = _settings.SourceLanguage;
             settings.TargetLanguage = _settings.TargetLanguage;
             settings.BilingualMode = _settings.BilingualMode;
+            settings.ImageOcrEnabled = _settings.ImageOcrEnabled;
             return settings;
         }
         private void ReloadPersistentSettings()
         {
-            var source = _settings.SourceLanguage; var target = _settings.TargetLanguage; var bilingual = _settings.BilingualMode;
+            var source = _settings.SourceLanguage; var target = _settings.TargetLanguage; var bilingual = _settings.BilingualMode; var imageOcr = _settings.ImageOcrEnabled;
             _settings = _store.Load();
             _settings.SourceLanguage = source; _settings.TargetLanguage = target; _settings.BilingualMode = bilingual;
+            _settings.ImageOcrEnabled = imageOcr;
         }
         private void CloseProgress()
         {

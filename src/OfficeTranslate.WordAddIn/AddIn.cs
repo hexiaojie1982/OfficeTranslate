@@ -45,7 +45,8 @@ namespace OfficeTranslate.WordAddIn
             var key = id.EndsWith("LanguageGroup") ? "LanguageGroup" : id.EndsWith("TranslateGroup") ? "TranslateGroup" :
                 id.EndsWith("ToolsGroup") ? "ToolsGroup" : id.EndsWith("SwapLanguages") ? "Swap" :
                 id.EndsWith("Selection") ? "Selection" : id.EndsWith("Document") ? "Document" :
-                id.EndsWith("Bilingual") ? "Bilingual" : id.EndsWith("Cancel") ? "Cancel" : "Settings";
+                id.EndsWith("Bilingual") ? "Bilingual" : id.EndsWith("ImageOcr") ? "ImageOcr" :
+                id.EndsWith("Cancel") ? "Cancel" : "Settings";
             var value = UiText.Get(_settings.UiLanguage, key);
             return _settings.UiLanguage == "en" ? value : string.Join("\u2060", value.ToCharArray());
         }
@@ -56,6 +57,9 @@ namespace OfficeTranslate.WordAddIn
         public string GetTargetLanguageLabel(Microsoft.Office.Core.IRibbonControl control, int index) => TargetLanguages[index];
         public int GetTargetLanguageIndex(Microsoft.Office.Core.IRibbonControl control) => Math.Max(0, Array.IndexOf(TargetLanguages, _settings.TargetLanguage));
         public bool GetBilingualMode(Microsoft.Office.Core.IRibbonControl control) => _settings.BilingualMode;
+        public bool GetImageOcrMode(Microsoft.Office.Core.IRibbonControl control) => _settings.ImageOcrEnabled;
+        public bool GetImageOcrVisible(Microsoft.Office.Core.IRibbonControl control) => true;
+        public void ImageOcrModeChanged(Microsoft.Office.Core.IRibbonControl control, bool pressed) { _settings.ImageOcrEnabled = pressed; }
         public string GetSourceLanguageMenuLabel(Microsoft.Office.Core.IRibbonControl control) => UiText.Get(_settings.UiLanguage, "Source");
         public string GetTargetLanguageMenuLabel(Microsoft.Office.Core.IRibbonControl control) => UiText.Get(_settings.UiLanguage, "Target");
         public string GetSourceLanguageTip(Microsoft.Office.Core.IRibbonControl control) => string.Format(UiText.Get(_settings.UiLanguage, "SourceTip"), UiText.Language(_settings.UiLanguage, _settings.SourceLanguage));
@@ -147,13 +151,15 @@ namespace OfficeTranslate.WordAddIn
             settings.SourceLanguage = _settings.SourceLanguage;
             settings.TargetLanguage = _settings.TargetLanguage;
             settings.BilingualMode = _settings.BilingualMode;
+            settings.ImageOcrEnabled = _settings.ImageOcrEnabled;
             return settings;
         }
         private void ReloadPersistentSettings()
         {
-            var source = _settings.SourceLanguage; var target = _settings.TargetLanguage; var bilingual = _settings.BilingualMode;
+            var source = _settings.SourceLanguage; var target = _settings.TargetLanguage; var bilingual = _settings.BilingualMode; var imageOcr = _settings.ImageOcrEnabled;
             _settings = _settingsStore.Load();
             _settings.SourceLanguage = source; _settings.TargetLanguage = target; _settings.BilingualMode = bilingual;
+            _settings.ImageOcrEnabled = imageOcr;
         }
         public void OnDisconnection(Extensibility.ext_DisconnectMode removeMode, ref Array custom) { _cancellation?.Cancel(); _progressForm?.CloseSafely(); _word = null; }
         public void OnAddInsUpdate(ref Array custom) { }

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.IO;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
@@ -55,6 +56,71 @@ namespace OfficeTranslate.Core
                         .Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(name => name, StringComparer.OrdinalIgnoreCase).ToArray();
                 }
             }
+        }
+
+        public async Task<IReadOnlyList<ImageTranslationRegion>> TranslateImageAsync(byte[] imageBytes, TranslationSettings settings, CancellationToken token)
+        {
+            settings.Validate(); Configure(settings);
+            var base64 = Convert.ToBase64String(imageBytes);
+            var model = string.IsNullOrWhiteSpace(settings.ImageModel) ? settings.Model : settings.ImageModel;
+            var imageSource = string.IsNullOrWhiteSpace(settings.SourceLanguage) || settings.SourceLanguage == "自动检测"
+                ? "自动识别文字语言"
+                : "图片文字是" + settings.SourceLanguage;
+            var imageGlossary = string.IsNullOrWhiteSpace(settings.Glossary) ? "" : " 必须遵循术语表：" + settings.Glossary;
+            var prompt = "图片本身就是本次需要处理的内容，请立即同时完成 OCR 和翻译，不要要求用户再发送文字。" +
+                imageSource + "，将图片中的所有可见文字翻译成" + settings.TargetLanguage + "。" +
+                "每个文字区域必须同时填写 source 原文和 translation 译文，translation 不得留空。" +
+                "只返回严格 JSON，不要 Markdown：{\"regions\":[{\"bbox\":[x1,y1,x2,y2],\"source\":\"原文\",\"translation\":\"译文\"}]}。" +
+                "坐标必须是相对于图片宽高的 0 到 1000 整数；按阅读顺序返回；没有文字时返回 {\"regions\":[]}。" +
+                settings.CustomInstructions + imageGlossary;
+            var endpoint = settings.Provider == ProviderKind.Ollama
+                ? settings.BaseUrl.TrimEnd('/') + "/api/chat"
+                : settings.BaseUrl.TrimEnd('/') + "/chat/completions";
+            object body;
+            if (settings.Provider == ProviderKind.Ollama)
+                body = new { model, stream = false, format = "json", messages = new[] { new { role = "user", content = prompt, images = new[] { base64 } } } };
+            else
+                body = new { model, temperature = 0.1, messages = new object[] { new { role = "user", content = new object[] { new { type = "text", text = prompt }, new { type = "image_url", image_url = new { url = "data:image/png;base64," + base64 } } } } } };
+            using (var request = new HttpRequestMessage(HttpMethod.Post, endpoint))
+            {
+                request.Content = new StringContent(_json.Serialize(body), Encoding.UTF8, "application/json");
+                if (!string.IsNullOrWhiteSpace(settings.ApiKey)) request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", settings.ApiKey);
+                using (var response = await _http.SendAsync(request, token).ConfigureAwait(false))
+                {
+                    var raw = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+                    if (!response.IsSuccessStatusCode) throw new InvalidOperationException($"图片识别服务返回 {(int)response.StatusCode}: {raw}");
+                    var root = _json.DeserializeObject(raw) as Dictionary<string, object>;
+                    var content = settings.Provider == ProviderKind.Ollama ? ReadOllama(root) : ReadOpenAi(root);
+                    return ParseImageRegions(content);
+                }
+            }
+        }
+
+        private IReadOnlyList<ImageTranslationRegion> ParseImageRegions(string content)
+        {
+            var start = content.IndexOf('{'); var end = content.LastIndexOf('}');
+            if (start < 0 || end <= start) throw new InvalidOperationException("图片模型没有返回有效的 JSON 坐标。");
+            var root = _json.DeserializeObject(content.Substring(start, end - start + 1)) as Dictionary<string, object>;
+            if (root == null || !root.TryGetValue("regions", out var value) || !(value is object[] items)) throw new InvalidOperationException("图片模型返回的 regions 格式无效。");
+            var result = new List<ImageTranslationRegion>();
+            foreach (var item in items.OfType<Dictionary<string, object>>())
+            {
+                if (!item.TryGetValue("bbox", out var boxValue) || !(boxValue is object[] box) || box.Length != 4) continue;
+                var region = new ImageTranslationRegion {
+                    X1 = Clamp(Convert.ToSingle(box[0])), Y1 = Clamp(Convert.ToSingle(box[1])),
+                    X2 = Clamp(Convert.ToSingle(box[2])), Y2 = Clamp(Convert.ToSingle(box[3])),
+                    Source = item.TryGetValue("source", out var source) ? Convert.ToString(source) ?? "" : "",
+                    Translation = item.TryGetValue("translation", out var translation) ? Convert.ToString(translation) ?? "" : ""
+                };
+                if (region.X2 > region.X1 && region.Y2 > region.Y1 && !string.IsNullOrWhiteSpace(region.Translation)) result.Add(region);
+            }
+            return result;
+        }
+
+        private static float Clamp(float value)
+        {
+            if (float.IsNaN(value) || float.IsInfinity(value)) return 0;
+            return Math.Max(0, Math.Min(1000, value));
         }
 
         private void Configure(TranslationSettings settings)
@@ -129,5 +195,11 @@ namespace OfficeTranslate.Core
         }
 
         public void Dispose() => _http.Dispose();
+    }
+
+    public sealed class ImageTranslationRegion
+    {
+        public float X1 { get; set; } public float Y1 { get; set; } public float X2 { get; set; } public float Y2 { get; set; }
+        public string Source { get; set; } = string.Empty; public string Translation { get; set; } = string.Empty;
     }
 }

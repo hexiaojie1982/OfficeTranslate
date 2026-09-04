@@ -17,6 +17,7 @@ namespace OfficeTranslate.Core
         public string OpenAiBaseUrl { get; set; } = "https://api.openai.com/v1";
         public string OpenAiApiKey { get; set; } = string.Empty;
         public string OpenAiModel { get; set; } = string.Empty;
+        public string ImageModel { get; set; } = string.Empty;
         [ScriptIgnore]
         public string SourceLanguage { get; set; } = "自动检测";
         [ScriptIgnore]
@@ -24,6 +25,8 @@ namespace OfficeTranslate.Core
         public string UiLanguage { get; set; } = "zh-CN";
         [ScriptIgnore]
         public bool BilingualMode { get; set; }
+        [ScriptIgnore]
+        public bool ImageOcrEnabled { get; set; }
         public string TranslationStyle { get; set; } = "ProfessionalReport";
         public string CustomInstructions { get; set; } = string.Empty;
         public string Glossary { get; set; } = string.Empty;

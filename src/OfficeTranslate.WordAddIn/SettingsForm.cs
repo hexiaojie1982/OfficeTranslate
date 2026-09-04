@@ -14,6 +14,7 @@ namespace OfficeTranslate.WordAddIn
         private readonly TextBox _baseUrl = new TextBox();
         private readonly TextBox _apiKey = new TextBox();
         private readonly ComboBox _model = new ComboBox();
+        private readonly ComboBox _imageModel = new ComboBox();
         private readonly Button _refreshModels = new Button();
         private readonly NumericUpDown _chunkSize = new NumericUpDown();
         private readonly ComboBox _translationStyle = new ComboBox();
@@ -48,14 +49,14 @@ namespace OfficeTranslate.WordAddIn
             root.RowStyles.Add(new RowStyle(SizeType.AutoSize)); root.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             root.Controls.Add(new Label { Text = T("Heading"), Font = new Font(Font.FontFamily, 15F, FontStyle.Bold), ForeColor = Color.FromArgb(32, 55, 88), AutoSize = true, Margin = new Padding(0, 0, 0, 14) }, 0, 0);
 
-            var card = new TableLayoutPanel { Dock = DockStyle.Fill, BackColor = Color.White, Padding = new Padding(18), ColumnCount = 2, RowCount = 10 };
+            var card = new TableLayoutPanel { Dock = DockStyle.Fill, BackColor = Color.White, Padding = new Padding(18), ColumnCount = 2, RowCount = 11 };
             card.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 110)); card.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            for (var i = 0; i < 7; i++) card.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            for (var i = 0; i < 8; i++) card.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             card.RowStyles.Add(new RowStyle(SizeType.Percent, 38)); card.RowStyles.Add(new RowStyle(SizeType.Percent, 62)); card.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
             _uiLanguage.DropDownStyle = ComboBoxStyle.DropDownList; _uiLanguage.Items.AddRange(UiText.LanguageNames);
             _provider.DropDownStyle = ComboBoxStyle.DropDownList; _provider.Items.AddRange(new object[] { "Ollama API", "OpenAI-compatible API" }); _provider.SelectedIndexChanged += ProviderChanged;
-            _apiKey.UseSystemPasswordChar = true; _model.DropDownStyle = ComboBoxStyle.DropDownList;
+            _apiKey.UseSystemPasswordChar = true; _model.DropDownStyle = ComboBoxStyle.DropDownList; _imageModel.DropDownStyle = ComboBoxStyle.DropDownList;
             _chunkSize.Minimum = 500; _chunkSize.Maximum = 30000; _chunkSize.Increment = 500;
             _translationStyle.DropDownStyle = ComboBoxStyle.DropDownList; _translationStyle.SelectedIndexChanged += TranslationStyleChanged;
             _instructions.Multiline = true; _instructions.ScrollBars = ScrollBars.Vertical;
@@ -66,9 +67,10 @@ namespace OfficeTranslate.WordAddIn
             modelPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); modelPanel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             _model.Dock = DockStyle.Fill; StyleButton(_refreshModels, T("Refresh"), false); _refreshModels.Margin = new Padding(8, 0, 0, 0); _refreshModels.Click += RefreshModelsClicked;
             modelPanel.Controls.Add(_model, 0, 0); modelPanel.Controls.Add(_refreshModels, 1, 0); AddRow(card, 4, T("Model"), modelPanel);
-            AddRow(card, 5, T("Chunk"), _chunkSize); AddRow(card, 6, T("TranslationStyle"), _translationStyle); AddRow(card, 7, T("Instructions"), _instructions); AddRow(card, 8, T("Glossary"), _glossary);
+            AddRow(card, 5, T("ImageModel"), _imageModel);
+            AddRow(card, 6, T("Chunk"), _chunkSize); AddRow(card, 7, T("TranslationStyle"), _translationStyle); AddRow(card, 8, T("Instructions"), _instructions); AddRow(card, 9, T("Glossary"), _glossary);
             _status.Text = T("InitialStatus"); _status.AutoSize = true; _status.ForeColor = Color.FromArgb(90, 104, 122); _status.Margin = new Padding(0, 10, 0, 0);
-            card.Controls.Add(_status, 0, 9); card.SetColumnSpan(_status, 2); root.Controls.Add(card, 0, 1);
+            card.Controls.Add(_status, 0, 10); card.SetColumnSpan(_status, 2); root.Controls.Add(card, 0, 1);
 
             var buttonBar = new TableLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, ColumnCount = 3, Padding = new Padding(0, 14, 0, 0) };
             buttonBar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); buttonBar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize)); buttonBar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
@@ -99,6 +101,7 @@ namespace OfficeTranslate.WordAddIn
             _loading = true;
             var uiIndex = Array.IndexOf(UiText.LanguageCodes, _existing.UiLanguage); _uiLanguage.SelectedIndex = uiIndex >= 0 ? uiIndex : 0;
             _activeProvider = _existing.Provider; _provider.SelectedIndex = _activeProvider == ProviderKind.Ollama ? 0 : 1; ApplyProviderProfile(_activeProvider);
+            SetImageModels(new[] { _existing.ImageModel }, _existing.ImageModel);
             _chunkSize.Value = Math.Max(_chunkSize.Minimum, Math.Min(_chunkSize.Maximum, _existing.MaxCharactersPerChunk));
             var styleId = _existing.TranslationStyle;
             if (!string.IsNullOrWhiteSpace(_existing.CustomInstructions) && string.IsNullOrWhiteSpace(styleId)) styleId = "Custom";
@@ -160,6 +163,7 @@ namespace OfficeTranslate.WordAddIn
                     if (models.Count == 0) throw new InvalidOperationException(T("NoModels"));
                     var selected = _activeProvider == ProviderKind.Ollama ? _existing.OllamaModel : _existing.OpenAiModel;
                     SetModels(models, selected); _status.ForeColor = Color.FromArgb(30, 130, 76); _status.Text = string.Format(T("ModelsLoaded"), models.Count);
+                    SetImageModels(models, _existing.ImageModel);
                 }
             }
             catch (OperationCanceledException) { }
@@ -171,6 +175,16 @@ namespace OfficeTranslate.WordAddIn
         {
             _model.BeginUpdate(); _model.Items.Clear(); foreach (var model in models) if (!string.IsNullOrWhiteSpace(model)) _model.Items.Add(model); _model.EndUpdate();
             var index = _model.Items.IndexOf(selected); _model.SelectedIndex = index >= 0 ? index : (_model.Items.Count > 0 ? 0 : -1);
+        }
+
+        private void SetImageModels(System.Collections.Generic.IEnumerable<string> models, string selected)
+        {
+            _imageModel.BeginUpdate(); _imageModel.Items.Clear();
+            _imageModel.Items.Add("（使用文本模型）");
+            foreach (var model in models) if (!string.IsNullOrWhiteSpace(model)) _imageModel.Items.Add(model);
+            _imageModel.EndUpdate();
+            var index = string.IsNullOrWhiteSpace(selected) ? 0 : _imageModel.Items.IndexOf(selected);
+            _imageModel.SelectedIndex = index >= 0 ? index : 0;
         }
 
         private TranslationSettings BuildSettings(bool requireModel)
@@ -186,6 +200,7 @@ namespace OfficeTranslate.WordAddIn
                 CustomInstructions = _instructions.Text.Trim(), Glossary = _glossary.Text.Trim(),
                 OllamaBaseUrl = _existing.OllamaBaseUrl, OllamaApiKey = _existing.OllamaApiKey, OllamaModel = _existing.OllamaModel,
                 OpenAiBaseUrl = _existing.OpenAiBaseUrl, OpenAiApiKey = _existing.OpenAiApiKey, OpenAiModel = _existing.OpenAiModel
+                , ImageModel = _imageModel.SelectedIndex <= 0 ? string.Empty : _imageModel.SelectedItem?.ToString() ?? string.Empty
             };
             if (requireModel) settings.Validate(); else settings.ValidateEndpoint(); return settings;
         }
