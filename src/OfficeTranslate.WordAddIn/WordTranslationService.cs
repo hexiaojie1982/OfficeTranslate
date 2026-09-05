@@ -84,31 +84,21 @@ namespace OfficeTranslate.WordAddIn
             foreach (var region in regions)
             {
                 var left = image.Left + image.Width * region.X1 / 1000F; var top = image.Top + image.Height * region.Y1 / 1000F;
-                var width = Math.Max(12F, image.Width * (region.X2 - region.X1) / 1000F); var height = Math.Max(10F, image.Height * (region.Y2 - region.Y1) / 1000F);
-                object anchor = image.Anchor.Duplicate;
-                var overlay = _word.ActiveDocument.Shapes.AddTextbox(Office.MsoTextOrientation.msoTextOrientationHorizontal, left, top, width, height, ref anchor);
-                overlay.AlternativeText = "OfficeTranslateOCR"; overlay.RelativeHorizontalPosition = WdRelativeHorizontalPosition.wdRelativeHorizontalPositionPage; overlay.RelativeVerticalPosition = WdRelativeVerticalPosition.wdRelativeVerticalPositionPage;
-                overlay.WrapFormat.Type = WdWrapType.wdWrapFront; overlay.Fill.Visible = Office.MsoTriState.msoTrue; overlay.Fill.ForeColor.RGB = 0xFFFFFF; overlay.Fill.Transparency = 0.08F; overlay.Line.Visible = Office.MsoTriState.msoFalse;
+                var width = Math.Max(24F, image.Width * (region.X2 - region.X1) / 1000F); var originalHeight = Math.Max(10F, image.Height * (region.Y2 - region.Y1) / 1000F);
                 var bilingualImage = settings.BilingualMode && !string.IsNullOrWhiteSpace(region.Source);
                 var overlayText = bilingualImage ? region.Source + "\r" + region.Translation : region.Translation;
+                var layout = ImageOverlayLayout.Calculate(width, originalHeight, overlayText);
+                object anchor = image.Anchor.Duplicate;
+                var overlay = _word.ActiveDocument.Shapes.AddTextbox(Office.MsoTextOrientation.msoTextOrientationHorizontal, left, top, width, layout.Height, ref anchor);
+                overlay.AlternativeText = "OfficeTranslateOCR"; overlay.RelativeHorizontalPosition = WdRelativeHorizontalPosition.wdRelativeHorizontalPositionPage; overlay.RelativeVerticalPosition = WdRelativeVerticalPosition.wdRelativeVerticalPositionPage;
+                overlay.WrapFormat.Type = WdWrapType.wdWrapFront; overlay.Fill.Visible = Office.MsoTriState.msoTrue; overlay.Fill.ForeColor.RGB = 0xFFFFFF; overlay.Fill.Transparency = 0.08F; overlay.Line.Visible = Office.MsoTriState.msoFalse;
                 overlay.TextFrame.MarginLeft = 2; overlay.TextFrame.MarginRight = 2; overlay.TextFrame.MarginTop = 1; overlay.TextFrame.MarginBottom = 1;
                 overlay.TextFrame.TextRange.Text = overlayText;
                 // Word does not consistently support msoAutoSizeTextToFitShape. Some
                 // desktop builds reject it with "value out of range", so calculate a
                 // conservative font size without using that COM property.
-                overlay.TextFrame.TextRange.Font.Size = CalculateOverlayFontSize(width, height, overlayText);
+                overlay.TextFrame.TextRange.Font.Size = layout.FontSize;
             }
-        }
-
-        private static float CalculateOverlayFontSize(float width, float height, string text)
-        {
-            var lines = (text ?? string.Empty).Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
-            var lineCount = Math.Max(1, lines.Length);
-            var longest = 1;
-            foreach (var line in lines) longest = Math.Max(longest, line.Length);
-            var byHeight = Math.Max(1F, height - 2F) / (lineCount * 1.25F);
-            var byWidth = Math.Max(1F, width - 4F) / (longest * 0.75F);
-            return Math.Max(6F, Math.Min(24F, Math.Min(byHeight, byWidth)));
         }
 
         private List<ImageTarget> ReadDocumentImages()

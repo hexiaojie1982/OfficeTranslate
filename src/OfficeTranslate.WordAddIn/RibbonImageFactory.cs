@@ -59,7 +59,10 @@ namespace OfficeTranslate.WordAddIn
             using (var g = Graphics.FromImage(bitmap))
             {
                 g.SmoothingMode = SmoothingMode.AntiAlias;
-                var rect = new Rectangle(3, 7, 26, 18);
+                g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+                var rect = new Rectangle(2, 7, 28, 18);
+                using (var shadow = new SolidBrush(Color.FromArgb(38, 0, 0, 0)))
+                    g.FillRectangle(shadow, rect.X + 1, rect.Y + 1, rect.Width, rect.Height);
                 if (language == "简体中文") DrawChina(g, rect);
                 else if (language == "繁體中文") DrawHongKong(g, rect);
                 else if (language == "英语") DrawUnitedStates(g, rect);
@@ -72,7 +75,8 @@ namespace OfficeTranslate.WordAddIn
                 else if (language == "葡萄牙语") DrawPortugal(g, rect);
                 else if (language == "意大利语") DrawVerticalTricolor(g, rect, Color.FromArgb(0, 146, 70), Color.White, Color.FromArgb(206, 43, 55));
                 else DrawSaudiArabia(g, rect);
-                using (var border = new Pen(Color.FromArgb(105, 115, 128), 1F)) g.DrawRectangle(border, rect);
+                using (var border = new Pen(Color.FromArgb(112, 122, 136), 1F))
+                    g.DrawRectangle(border, rect.X - 0.5F, rect.Y - 0.5F, rect.Width + 1F, rect.Height + 1F);
             }
             return bitmap;
         }
@@ -80,76 +84,176 @@ namespace OfficeTranslate.WordAddIn
         private static void DrawHorizontalTricolor(Graphics g, Rectangle r, Color a, Color b, Color c)
         {
             using (var ba = new SolidBrush(a)) using (var bb = new SolidBrush(b)) using (var bc = new SolidBrush(c))
-            { g.FillRectangle(ba, r.X, r.Y, r.Width, 6); g.FillRectangle(bb, r.X, r.Y + 6, r.Width, 6); g.FillRectangle(bc, r.X, r.Y + 12, r.Width, 6); }
+            {
+                var third = r.Height / 3F;
+                g.FillRectangle(ba, r.X, r.Y, r.Width, third);
+                g.FillRectangle(bb, r.X, r.Y + third, r.Width, third);
+                g.FillRectangle(bc, r.X, r.Y + third * 2F, r.Width, r.Height - third * 2F);
+            }
         }
 
         private static void DrawVerticalTricolor(Graphics g, Rectangle r, Color a, Color b, Color c)
         {
             using (var ba = new SolidBrush(a)) using (var bb = new SolidBrush(b)) using (var bc = new SolidBrush(c))
-            { g.FillRectangle(ba, r.X, r.Y, 9, r.Height); g.FillRectangle(bb, r.X + 9, r.Y, 8, r.Height); g.FillRectangle(bc, r.X + 17, r.Y, 9, r.Height); }
+            {
+                var third = r.Width / 3F;
+                g.FillRectangle(ba, r.X, r.Y, third, r.Height);
+                g.FillRectangle(bb, r.X + third, r.Y, third, r.Height);
+                g.FillRectangle(bc, r.X + third * 2F, r.Y, r.Width - third * 2F, r.Height);
+            }
         }
 
         private static void DrawChina(Graphics g, Rectangle r)
         {
-            using (var red = new SolidBrush(Color.FromArgb(222, 41, 16))) g.FillRectangle(red, r);
-            using (var yellow = new SolidBrush(Color.FromArgb(255, 222, 0))) g.FillEllipse(yellow, r.X + 4, r.Y + 4, 5, 5);
+            using (var red = new SolidBrush(Color.FromArgb(238, 28, 37))) g.FillRectangle(red, r);
+            using (var yellow = new SolidBrush(Color.FromArgb(255, 222, 0)))
+            {
+                FillStar(g, yellow, r.X + 6F, r.Y + 5.2F, 3.4F, -90F);
+                FillStar(g, yellow, r.X + 12.2F, r.Y + 2.5F, 1.25F, -72F);
+                FillStar(g, yellow, r.X + 14.3F, r.Y + 5.2F, 1.25F, -90F);
+                FillStar(g, yellow, r.X + 13.7F, r.Y + 8.4F, 1.25F, -106F);
+                FillStar(g, yellow, r.X + 10.9F, r.Y + 10.6F, 1.25F, -124F);
+            }
         }
 
         private static void DrawHongKong(Graphics g, Rectangle r)
         {
             using (var red = new SolidBrush(Color.FromArgb(222, 41, 16))) g.FillRectangle(red, r);
+            var cx = r.X + r.Width / 2F;
+            var cy = r.Y + r.Height / 2F;
             using (var white = new SolidBrush(Color.White))
             {
-                var cx = r.X + r.Width / 2F;
-                var cy = r.Y + r.Height / 2F;
                 for (var i = 0; i < 5; i++)
                 {
-                    var angle = -Math.PI / 2 + i * Math.PI * 2 / 5;
-                    var px = cx + (float)Math.Cos(angle) * 3.2F;
-                    var py = cy + (float)Math.Sin(angle) * 3.2F;
-                    g.FillEllipse(white, px - 2.2F, py - 1.4F, 4.4F, 2.8F);
+                    var state = g.Save();
+                    g.TranslateTransform(cx, cy);
+                    g.RotateTransform(i * 72F);
+                    using (var petal = new GraphicsPath())
+                    {
+                        petal.StartFigure();
+                        petal.AddBezier(0F, 0F, -2.1F, -1.8F, -1.7F, -5.2F, 0F, -6F);
+                        petal.AddBezier(0F, -6F, 2.6F, -5.3F, 3.1F, -2F, 0F, 0F);
+                        g.FillPath(white, petal);
+                    }
+                    using (var dot = new SolidBrush(Color.FromArgb(222, 41, 16))) g.FillEllipse(dot, -0.45F, -4.5F, 0.9F, 0.9F);
+                    g.Restore(state);
                 }
             }
-            using (var red = new SolidBrush(Color.FromArgb(222, 41, 16))) g.FillEllipse(red, r.X + 11.5F, r.Y + 7.5F, 3F, 3F);
         }
 
         private static void DrawUnitedStates(Graphics g, Rectangle r)
         {
             using (var white = new SolidBrush(Color.White)) g.FillRectangle(white, r);
-            using (var red = new SolidBrush(Color.FromArgb(178, 34, 52))) for (var y = 0; y < 18; y += 4) g.FillRectangle(red, r.X, r.Y + y, r.Width, 2);
-            using (var blue = new SolidBrush(Color.FromArgb(60, 59, 110))) g.FillRectangle(blue, r.X, r.Y, 11, 9);
+            var stripe = r.Height / 13F;
+            using (var red = new SolidBrush(Color.FromArgb(178, 34, 52)))
+                for (var i = 0; i < 13; i += 2) g.FillRectangle(red, r.X, r.Y + stripe * i, r.Width, stripe);
+            var cantonWidth = r.Width * 0.42F;
+            var cantonHeight = stripe * 7F;
+            using (var blue = new SolidBrush(Color.FromArgb(60, 59, 110))) g.FillRectangle(blue, r.X, r.Y, cantonWidth, cantonHeight);
+            using (var stars = new SolidBrush(Color.White))
+                for (var row = 0; row < 4; row++)
+                    for (var column = 0; column < 5; column++)
+                        g.FillEllipse(stars, r.X + 1.2F + column * 2.2F + (row % 2) * 0.55F, r.Y + 0.7F + row * 2F, 0.75F, 0.75F);
         }
 
         private static void DrawJapan(Graphics g, Rectangle r)
         {
             using (var white = new SolidBrush(Color.White)) g.FillRectangle(white, r);
-            using (var red = new SolidBrush(Color.FromArgb(188, 0, 45))) g.FillEllipse(red, r.X + 9, r.Y + 5, 9, 9);
+            using (var red = new SolidBrush(Color.FromArgb(188, 0, 45)))
+                g.FillEllipse(red, r.X + r.Width / 2F - 4.5F, r.Y + r.Height / 2F - 4.5F, 9F, 9F);
         }
 
         private static void DrawKorea(Graphics g, Rectangle r)
         {
             using (var white = new SolidBrush(Color.White)) g.FillRectangle(white, r);
-            using (var red = new SolidBrush(Color.FromArgb(205, 46, 58))) g.FillPie(red, r.X + 9, r.Y + 5, 9, 9, 180, 180);
-            using (var blue = new SolidBrush(Color.FromArgb(0, 71, 160))) g.FillPie(blue, r.X + 9, r.Y + 5, 9, 9, 0, 180);
+            var cx = r.X + r.Width / 2F;
+            var cy = r.Y + r.Height / 2F;
+            var taegeuk = new RectangleF(cx - 4.5F, cy - 4.5F, 9F, 9F);
+            using (var red = new SolidBrush(Color.FromArgb(205, 46, 58))) g.FillEllipse(red, taegeuk);
+            using (var blue = new SolidBrush(Color.FromArgb(0, 71, 160)))
+            {
+                g.FillPie(blue, taegeuk.X, taegeuk.Y, taegeuk.Width, taegeuk.Height, 0, 180);
+                g.FillEllipse(blue, cx, cy - 2.25F, 4.5F, 4.5F);
+            }
+            using (var red = new SolidBrush(Color.FromArgb(205, 46, 58))) g.FillEllipse(red, cx - 4.5F, cy - 2.25F, 4.5F, 4.5F);
+            using (var black = new Pen(Color.Black, 1.15F))
+            {
+                DrawTrigram(g, black, r.X + 5.5F, r.Y + 4F, -34F, 0);
+                DrawTrigram(g, black, r.Right - 5.5F, r.Y + 4F, 34F, 1);
+                DrawTrigram(g, black, r.X + 5.5F, r.Bottom - 4F, 34F, 2);
+                DrawTrigram(g, black, r.Right - 5.5F, r.Bottom - 4F, -34F, 3);
+            }
         }
 
         private static void DrawSpain(Graphics g, Rectangle r)
         {
             using (var red = new SolidBrush(Color.FromArgb(170, 21, 27))) g.FillRectangle(red, r);
-            using (var yellow = new SolidBrush(Color.FromArgb(241, 191, 0))) g.FillRectangle(yellow, r.X, r.Y + 5, r.Width, 8);
+            using (var yellow = new SolidBrush(Color.FromArgb(241, 191, 0))) g.FillRectangle(yellow, r.X, r.Y + r.Height * 0.25F, r.Width, r.Height * 0.5F);
+            using (var crestRed = new SolidBrush(Color.FromArgb(170, 21, 27))) g.FillRectangle(crestRed, r.X + 7.2F, r.Y + 7F, 2.6F, 4F);
+            using (var crestBlue = new SolidBrush(Color.FromArgb(0, 60, 140))) g.FillRectangle(crestBlue, r.X + 8F, r.Y + 8F, 1F, 1.8F);
         }
 
         private static void DrawPortugal(Graphics g, Rectangle r)
         {
-            using (var green = new SolidBrush(Color.FromArgb(4, 106, 56))) g.FillRectangle(green, r.X, r.Y, 11, r.Height);
-            using (var red = new SolidBrush(Color.FromArgb(218, 41, 28))) g.FillRectangle(red, r.X + 11, r.Y, 15, r.Height);
-            using (var yellow = new SolidBrush(Color.FromArgb(255, 204, 0))) g.FillEllipse(yellow, r.X + 8, r.Y + 6, 6, 6);
+            var split = r.Width * 0.4F;
+            using (var green = new SolidBrush(Color.FromArgb(4, 106, 56))) g.FillRectangle(green, r.X, r.Y, split, r.Height);
+            using (var red = new SolidBrush(Color.FromArgb(218, 41, 28))) g.FillRectangle(red, r.X + split, r.Y, r.Width - split, r.Height);
+            var cx = r.X + split;
+            var cy = r.Y + r.Height / 2F;
+            using (var yellow = new Pen(Color.FromArgb(255, 204, 0), 1.2F))
+            {
+                g.DrawEllipse(yellow, cx - 3.7F, cy - 3.7F, 7.4F, 7.4F);
+                g.DrawLine(yellow, cx - 3.2F, cy, cx + 3.2F, cy);
+                g.DrawLine(yellow, cx, cy - 3.2F, cx, cy + 3.2F);
+            }
+            using (var white = new SolidBrush(Color.White)) g.FillRectangle(white, cx - 2.2F, cy - 2.8F, 4.4F, 5.2F);
+            using (var blue = new SolidBrush(Color.FromArgb(0, 77, 152))) g.FillEllipse(blue, cx - 1.1F, cy - 1F, 2.2F, 2.2F);
         }
 
         private static void DrawSaudiArabia(Graphics g, Rectangle r)
         {
             using (var green = new SolidBrush(Color.FromArgb(0, 108, 53))) g.FillRectangle(green, r);
-            using (var white = new Pen(Color.White, 2F)) g.DrawLine(white, r.X + 7, r.Y + 12, r.X + 20, r.Y + 12);
+            using (var white = new Pen(Color.White, 1.1F) { StartCap = LineCap.Round, EndCap = LineCap.Round })
+            {
+                // A compact calligraphic suggestion remains recognizable after
+                // Office scales the 32 px source down in the menu.
+                g.DrawLine(white, r.X + 7, r.Y + 5, r.X + 21, r.Y + 5);
+                g.DrawLine(white, r.X + 8, r.Y + 7, r.X + 20, r.Y + 7);
+                g.DrawLine(white, r.X + 9, r.Y + 9, r.X + 19, r.Y + 9);
+                g.DrawLine(white, r.X + 7, r.Y + 13, r.X + 21, r.Y + 13);
+                g.DrawLine(white, r.X + 20, r.Y + 12, r.X + 23, r.Y + 11.2F);
+            }
+        }
+
+        private static void FillStar(Graphics g, Brush brush, float centerX, float centerY, float outerRadius, float rotationDegrees)
+        {
+            var points = new PointF[10];
+            var innerRadius = outerRadius * 0.382F;
+            for (var i = 0; i < points.Length; i++)
+            {
+                var radius = i % 2 == 0 ? outerRadius : innerRadius;
+                var angle = (rotationDegrees + i * 36F) * Math.PI / 180D;
+                points[i] = new PointF(centerX + (float)Math.Cos(angle) * radius, centerY + (float)Math.Sin(angle) * radius);
+            }
+            g.FillPolygon(brush, points);
+        }
+
+        private static void DrawTrigram(Graphics g, Pen pen, float centerX, float centerY, float angle, int brokenRow)
+        {
+            var state = g.Save();
+            g.TranslateTransform(centerX, centerY);
+            g.RotateTransform(angle);
+            for (var row = 0; row < 3; row++)
+            {
+                var y = (row - 1) * 1.7F;
+                if (row == brokenRow % 3)
+                {
+                    g.DrawLine(pen, -3F, y, -0.6F, y);
+                    g.DrawLine(pen, 0.6F, y, 3F, y);
+                }
+                else g.DrawLine(pen, -3F, y, 3F, y);
+            }
+            g.Restore(state);
         }
 
         private static Bitmap Draw(string id)
