@@ -63,12 +63,13 @@ namespace OfficeTranslate.Core
             settings.Validate(); Configure(settings);
             var base64 = Convert.ToBase64String(imageBytes);
             var model = string.IsNullOrWhiteSpace(settings.ImageModel) ? settings.Model : settings.ImageModel;
-            var imageSource = string.IsNullOrWhiteSpace(settings.SourceLanguage) || settings.SourceLanguage == "自动检测"
-                ? "自动识别文字语言"
-                : "图片文字是" + settings.SourceLanguage;
+            var automaticImageSource = SourceLanguageProtector.IsAutomatic(settings.SourceLanguage);
+            var imageSource = automaticImageSource
+                ? "自动识别文字语言，并将所有识别出的语言翻译成目标语言"
+                : "图片可能包含多种语言。只翻译其中属于" + settings.SourceLanguage + "的文字；其他语言必须在 translation 字段中逐字原样保留，不得翻译、改写、调整大小写或删除";
             var imageGlossary = string.IsNullOrWhiteSpace(settings.Glossary) ? "" : " 必须遵循术语表：" + settings.Glossary;
             var prompt = "图片本身就是本次需要处理的内容，请立即同时完成 OCR 和翻译，不要要求用户再发送文字。" +
-                imageSource + "，将图片中的所有可见文字翻译成" + settings.TargetLanguage + "。" +
+                imageSource + "，目标语言是" + settings.TargetLanguage + "。对于混合语言区域，只替换属于指定源语言的部分。" +
                 "每个文字区域必须同时填写 source 原文和 translation 译文，translation 不得留空。" +
                 "只返回严格 JSON，不要 Markdown：{\"regions\":[{\"bbox\":[x1,y1,x2,y2],\"source\":\"原文\",\"translation\":\"译文\"}]}。" +
                 "坐标必须是相对于图片宽高的 0 到 1000 整数；按阅读顺序返回；没有文字时返回 {\"regions\":[]}。" +
@@ -136,9 +137,10 @@ namespace OfficeTranslate.Core
                 ? settings.BaseUrl.TrimEnd('/') + "/api/chat"
                 : settings.BaseUrl.TrimEnd('/') + "/chat/completions";
             var prompt = BuildPrompt(settings);
+            var protectedText = SourceLanguageProtector.Protect(text, settings.SourceLanguage);
             object body = settings.Provider == ProviderKind.Ollama
-                ? new { model = settings.Model, stream = false, messages = Messages(prompt, text) }
-                : new { model = settings.Model, temperature = 0.2, messages = Messages(prompt, text) };
+                ? new { model = settings.Model, stream = false, messages = Messages(prompt, protectedText.Text) }
+                : new { model = settings.Model, temperature = 0.2, messages = Messages(prompt, protectedText.Text) };
             using (var request = new HttpRequestMessage(HttpMethod.Post, endpoint))
             {
                 request.Content = new StringContent(_json.Serialize(body), Encoding.UTF8, "application/json");
@@ -148,7 +150,8 @@ namespace OfficeTranslate.Core
                     var raw = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
                     if (!response.IsSuccessStatusCode) throw new InvalidOperationException($"翻译服务返回 {(int)response.StatusCode}: {raw}");
                     var root = _json.DeserializeObject(raw) as Dictionary<string, object>;
-                    return settings.Provider == ProviderKind.Ollama ? ReadOllama(root) : ReadOpenAi(root);
+                    var translated = settings.Provider == ProviderKind.Ollama ? ReadOllama(root) : ReadOpenAi(root);
+                    return protectedText.Restore(translated);
                 }
             }
         }
@@ -160,10 +163,13 @@ namespace OfficeTranslate.Core
         private static string BuildPrompt(TranslationSettings s)
         {
             var glossary = string.IsNullOrWhiteSpace(s.Glossary) ? "" : "\n必须遵循以下术语表（每行 source=target）：\n" + s.Glossary;
-            var source = string.IsNullOrWhiteSpace(s.SourceLanguage) || s.SourceLanguage == "自动检测"
-                ? "自动识别输入的源语言"
-                : $"输入语言是{s.SourceLanguage}";
-            return $"你是专业翻译。{source}，将输入完整翻译成{s.TargetLanguage}。只输出译文，不解释，不添加标题；保留换行、编号和占位符。{s.CustomInstructions}{glossary}";
+            if (SourceLanguageProtector.IsAutomatic(s.SourceLanguage))
+                return $"你是专业翻译。自动识别输入的源语言，将输入完整翻译成{s.TargetLanguage}。只输出译文，不解释，不添加标题；保留换行、编号和占位符。{s.CustomInstructions}{glossary}";
+
+            return $"你是专业翻译。输入可能包含多种语言，只翻译其中属于{s.SourceLanguage}的文本片段，将其翻译成{s.TargetLanguage}。" +
+                "所有非源语言内容必须逐字原样保留，包括其他语言的单词和句子、产品名称、型号、缩写、网址、邮箱、代码及大小写；不得翻译、改写、解释、移动或删除。" +
+                "形如 ⟦OT_KEEP_0001⟧ 的保护占位符必须完整、原样、按原位置输出，绝对不能修改。" +
+                $"只输出处理后的完整文本，不解释，不添加标题；保留换行和编号。{s.CustomInstructions}{glossary}";
         }
 
         private static string ReadOllama(Dictionary<string, object>? root)
