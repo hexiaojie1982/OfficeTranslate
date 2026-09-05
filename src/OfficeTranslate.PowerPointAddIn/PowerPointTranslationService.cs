@@ -56,18 +56,19 @@ namespace OfficeTranslate.PowerPointAddIn
                 {
                     var left = image.Left + image.Width * region.X1 / 1000F;
                     var top = image.Top + image.Height * region.Y1 / 1000F;
-                    var width = Math.Max(12F, image.Width * (region.X2 - region.X1) / 1000F);
-                    var height = Math.Max(10F, image.Height * (region.Y2 - region.Y1) / 1000F);
-                    var overlay = slide.Shapes.AddTextbox(Office.MsoTextOrientation.msoTextOrientationHorizontal, left, top, width, height);
+                    var width = Math.Max(24F, image.Width * (region.X2 - region.X1) / 1000F);
+                    var originalHeight = Math.Max(10F, image.Height * (region.Y2 - region.Y1) / 1000F);
+                    var overlayText = settings.BilingualMode && !string.IsNullOrWhiteSpace(region.Source)
+                        ? region.Source + "\r" + region.Translation
+                        : region.Translation;
+                    var layout = ImageOverlayLayout.Calculate(width, originalHeight, overlayText);
+                    var overlay = slide.Shapes.AddTextbox(Office.MsoTextOrientation.msoTextOrientationHorizontal, left, top, width, layout.Height);
                     overlay.Tags.Add("OfficeTranslateOCR", "1");
                     overlay.Fill.Visible = Office.MsoTriState.msoTrue; overlay.Fill.ForeColor.RGB = 0xFFFFFF; overlay.Fill.Transparency = 0.08F;
                     overlay.Line.Visible = Office.MsoTriState.msoFalse;
                     overlay.TextFrame2.MarginLeft = 2; overlay.TextFrame2.MarginRight = 2; overlay.TextFrame2.MarginTop = 1; overlay.TextFrame2.MarginBottom = 1;
-                    overlay.TextFrame2.AutoSize = Office.MsoAutoSize.msoAutoSizeTextToFitShape;
-                    overlay.TextFrame2.TextRange.Text = settings.BilingualMode && !string.IsNullOrWhiteSpace(region.Source)
-                        ? region.Source + "\r" + region.Translation
-                        : region.Translation;
-                    overlay.TextFrame2.TextRange.Font.Size = Math.Max(8F, Math.Min(24F, height * 0.55F));
+                    overlay.TextFrame2.TextRange.Text = overlayText;
+                    overlay.TextFrame2.TextRange.Font.Size = layout.FontSize;
                 }
             }
             finally { try { if (File.Exists(path)) File.Delete(path); } catch { } }
