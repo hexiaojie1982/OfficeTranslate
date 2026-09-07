@@ -138,6 +138,7 @@ namespace OfficeTranslate.Core
                 : settings.BaseUrl.TrimEnd('/') + "/chat/completions";
             var prompt = BuildPrompt(settings);
             var protectedText = SourceLanguageProtector.Protect(text, settings.SourceLanguage);
+            if (protectedText.IsFullyProtected) return text;
             object body = settings.Provider == ProviderKind.Ollama
                 ? new { model = settings.Model, stream = false, messages = Messages(prompt, protectedText.Text) }
                 : new { model = settings.Model, temperature = 0.2, messages = Messages(prompt, protectedText.Text) };

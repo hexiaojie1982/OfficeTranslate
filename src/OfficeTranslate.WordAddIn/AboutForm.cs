@@ -5,7 +5,7 @@ namespace OfficeTranslate.WordAddIn
 {
     internal sealed class AboutForm : Form
     {
-        public const string CurrentVersion = "2.1.9";
+        public const string CurrentVersion = "2.1.10";
         private readonly string _language;
         private readonly TextBox _content = new TextBox();
 
@@ -55,6 +55,11 @@ namespace OfficeTranslate.WordAddIn
         }
 
         private string ChangelogText()
+        {
+            return "OfficeTranslate 2.1.10\r\n• 修复韩英混合文本中句首或句尾英文保护标记被模型省略时翻译失败的问题。\r\n• 增强残缺、全角及含零宽字符的保护标记恢复，防止 OT_KEEP 内部标记残留在译文中。\r\n• 整段均为非源语言时直接保留原文，不再发送翻译请求。\r\n\r\n" + ChangelogHistoryText();
+        }
+
+        private string ChangelogHistoryText()
         {
             return "OfficeTranslate 2.1.9\r\n• 明确选择源语言时，仅翻译该语言片段，其他语言内容保持原样。\r\n• 新增非源语言占位符保护与完整性校验，防止英文、型号、网址、邮箱和代码被误译。\r\n• 图片 OCR 同步采用选择性翻译规则；自动检测继续使用整段翻译。\r\n\r\n2.1.8\r\n• 图片译文框根据文字长度、宽度和双语行数自动增加高度，改善文字显示不全的问题。\r\n• 重绘语言菜单国旗图标，增强五星、紫荆花、星条、太极与国徽等辨识细节。\r\n\r\n2.1.7\r\n• 新增基于本地视觉模型的图片 OCR 翻译。\r\n• Word、Excel、PowerPoint 均支持图片选区与全文处理。\r\n• 译文以可编辑文本框覆盖原文字区域，并支持图片双语显示。\r\n• 新增独立图片模型设置和会话级图片开关。\r\n\r\n2.1.6\r\n• Excel 支持仅翻译组合流程图中选中的子图形。\r\n• 修复关闭翻译错误提示后 Excel 工作簿被最小化的问题。\r\n\r\n2.1.5\r\n• PowerPoint 表格支持仅翻译选中的单元格，选中整个表格时仍翻译全表。\r\n• Excel 支持翻译文本框、流程图及组合图形中的可编辑文字。\r\n\r\n2.1.4\r\n• 统一三个 Office 应用的翻译进度窗口，支持独立取消并保留已译内容。\r\n• 修复 Word 与 PowerPoint 表格翻译兼容问题。\r\n• 为不同服务类型分别保存连接配置。\r\n• 语言与双语模式改为会话设置，不再写入配置文件。\r\n\r\n2.1.3\r\n• 新增翻译风格预设与可编辑 Prompt。\r\n• 优化安装界面、升级与同版本重装行为。\r\n\r\n2.1.2\r\n• 统一 Word、Excel、PowerPoint 关于窗口的按钮风格。\r\n• 修复打开窗口时正文被自动选中的问题。\r\n\r\n2.1.1\r\n• 修复设置窗口取消按钮被裁切的问题。\r\n\r\n2.1.0\r\n• 新增关于、更新日志和使用说明。\r\n\r\n2.0.0\r\n• 新增 Excel 与 PowerPoint 原生翻译加载项。\r\n• 三个 Office 应用共享设置和界面语言。\r\n\r\n1.5.x\r\n• 新增五种界面语言、语言旗帜及逐段实时写回。";
         }

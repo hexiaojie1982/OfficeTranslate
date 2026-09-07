@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Text;
+using System.Text.RegularExpressions;
 
 namespace OfficeTranslate.Core
 {
@@ -16,17 +17,69 @@ namespace OfficeTranslate.Core
 
         public string Text { get; }
         public bool HasProtectedSegments => _segments.Count > 0;
+        public bool IsFullyProtected => _segments.Count == 1 && Text == _segments[0].Key;
 
         public string Restore(string translatedText)
         {
             var restored = translatedText ?? string.Empty;
             foreach (var segment in _segments)
+                restored = NormalizeTokenVariant(restored, segment.Key);
+
+            EnsureNoUnknownTokenFragments(restored);
+
+            foreach (var segment in _segments)
             {
                 if (restored.IndexOf(segment.Key, StringComparison.Ordinal) < 0)
-                    throw new InvalidOperationException("翻译模型修改了受保护的非源语言内容，已停止写回。请重试或改用指令遵循能力更强的模型。");
+                {
+                    var atStart = Text.StartsWith(segment.Key, StringComparison.Ordinal);
+                    var atEnd = Text.EndsWith(segment.Key, StringComparison.Ordinal);
+                    if (atStart && atEnd) return segment.Value;
+                    if (atStart) restored = segment.Value + restored;
+                    else if (atEnd) restored += segment.Value;
+                    else throw new InvalidOperationException("翻译模型修改了受保护的非源语言内容，已停止写回。请重试或改用指令遵循能力更强的模型。");
+                    continue;
+                }
                 restored = restored.Replace(segment.Key, segment.Value);
             }
             return restored;
+        }
+
+        private static string NormalizeTokenVariant(string text, string canonicalToken)
+        {
+            var numberMatch = Regex.Match(canonicalToken, @"\d+");
+            if (!numberMatch.Success) return text;
+            var sequence = int.Parse(numberMatch.Value);
+            var separator = @"[\s_\-:：.．＿－\u200B-\u200D\uFEFF]*";
+            var pattern = @"[\p{Ps}\p{Pi}<＜]*\s*[OＯ]" + separator + @"[TＴ]" + separator +
+                @"[KＫ]" + separator + @"[EＥ]" + separator + @"[EＥ]" + separator + @"[PＰ]" +
+                separator + @"[0０]*" + BuildDigitPattern(sequence) + @"\s*[\p{Pe}\p{Pf}>＞]*";
+            return Regex.Replace(text, pattern, canonicalToken, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        }
+
+        private static string BuildDigitPattern(int value)
+        {
+            var result = new StringBuilder();
+            foreach (var digit in value.ToString())
+                result.Append('[').Append(digit).Append((char)('０' + digit - '0')).Append(']');
+            return result.ToString();
+        }
+
+        private void EnsureNoUnknownTokenFragments(string text)
+        {
+            if (_segments.Count == 0) return;
+
+            var withoutKnownTokens = text;
+            foreach (var segment in _segments)
+                withoutKnownTokens = withoutKnownTokens.Replace(segment.Key, string.Empty);
+
+            var separator = @"[\s_\-:：.．＿－\u200B-\u200D\uFEFF]*";
+            var markerName = @"[OＯ]" + separator + @"[TＴ]" + separator +
+                @"[KＫ]" + separator + @"[EＥ]" + separator + @"[EＥ]" + separator + @"[PＰ]";
+            var bracketedFragment = @"[\p{Ps}\p{Pi}<＜]\s*" + markerName;
+            var numberedFragment = markerName + separator + @"\d+";
+            if (Regex.IsMatch(withoutKnownTokens, bracketedFragment + "|" + numberedFragment,
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+                throw new InvalidOperationException("翻译模型返回了无法识别的保护标记，已停止写回。请重试或改用指令遵循能力更强的模型。");
         }
     }
 
