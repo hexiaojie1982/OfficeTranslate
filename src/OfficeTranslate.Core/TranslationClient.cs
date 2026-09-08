@@ -133,15 +133,60 @@ namespace OfficeTranslate.Core
 
         private async Task<string> TranslateChunkAsync(string text, TranslationSettings settings, CancellationToken token)
         {
-            var endpoint = settings.Provider == ProviderKind.Ollama
-                ? settings.BaseUrl.TrimEnd('/') + "/api/chat"
-                : settings.BaseUrl.TrimEnd('/') + "/chat/completions";
             var prompt = BuildPrompt(settings);
             var protectedText = SourceLanguageProtector.Protect(text, settings.SourceLanguage);
             if (protectedText.IsFullyProtected) return text;
+            var translated = await SendTranslationRequestAsync(protectedText.Text, prompt, settings, token).ConfigureAwait(false);
+            try
+            {
+                return protectedText.Restore(translated);
+            }
+            catch (ProtectedContentException)
+            {
+                return await TranslateProtectedPartsAsync(protectedText, settings, token).ConfigureAwait(false);
+            }
+        }
+
+        private async Task<string> TranslateProtectedPartsAsync(ProtectedTranslationText protectedText, TranslationSettings settings, CancellationToken token)
+        {
+            var output = new StringBuilder();
+            var prompt = BuildSourcePartPrompt(settings);
+            foreach (var part in protectedText.GetParts())
+            {
+                token.ThrowIfCancellationRequested();
+                if (!part.ShouldTranslate || !part.Text.Any(char.IsLetter))
+                {
+                    output.Append(part.Text);
+                    continue;
+                }
+
+                var start = 0;
+                while (start < part.Text.Length && char.IsWhiteSpace(part.Text[start])) start++;
+                var end = part.Text.Length;
+                while (end > start && char.IsWhiteSpace(part.Text[end - 1])) end--;
+                if (start == end)
+                {
+                    output.Append(part.Text);
+                    continue;
+                }
+
+                output.Append(part.Text.Substring(0, start));
+                var source = part.Text.Substring(start, end - start);
+                var translated = await SendTranslationRequestAsync(source, prompt, settings, token).ConfigureAwait(false);
+                output.Append(translated.Trim());
+                output.Append(part.Text.Substring(end));
+            }
+            return output.ToString();
+        }
+
+        private async Task<string> SendTranslationRequestAsync(string text, string prompt, TranslationSettings settings, CancellationToken token)
+        {
+            var endpoint = settings.Provider == ProviderKind.Ollama
+                ? settings.BaseUrl.TrimEnd('/') + "/api/chat"
+                : settings.BaseUrl.TrimEnd('/') + "/chat/completions";
             object body = settings.Provider == ProviderKind.Ollama
-                ? new { model = settings.Model, stream = false, messages = Messages(prompt, protectedText.Text) }
-                : new { model = settings.Model, temperature = 0.2, messages = Messages(prompt, protectedText.Text) };
+                ? new { model = settings.Model, stream = false, messages = Messages(prompt, text) }
+                : new { model = settings.Model, temperature = 0.2, messages = Messages(prompt, text) };
             using (var request = new HttpRequestMessage(HttpMethod.Post, endpoint))
             {
                 request.Content = new StringContent(_json.Serialize(body), Encoding.UTF8, "application/json");
@@ -151,8 +196,7 @@ namespace OfficeTranslate.Core
                     var raw = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
                     if (!response.IsSuccessStatusCode) throw new InvalidOperationException($"翻译服务返回 {(int)response.StatusCode}: {raw}");
                     var root = _json.DeserializeObject(raw) as Dictionary<string, object>;
-                    var translated = settings.Provider == ProviderKind.Ollama ? ReadOllama(root) : ReadOpenAi(root);
-                    return protectedText.Restore(translated);
+                    return settings.Provider == ProviderKind.Ollama ? ReadOllama(root) : ReadOpenAi(root);
                 }
             }
         }
@@ -171,6 +215,13 @@ namespace OfficeTranslate.Core
                 "所有非源语言内容必须逐字原样保留，包括其他语言的单词和句子、产品名称、型号、缩写、网址、邮箱、代码及大小写；不得翻译、改写、解释、移动或删除。" +
                 "形如 ⟦OT_KEEP_0001⟧ 的保护占位符必须完整、原样、按原位置输出，绝对不能修改。" +
                 $"只输出处理后的完整文本，不解释，不添加标题；保留换行和编号。{s.CustomInstructions}{glossary}";
+        }
+
+        private static string BuildSourcePartPrompt(TranslationSettings s)
+        {
+            var glossary = string.IsNullOrWhiteSpace(s.Glossary) ? "" : "\n必须遵循以下术语表（每行 source=target）：\n" + s.Glossary;
+            return $"你是专业翻译。当前输入只包含需要翻译的{s.SourceLanguage}文本片段，请将其翻译成{s.TargetLanguage}。" +
+                $"只输出译文，不解释，不添加标题或原文，不得输出 OT_KEEP 等内部标记。{s.CustomInstructions}{glossary}";
         }
 
         private static string ReadOllama(Dictionary<string, object>? root)

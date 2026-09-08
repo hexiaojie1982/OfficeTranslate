@@ -5,7 +5,7 @@ namespace OfficeTranslate.WordAddIn
 {
     internal sealed class AboutForm : Form
     {
-        public const string CurrentVersion = "2.1.10";
+        public const string CurrentVersion = "2.1.11";
         private readonly string _language;
         private readonly TextBox _content = new TextBox();
 
@@ -55,6 +55,11 @@ namespace OfficeTranslate.WordAddIn
         }
 
         private string ChangelogText()
+        {
+            return "OfficeTranslate 2.1.11\r\n• 保护校验失败时自动切换为源语言分片翻译，并由程序按原位置恢复英文、缩写和型号。\r\n• 避免指令遵循能力较弱的模型丢失中间保护标记而导致整段翻译失败。\r\n• 分片降级翻译支持取消操作，并保留非源语言内容和原始空白。\r\n\r\n" + ChangelogVersion210Text();
+        }
+
+        private string ChangelogVersion210Text()
         {
             return "OfficeTranslate 2.1.10\r\n• 修复韩英混合文本中句首或句尾英文保护标记被模型省略时翻译失败的问题。\r\n• 增强残缺、全角及含零宽字符的保护标记恢复，防止 OT_KEEP 内部标记残留在译文中。\r\n• 整段均为非源语言时直接保留原文，不再发送翻译请求。\r\n\r\n" + ChangelogHistoryText();
         }
