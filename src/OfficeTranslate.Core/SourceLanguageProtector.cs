@@ -5,6 +5,23 @@ using System.Text.RegularExpressions;
 
 namespace OfficeTranslate.Core
 {
+    internal sealed class ProtectedContentException : InvalidOperationException
+    {
+        public ProtectedContentException(string message) : base(message) { }
+    }
+
+    internal sealed class ProtectedTranslationPart
+    {
+        public ProtectedTranslationPart(string text, bool shouldTranslate)
+        {
+            Text = text;
+            ShouldTranslate = shouldTranslate;
+        }
+
+        public string Text { get; }
+        public bool ShouldTranslate { get; }
+    }
+
     public sealed class ProtectedTranslationText
     {
         private readonly IReadOnlyList<KeyValuePair<string, string>> _segments;
@@ -18,6 +35,25 @@ namespace OfficeTranslate.Core
         public string Text { get; }
         public bool HasProtectedSegments => _segments.Count > 0;
         public bool IsFullyProtected => _segments.Count == 1 && Text == _segments[0].Key;
+
+        internal IReadOnlyList<ProtectedTranslationPart> GetParts()
+        {
+            var parts = new List<ProtectedTranslationPart>();
+            var position = 0;
+            foreach (var segment in _segments)
+            {
+                var tokenPosition = Text.IndexOf(segment.Key, position, StringComparison.Ordinal);
+                if (tokenPosition < 0)
+                    throw new ProtectedContentException("无法重建受保护的混合语言文本。");
+                if (tokenPosition > position)
+                    parts.Add(new ProtectedTranslationPart(Text.Substring(position, tokenPosition - position), true));
+                parts.Add(new ProtectedTranslationPart(segment.Value, false));
+                position = tokenPosition + segment.Key.Length;
+            }
+            if (position < Text.Length)
+                parts.Add(new ProtectedTranslationPart(Text.Substring(position), true));
+            return parts;
+        }
 
         public string Restore(string translatedText)
         {
@@ -36,7 +72,7 @@ namespace OfficeTranslate.Core
                     if (atStart && atEnd) return segment.Value;
                     if (atStart) restored = segment.Value + restored;
                     else if (atEnd) restored += segment.Value;
-                    else throw new InvalidOperationException("翻译模型修改了受保护的非源语言内容，已停止写回。请重试或改用指令遵循能力更强的模型。");
+                    else throw new ProtectedContentException("翻译模型修改了受保护的非源语言内容。");
                     continue;
                 }
                 restored = restored.Replace(segment.Key, segment.Value);
@@ -79,7 +115,7 @@ namespace OfficeTranslate.Core
             var numberedFragment = markerName + separator + @"\d+";
             if (Regex.IsMatch(withoutKnownTokens, bracketedFragment + "|" + numberedFragment,
                 RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
-                throw new InvalidOperationException("翻译模型返回了无法识别的保护标记，已停止写回。请重试或改用指令遵循能力更强的模型。");
+                throw new ProtectedContentException("翻译模型返回了无法识别的保护标记。");
         }
     }
 
