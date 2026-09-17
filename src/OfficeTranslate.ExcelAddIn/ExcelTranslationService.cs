@@ -18,7 +18,7 @@ namespace OfficeTranslate.ExcelAddIn
         private readonly Excel.Application _excel;
         public ExcelTranslationService(Excel.Application excel) => _excel = excel;
 
-        public async Task TranslateAsync(bool wholeSheet, TranslationSettings settings, CancellationToken token, Action<string> progress)
+        public async Task<TranslationTaskSummary> TranslateAsync(bool wholeSheet, TranslationSettings settings, CancellationToken token, Action<string> progress)
         {
             var sheet = _excel.ActiveSheet as Excel.Worksheet ?? throw new InvalidOperationException("请先打开工作表。");
             var targets = wholeSheet ? ReadSheetTargets(sheet) : ReadSelectionTargets();
@@ -28,13 +28,19 @@ namespace OfficeTranslate.ExcelAddIn
             using (var client = new TranslationClient())
             {
                 var total = targets.Count + images.Count;
+                var summary = new TranslationTaskSummary(total);
                 for (var i = 0; i < targets.Count; i++)
                 {
                     token.ThrowIfCancellationRequested();
                     progress($"OfficeTranslate：正在翻译 {i + 1}/{total}");
-                    var translated = (await client.TranslateAsync(targets[i].Text, settings, token)).TrimEnd('\r', '\n');
+                    var result = await client.TranslateDetailedAsync(targets[i].Text, settings, token);
+                    summary.Record(result);
                     token.ThrowIfCancellationRequested();
-                    targets[i].Write(settings.BilingualMode ? targets[i].Text + Environment.NewLine + translated : translated, settings.BilingualMode);
+                    if (result.Changed)
+                    {
+                        var translated = result.Text.TrimEnd('\r', '\n');
+                        targets[i].Write(settings.BilingualMode ? targets[i].Text + Environment.NewLine + translated : translated, settings.BilingualMode);
+                    }
                     progress($"OfficeTranslate：已完成 {i + 1}/{total}");
                 }
                 for (var i = 0; i < images.Count; i++)
@@ -42,13 +48,14 @@ namespace OfficeTranslate.ExcelAddIn
                     token.ThrowIfCancellationRequested();
                     var current = targets.Count + i + 1;
                     progress($"OfficeTranslate：正在识别图片 {current}/{total}");
-                    await TranslateImageAsync(images[i], client, settings, token);
+                    summary.RecordImage(await TranslateImageAsync(images[i], client, settings, token));
                     progress($"OfficeTranslate：已完成 {current}/{total}");
                 }
+                return summary;
             }
         }
 
-        private async Task TranslateImageAsync(Excel.Shape image, TranslationClient client, TranslationSettings settings, CancellationToken token)
+        private async Task<bool> TranslateImageAsync(Excel.Shape image, TranslationClient client, TranslationSettings settings, CancellationToken token)
         {
             var sheet = _excel.ActiveSheet as Excel.Worksheet ?? throw new InvalidOperationException("无法确定图片所在的工作表。");
             byte[] imageBytes;
@@ -100,6 +107,7 @@ namespace OfficeTranslate.ExcelAddIn
                     throw new InvalidOperationException("Excel 已完成图片识别，但创建译文覆盖框失败：" + ex.Message, ex);
                 }
             }
+            return regions.Count > 0;
         }
 
         private List<Excel.Shape> ReadSelectionImages()

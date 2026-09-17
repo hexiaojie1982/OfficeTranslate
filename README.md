@@ -21,6 +21,9 @@
 - 目标语言、提示词、术语表、分块大小配置。
 - API Key 使用当前 Windows 用户的 DPAPI 加密。
 - 三个 Office 应用统一使用独立进度窗口；取消当前任务时保留已完成的翻译，不影响其他文档的翻译任务。
+- 翻译结果会进行非空与原样返回校验；必要时自动严格重试，任务结束后显示已翻译、缓存命中、跳过、需要检查和 OCR 未识别摘要。
+- 当前 Office 进程内缓存最多 2000 条有效译文；缓存键包含服务、模型、语言、Prompt、术语表和原文，关闭 Office 后自动清空。
+- OpenAI-compatible 服务自动尝试稳定的 `prompt_cache_key`，不支持时自动回退；所有文本请求保持稳定 System Prompt 前缀，便于服务端复用 KV Cache。
 
 ## 构建环境
 
@@ -60,6 +63,7 @@ msiexec /x OfficeTranslate.Office.x64.msi /qn /l*v uninstall.log
 - MSI 应使用组织信任的代码签名证书签名，再通过 Intune、Configuration Manager 或组策略分发。
 - 可通过防火墙仅允许 `WINWORD.EXE` 访问批准的模型地址。
 - 使用 Ollama 时，模型服务应由 IT 统一安装、配置和更新。
+- 使用 vLLM 时，应在服务端启用 Automatic Prefix Caching，例如启动参数加入 `--enable-prefix-caching`；客户端无法替代服务端开启该功能。
 - 若 Word 将加载项放入“禁用项目”，请先检查事件日志和安装日志，不建议通过策略强制忽略崩溃。
 
 ## 当前边界

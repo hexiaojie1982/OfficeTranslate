@@ -5,7 +5,7 @@ namespace OfficeTranslate.WordAddIn
 {
     internal sealed class AboutForm : Form
     {
-        public const string CurrentVersion = "2.1.11";
+        public const string CurrentVersion = "2.1.12";
         private readonly string _language;
         private readonly TextBox _content = new TextBox();
 
@@ -55,6 +55,11 @@ namespace OfficeTranslate.WordAddIn
         }
 
         private string ChangelogText()
+        {
+            return "OfficeTranslate 2.1.12\r\n• 新增翻译结果校验：空译文或未变化结果会自动严格重试，仍无有效结果时保留原文并提示检查。\r\n• 新增翻译任务摘要，显示成功翻译、会话缓存命中、跳过、需检查及 OCR 无文本数量。\r\n• 新增 Office 进程内的会话级翻译结果缓存，相同内容和配置可直接复用译文。\r\n• 稳定模型请求的提示词前缀，并为兼容服务提供前缀缓存键及自动降级。\r\n\r\n" + ChangelogVersion211Text();
+        }
+
+        private string ChangelogVersion211Text()
         {
             return "OfficeTranslate 2.1.11\r\n• 保护校验失败时自动切换为源语言分片翻译，并由程序按原位置恢复英文、缩写和型号。\r\n• 避免指令遵循能力较弱的模型丢失中间保护标记而导致整段翻译失败。\r\n• 分片降级翻译支持取消操作，并保留非源语言内容和原始空白。\r\n\r\n" + ChangelogVersion210Text();
         }

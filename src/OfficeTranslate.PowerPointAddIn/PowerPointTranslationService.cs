@@ -15,7 +15,7 @@ namespace OfficeTranslate.PowerPointAddIn
         private readonly PowerPoint.Application _powerPoint;
         public PowerPointTranslationService(PowerPoint.Application powerPoint) => _powerPoint = powerPoint;
 
-        public async Task TranslateAsync(bool wholePresentation, TranslationSettings settings, CancellationToken token, Action<string> progress)
+        public async Task<TranslationTaskSummary> TranslateAsync(bool wholePresentation, TranslationSettings settings, CancellationToken token, Action<string> progress)
         {
             if (_powerPoint.Presentations.Count == 0) throw new InvalidOperationException("请先打开演示文稿。");
             var targets = wholePresentation ? ReadPresentation() : ReadSelection();
@@ -24,13 +24,19 @@ namespace OfficeTranslate.PowerPointAddIn
             using (var client = new TranslationClient())
             {
                 var total = targets.Count + images.Count;
+                var summary = new TranslationTaskSummary(total);
                 for (var i = 0; i < targets.Count; i++)
                 {
                     token.ThrowIfCancellationRequested();
                     progress($"OfficeTranslate：正在翻译 {i + 1}/{total}");
-                    var translated = (await client.TranslateAsync(targets[i].Text, settings, token)).TrimEnd('\r', '\n');
+                    var result = await client.TranslateDetailedAsync(targets[i].Text, settings, token);
+                    summary.Record(result);
                     token.ThrowIfCancellationRequested();
-                    targets[i].Write(settings.BilingualMode ? targets[i].Text + "\r" + translated : translated);
+                    if (result.Changed)
+                    {
+                        var translated = result.Text.TrimEnd('\r', '\n');
+                        targets[i].Write(settings.BilingualMode ? targets[i].Text + "\r" + translated : translated);
+                    }
                     progress($"OfficeTranslate：已完成 {i + 1}/{total}");
                 }
                 for (var i = 0; i < images.Count; i++)
@@ -38,19 +44,22 @@ namespace OfficeTranslate.PowerPointAddIn
                     token.ThrowIfCancellationRequested();
                     var current = targets.Count + i + 1;
                     progress($"OfficeTranslate：正在识别图片 {current}/{total}");
-                    await TranslateImageAsync(images[i], client, settings, token);
+                    summary.RecordImage(await TranslateImageAsync(images[i], client, settings, token));
                     progress($"OfficeTranslate：已完成 {current}/{total}");
                 }
+                return summary;
             }
         }
 
-        private async Task TranslateImageAsync(PowerPoint.Shape image, TranslationClient client, TranslationSettings settings, CancellationToken token)
+        private async Task<bool> TranslateImageAsync(PowerPoint.Shape image, TranslationClient client, TranslationSettings settings, CancellationToken token)
         {
             var path = Path.Combine(Path.GetTempPath(), "OfficeTranslate-" + Guid.NewGuid().ToString("N") + ".png");
+            var recognized = false;
             try
             {
                 image.Export(path, PowerPoint.PpShapeFormat.ppShapeFormatPNG);
                 var regions = await client.TranslateImageAsync(File.ReadAllBytes(path), settings, token);
+                recognized = regions.Count > 0;
                 var slide = image.Parent as PowerPoint.Slide ?? throw new InvalidOperationException("无法确定图片所在的幻灯片。");
                 foreach (var region in regions)
                 {
@@ -72,6 +81,7 @@ namespace OfficeTranslate.PowerPointAddIn
                 }
             }
             finally { try { if (File.Exists(path)) File.Delete(path); } catch { } }
+            return recognized;
         }
 
         private List<PowerPoint.Shape> ReadPresentationImages()

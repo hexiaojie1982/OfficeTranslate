@@ -1,7 +1,9 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.IO;
+using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
@@ -15,21 +17,51 @@ namespace OfficeTranslate.Core
     {
         private readonly HttpClient _http = new HttpClient();
         private readonly JavaScriptSerializer _json = new JavaScriptSerializer();
+        private static readonly ConcurrentDictionary<string, PromptDescriptor> PromptDescriptors =
+            new ConcurrentDictionary<string, PromptDescriptor>(StringComparer.Ordinal);
+        private static readonly ConcurrentDictionary<string, bool> PromptCacheKeySupport =
+            new ConcurrentDictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
         private bool _configured;
 
         public async Task<string> TranslateAsync(string text, TranslationSettings settings, CancellationToken cancellationToken)
         {
-            if (string.IsNullOrWhiteSpace(text)) return text;
+            return (await TranslateDetailedAsync(text, settings, cancellationToken).ConfigureAwait(false)).Text;
+        }
+
+        public async Task<TranslationResult> TranslateDetailedAsync(string text, TranslationSettings settings, CancellationToken cancellationToken)
+        {
+            if (string.IsNullOrWhiteSpace(text)) return TranslationResult.Skipped(text);
             settings.Validate();
             Configure(settings);
+            var cacheKey = TranslationSessionCache.CreateKey(settings, text);
+            if (TranslationSessionCache.TryGet(cacheKey, out var cached))
+                return TranslationResult.Cached(cached);
+
             var chunks = Split(text, settings.MaxCharactersPerChunk);
             var output = new StringBuilder();
+            var anyChanged = false;
+            var anyTranslated = false;
+            var anySkipped = false;
+            var needsReview = false;
             foreach (var chunk in chunks)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                output.Append(await TranslateChunkAsync(chunk, settings, cancellationToken).ConfigureAwait(false));
+                var result = await TranslateChunkAsync(chunk, settings, cancellationToken).ConfigureAwait(false);
+                output.Append(result.Text);
+                anyChanged |= result.Changed;
+                anyTranslated |= !result.SkippedNoSource;
+                anySkipped |= result.SkippedNoSource;
+                needsReview |= result.NeedsReview;
             }
-            return output.ToString();
+            var completed = output.ToString();
+            if (anyChanged && !needsReview)
+            {
+                TranslationSessionCache.Store(cacheKey, completed);
+                return TranslationResult.Translated(completed);
+            }
+            if (anyChanged) return TranslationResult.Translated(completed, true);
+            if (!anyTranslated && anySkipped) return TranslationResult.Skipped(text);
+            return TranslationResult.Unchanged(text);
         }
 
         public async Task<IReadOnlyList<string>> GetModelsAsync(TranslationSettings settings, CancellationToken cancellationToken)
@@ -131,29 +163,60 @@ namespace OfficeTranslate.Core
             _configured = true;
         }
 
-        private async Task<string> TranslateChunkAsync(string text, TranslationSettings settings, CancellationToken token)
+        private async Task<TranslationResult> TranslateChunkAsync(string text, TranslationSettings settings, CancellationToken token)
         {
-            var prompt = BuildPrompt(settings);
             var protectedText = SourceLanguageProtector.Protect(text, settings.SourceLanguage);
-            if (protectedText.IsFullyProtected) return text;
-            var translated = await SendTranslationRequestAsync(protectedText.Text, prompt, settings, token).ConfigureAwait(false);
+            if (protectedText.IsFullyProtected) return TranslationResult.Skipped(text);
+
+            var prompt = GetPromptDescriptor(settings, false, false);
+            string translated;
             try
             {
-                return protectedText.Restore(translated);
+                translated = await SendTranslationRequestAsync(protectedText.Text, prompt, settings, token).ConfigureAwait(false);
+                if (string.IsNullOrWhiteSpace(translated))
+                    return protectedText.HasProtectedSegments
+                        ? await TranslateProtectedPartsAsync(protectedText, settings, token).ConfigureAwait(false)
+                        : await RetryUnchangedChunkAsync(text, protectedText, settings, token).ConfigureAwait(false);
+                translated = protectedText.Restore(translated);
             }
             catch (ProtectedContentException)
             {
                 return await TranslateProtectedPartsAsync(protectedText, settings, token).ConfigureAwait(false);
             }
+
+            if (!Equivalent(text, translated)) return TranslationResult.Translated(translated);
+            if (protectedText.HasProtectedSegments)
+                return await TranslateProtectedPartsAsync(protectedText, settings, token).ConfigureAwait(false);
+            return await RetryUnchangedChunkAsync(text, protectedText, settings, token).ConfigureAwait(false);
         }
 
-        private async Task<string> TranslateProtectedPartsAsync(ProtectedTranslationText protectedText, TranslationSettings settings, CancellationToken token)
+        private async Task<TranslationResult> RetryUnchangedChunkAsync(string original, ProtectedTranslationText protectedText, TranslationSettings settings, CancellationToken token)
+        {
+            var strictPrompt = GetPromptDescriptor(settings, false, true);
+            var retried = await SendTranslationRequestAsync(protectedText.Text, strictPrompt, settings, token).ConfigureAwait(false);
+            if (string.IsNullOrWhiteSpace(retried))
+                throw new InvalidOperationException("翻译模型连续返回空内容，已停止写回。");
+            try { retried = protectedText.Restore(retried); }
+            catch (ProtectedContentException)
+            {
+                if (protectedText.HasProtectedSegments)
+                    return await TranslateProtectedPartsAsync(protectedText, settings, token).ConfigureAwait(false);
+                throw;
+            }
+            return Equivalent(original, retried) ? TranslationResult.Unchanged(original) : TranslationResult.Translated(retried);
+        }
+
+        private async Task<TranslationResult> TranslateProtectedPartsAsync(ProtectedTranslationText protectedText, TranslationSettings settings, CancellationToken token)
         {
             var output = new StringBuilder();
-            var prompt = BuildSourcePartPrompt(settings);
+            var original = new StringBuilder();
+            var prompt = GetPromptDescriptor(settings, true, false);
+            var strictPrompt = GetPromptDescriptor(settings, true, true);
+            var needsReview = false;
             foreach (var part in protectedText.GetParts())
             {
                 token.ThrowIfCancellationRequested();
+                original.Append(part.Text);
                 if (!part.ShouldTranslate || !part.Text.Any(char.IsLetter))
                 {
                     output.Append(part.Text);
@@ -173,37 +236,121 @@ namespace OfficeTranslate.Core
                 output.Append(part.Text.Substring(0, start));
                 var source = part.Text.Substring(start, end - start);
                 var translated = await SendTranslationRequestAsync(source, prompt, settings, token).ConfigureAwait(false);
-                output.Append(translated.Trim());
+                if (string.IsNullOrWhiteSpace(translated) || Equivalent(source, translated))
+                    translated = await SendTranslationRequestAsync(source, strictPrompt, settings, token).ConfigureAwait(false);
+                if (string.IsNullOrWhiteSpace(translated))
+                    throw new InvalidOperationException("翻译模型连续返回空内容，已停止写回。");
+                if (Equivalent(source, translated))
+                {
+                    needsReview = true;
+                    output.Append(source);
+                }
+                else output.Append(translated.Trim());
                 output.Append(part.Text.Substring(end));
             }
-            return output.ToString();
+
+            var completed = output.ToString();
+            if (Equivalent(original.ToString(), completed)) return TranslationResult.Unchanged(original.ToString());
+            return TranslationResult.Translated(completed, needsReview);
         }
 
-        private async Task<string> SendTranslationRequestAsync(string text, string prompt, TranslationSettings settings, CancellationToken token)
+        private async Task<string> SendTranslationRequestAsync(string text, PromptDescriptor prompt, TranslationSettings settings, CancellationToken token)
         {
             var endpoint = settings.Provider == ProviderKind.Ollama
                 ? settings.BaseUrl.TrimEnd('/') + "/api/chat"
                 : settings.BaseUrl.TrimEnd('/') + "/chat/completions";
-            object body = settings.Provider == ProviderKind.Ollama
-                ? new { model = settings.Model, stream = false, messages = Messages(prompt, text) }
-                : new { model = settings.Model, temperature = 0.2, messages = Messages(prompt, text) };
-            using (var request = new HttpRequestMessage(HttpMethod.Post, endpoint))
+            if (settings.Provider == ProviderKind.Ollama)
             {
-                request.Content = new StringContent(_json.Serialize(body), Encoding.UTF8, "application/json");
-                if (!string.IsNullOrWhiteSpace(settings.ApiKey)) request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", settings.ApiKey);
+                var body = new { model = settings.Model, stream = false, messages = Messages(prompt.Text, text) };
+                using (var request = CreateRequest(endpoint, body, settings.ApiKey))
                 using (var response = await _http.SendAsync(request, token).ConfigureAwait(false))
                 {
                     var raw = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
                     if (!response.IsSuccessStatusCode) throw new InvalidOperationException($"翻译服务返回 {(int)response.StatusCode}: {raw}");
-                    var root = _json.DeserializeObject(raw) as Dictionary<string, object>;
-                    return settings.Provider == ProviderKind.Ollama ? ReadOllama(root) : ReadOpenAi(root);
+                    return ReadOllama(_json.DeserializeObject(raw) as Dictionary<string, object>);
                 }
             }
+
+            var capabilityKey = settings.BaseUrl.TrimEnd('/');
+            var useCacheKey = !PromptCacheKeySupport.TryGetValue(capabilityKey, out var supported) || supported;
+            for (var attempt = 0; attempt < 2; attempt++)
+            {
+                var body = new Dictionary<string, object>
+                {
+                    ["model"] = settings.Model,
+                    ["temperature"] = 0.2,
+                    ["messages"] = Messages(prompt.Text, text)
+                };
+                if (useCacheKey) body["prompt_cache_key"] = prompt.CacheKey;
+                using (var request = CreateRequest(endpoint, body, settings.ApiKey))
+                using (var response = await _http.SendAsync(request, token).ConfigureAwait(false))
+                {
+                    var raw = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+                    if (response.IsSuccessStatusCode)
+                    {
+                        if (useCacheKey) PromptCacheKeySupport[capabilityKey] = true;
+                        return ReadOpenAi(_json.DeserializeObject(raw) as Dictionary<string, object>);
+                    }
+                    if (useCacheKey && IsUnsupportedCacheKey(response.StatusCode, raw))
+                    {
+                        PromptCacheKeySupport[capabilityKey] = false;
+                        useCacheKey = false;
+                        continue;
+                    }
+                    throw new InvalidOperationException($"翻译服务返回 {(int)response.StatusCode}: {raw}");
+                }
+            }
+            throw new InvalidOperationException("翻译服务不支持提示词缓存参数，兼容回退失败。");
         }
+
+        private HttpRequestMessage CreateRequest(string endpoint, object body, string apiKey)
+        {
+            var request = new HttpRequestMessage(HttpMethod.Post, endpoint) {
+                Content = new StringContent(_json.Serialize(body), Encoding.UTF8, "application/json")
+            };
+            if (!string.IsNullOrWhiteSpace(apiKey)) request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+            return request;
+        }
+
+        private static bool IsUnsupportedCacheKey(HttpStatusCode statusCode, string response)
+        {
+            if ((int)statusCode != 400 && (int)statusCode != 422) return false;
+            var raw = response ?? string.Empty;
+            return raw.IndexOf("prompt_cache_key", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                raw.IndexOf("unknown field", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                raw.IndexOf("unrecognized", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                raw.IndexOf("extra input", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        private static bool Equivalent(string source, string translated) =>
+            string.Equals(NormalizeForComparison(source), NormalizeForComparison(translated), StringComparison.Ordinal);
+
+        private static string NormalizeForComparison(string text) =>
+            (text ?? string.Empty).Trim().Replace("\r\n", "\n").Replace('\r', '\n');
 
         private static object[] Messages(string prompt, string text) => new object[] {
             new { role = "system", content = prompt }, new { role = "user", content = text }
         };
+
+        private static PromptDescriptor GetPromptDescriptor(TranslationSettings settings, bool sourcePart, bool strict)
+        {
+            var descriptorKey = string.Join("\u001F", new[]
+            {
+                sourcePart ? "part" : "full",
+                strict ? "strict" : "normal",
+                settings.SourceLanguage ?? string.Empty,
+                settings.TargetLanguage ?? string.Empty,
+                settings.CustomInstructions ?? string.Empty,
+                settings.Glossary ?? string.Empty
+            });
+            return PromptDescriptors.GetOrAdd(descriptorKey, _ =>
+            {
+                var prompt = sourcePart ? BuildSourcePartPrompt(settings) : BuildPrompt(settings);
+                if (strict)
+                    prompt += "\n重要：上一次结果没有完成翻译。本次必须将输入中的源语言内容实际转换为目标语言；不得原样返回输入，不得返回空内容。";
+                return new PromptDescriptor(prompt, "ot-" + TranslationSessionCache.Hash(prompt));
+            });
+        }
 
         private static string BuildPrompt(TranslationSettings s)
         {
@@ -250,6 +397,13 @@ namespace OfficeTranslate.Core
                 yield return text.Substring(position, length);
                 position += length;
             }
+        }
+
+        private sealed class PromptDescriptor
+        {
+            public PromptDescriptor(string text, string cacheKey) { Text = text; CacheKey = cacheKey; }
+            public string Text { get; }
+            public string CacheKey { get; }
         }
 
         public void Dispose() => _http.Dispose();

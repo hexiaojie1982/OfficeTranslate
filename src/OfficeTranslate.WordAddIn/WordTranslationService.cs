@@ -18,7 +18,7 @@ namespace OfficeTranslate.WordAddIn
         private readonly WordApplication _word;
         public WordTranslationService(WordApplication word) => _word = word;
 
-        public async Task TranslateAsync(bool wholeDocument, bool bilingual, TranslationSettings settings, CancellationToken token, Action<string> progress)
+        public async Task<TranslationTaskSummary> TranslateAsync(bool wholeDocument, bool bilingual, TranslationSettings settings, CancellationToken token, Action<string> progress)
         {
             var targets = wholeDocument ? ReadDocumentParagraphs() : ReadSelection();
             var images = settings.ImageOcrEnabled ? (wholeDocument ? ReadDocumentImages() : ReadSelectionImages()) : new List<ImageTarget>();
@@ -26,6 +26,7 @@ namespace OfficeTranslate.WordAddIn
             using (var client = new TranslationClient())
             {
                 var total = targets.Count + images.Count;
+                var summary = new TranslationTaskSummary(total);
                 // Word represents a selected inline picture with a non-printing object
                 // character. Image-only selections are filtered below, and images are
                 // handled before ordinary text so OCR is always the first real request.
@@ -33,7 +34,7 @@ namespace OfficeTranslate.WordAddIn
                 {
                     token.ThrowIfCancellationRequested(); var current = i + 1;
                     progress($"OfficeTranslate：正在识别图片 {current}/{total}");
-                    await TranslateImageAsync(images[i], client, settings, token);
+                    summary.RecordImage(await TranslateImageAsync(images[i], client, settings, token));
                     progress($"OfficeTranslate：已完成 {current}/{total}");
                 }
                 for (var i = 0; i < targets.Count; i++)
@@ -42,11 +43,23 @@ namespace OfficeTranslate.WordAddIn
                     var current = images.Count + i + 1;
                     progress($"OfficeTranslate：正在翻译 {current}/{total}");
                     var sourceText = CleanWordObjectMarkers(targets[i].Text);
-                    if (!HasTranslatableText(sourceText)) continue;
-                    var text = await client.TranslateAsync(sourceText, settings, token);
+                    if (!HasTranslatableText(sourceText))
+                    {
+                        summary.RecordSkipped();
+                        progress($"OfficeTranslate：已完成 {current}/{total}");
+                        continue;
+                    }
+                    var result = await client.TranslateDetailedAsync(sourceText, settings, token);
+                    summary.Record(result);
                     token.ThrowIfCancellationRequested();
 
-                    var translatedText = text.TrimEnd('\r', '\a');
+                    if (!result.Changed)
+                    {
+                        progress($"OfficeTranslate：已完成 {current}/{total}");
+                        continue;
+                    }
+
+                    var translatedText = result.Text.TrimEnd('\r', '\a');
                     progress($"OfficeTranslate：正在写回 {i + 1}/{targets.Count}");
 
                     var undo = _word.UndoRecord;
@@ -65,10 +78,11 @@ namespace OfficeTranslate.WordAddIn
                     finally { undo.EndCustomRecord(); }
                     progress($"OfficeTranslate：已完成 {current}/{total}");
                 }
+                return summary;
             }
         }
 
-        private async Task TranslateImageAsync(ImageTarget image, TranslationClient client, TranslationSettings settings, CancellationToken token)
+        private async Task<bool> TranslateImageAsync(ImageTarget image, TranslationClient client, TranslationSettings settings, CancellationToken token)
         {
             image.CopyAsPicture();
             System.Drawing.Image? clipboardImage = null;
@@ -99,6 +113,7 @@ namespace OfficeTranslate.WordAddIn
                 // conservative font size without using that COM property.
                 overlay.TextFrame.TextRange.Font.Size = layout.FontSize;
             }
+            return regions.Count > 0;
         }
 
         private List<ImageTarget> ReadDocumentImages()
