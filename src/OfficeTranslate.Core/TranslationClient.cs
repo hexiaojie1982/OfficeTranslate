@@ -177,7 +177,7 @@ namespace OfficeTranslate.Core
                     return protectedText.HasProtectedSegments
                         ? await TranslateProtectedPartsAsync(protectedText, settings, token).ConfigureAwait(false)
                         : await RetryUnchangedChunkAsync(text, protectedText, settings, token).ConfigureAwait(false);
-                translated = protectedText.Restore(translated);
+                translated = protectedText.Restore(translated, NeedsCjkLoanwordSpacing(settings));
             }
             catch (ProtectedContentException)
             {
@@ -196,7 +196,7 @@ namespace OfficeTranslate.Core
             var retried = await SendTranslationRequestAsync(protectedText.Text, strictPrompt, settings, token).ConfigureAwait(false);
             if (string.IsNullOrWhiteSpace(retried))
                 throw new InvalidOperationException("翻译模型连续返回空内容，已停止写回。");
-            try { retried = protectedText.Restore(retried); }
+            try { retried = protectedText.Restore(retried, NeedsCjkLoanwordSpacing(settings)); }
             catch (ProtectedContentException)
             {
                 if (protectedText.HasProtectedSegments)
@@ -213,13 +213,14 @@ namespace OfficeTranslate.Core
             var prompt = GetPromptDescriptor(settings, true, false);
             var strictPrompt = GetPromptDescriptor(settings, true, true);
             var needsReview = false;
+            var separateBoundaries = NeedsCjkLoanwordSpacing(settings);
             foreach (var part in protectedText.GetParts())
             {
                 token.ThrowIfCancellationRequested();
                 original.Append(part.Text);
                 if (!part.ShouldTranslate || !part.Text.Any(char.IsLetter))
                 {
-                    output.Append(part.Text);
+                    AppendWithBoundary(output, part.Text, separateBoundaries);
                     continue;
                 }
 
@@ -229,11 +230,11 @@ namespace OfficeTranslate.Core
                 while (end > start && char.IsWhiteSpace(part.Text[end - 1])) end--;
                 if (start == end)
                 {
-                    output.Append(part.Text);
+                    AppendWithBoundary(output, part.Text, separateBoundaries);
                     continue;
                 }
 
-                output.Append(part.Text.Substring(0, start));
+                AppendWithBoundary(output, part.Text.Substring(0, start), separateBoundaries);
                 var source = part.Text.Substring(start, end - start);
                 var translated = await SendTranslationRequestAsync(source, prompt, settings, token).ConfigureAwait(false);
                 if (string.IsNullOrWhiteSpace(translated) || Equivalent(source, translated))
@@ -243,10 +244,10 @@ namespace OfficeTranslate.Core
                 if (Equivalent(source, translated))
                 {
                     needsReview = true;
-                    output.Append(source);
+                    AppendWithBoundary(output, source, separateBoundaries);
                 }
-                else output.Append(translated.Trim());
-                output.Append(part.Text.Substring(end));
+                else AppendWithBoundary(output, translated.Trim(), separateBoundaries);
+                AppendWithBoundary(output, part.Text.Substring(end), separateBoundaries);
             }
 
             var completed = output.ToString();
@@ -355,20 +356,42 @@ namespace OfficeTranslate.Core
         private static string BuildPrompt(TranslationSettings s)
         {
             var glossary = string.IsNullOrWhiteSpace(s.Glossary) ? "" : "\n必须遵循以下术语表（每行 source=target）：\n" + s.Glossary;
+            var spacing = CjkLoanwordSpacingInstruction(s);
             if (SourceLanguageProtector.IsAutomatic(s.SourceLanguage))
-                return $"你是专业翻译。自动识别输入的源语言，将输入完整翻译成{s.TargetLanguage}。只输出译文，不解释，不添加标题；保留换行、编号和占位符。{s.CustomInstructions}{glossary}";
+                return $"你是专业翻译。自动识别输入的源语言，将输入完整翻译成{s.TargetLanguage}。只输出译文，不解释，不添加标题；保留换行、编号和占位符。{spacing}{s.CustomInstructions}{glossary}";
 
             return $"你是专业翻译。输入可能包含多种语言，只翻译其中属于{s.SourceLanguage}的文本片段，将其翻译成{s.TargetLanguage}。" +
                 "所有非源语言内容必须逐字原样保留，包括其他语言的单词和句子、产品名称、型号、缩写、网址、邮箱、代码及大小写；不得翻译、改写、解释、移动或删除。" +
                 "形如 ⟦OT_KEEP_0001⟧ 的保护占位符必须完整、原样、按原位置输出，绝对不能修改。" +
-                $"只输出处理后的完整文本，不解释，不添加标题；保留换行和编号。{s.CustomInstructions}{glossary}";
+                $"只输出处理后的完整文本，不解释，不添加标题；保留换行和编号。{spacing}{s.CustomInstructions}{glossary}";
         }
 
         private static string BuildSourcePartPrompt(TranslationSettings s)
         {
             var glossary = string.IsNullOrWhiteSpace(s.Glossary) ? "" : "\n必须遵循以下术语表（每行 source=target）：\n" + s.Glossary;
+            var spacing = CjkLoanwordSpacingInstruction(s);
             return $"你是专业翻译。当前输入只包含需要翻译的{s.SourceLanguage}文本片段，请将其翻译成{s.TargetLanguage}。" +
-                $"只输出译文，不解释，不添加标题或原文，不得输出 OT_KEEP 等内部标记。{s.CustomInstructions}{glossary}";
+                $"只输出译文，不解释，不添加标题或原文，不得输出 OT_KEEP 等内部标记。{spacing}{s.CustomInstructions}{glossary}";
+        }
+
+        private static string CjkLoanwordSpacingInstruction(TranslationSettings settings)
+        {
+            return NeedsCjkLoanwordSpacing(settings)
+                ? "翻译韩语或日语时，如果术语表或语义要求输出英文词，英文词与相邻的拉丁字母、英文缩写或数字之间必须保留一个空格，不能直接粘连。"
+                : string.Empty;
+        }
+
+        private static bool NeedsCjkLoanwordSpacing(TranslationSettings settings)
+        {
+            return settings.SourceLanguage == "韩语" || settings.SourceLanguage == "日语";
+        }
+
+        private static void AppendWithBoundary(StringBuilder output, string value, bool enabled)
+        {
+            if (string.IsNullOrEmpty(value)) return;
+            if (enabled && output.Length > 0 && ProtectedTranslationText.NeedsBoundarySpace(output[output.Length - 1], value[0]))
+                output.Append(' ');
+            output.Append(value);
         }
 
         private static string ReadOllama(Dictionary<string, object>? root)

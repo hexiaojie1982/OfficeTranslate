@@ -28,6 +28,7 @@ namespace OfficeTranslate.WordAddIn
             ["SummaryCompleted"] = new[] { "翻译完成：共 {0} 项", "翻譯完成：共 {0} 項", "번역 완료: 총 {0}개", "翻訳完了：全 {0} 件", "Translation complete: {0} items" },
             ["SummaryDetails"] = new[] { "已翻译 {0}　缓存命中 {1}\r\n无源语言跳过 {2}　需要检查 {3}　OCR 未识别 {4}", "已翻譯 {0}　快取命中 {1}\r\n無來源語言而略過 {2}　需要檢查 {3}　OCR 未識別 {4}", "번역 {0}　캐시 적중 {1}\r\n원문 언어 없음 {2}　확인 필요 {3}　OCR 미인식 {4}", "翻訳済み {0}　キャッシュ命中 {1}\r\n原文言語なし {2}　要確認 {3}　OCR 未認識 {4}", "Translated {0}   Cache hits {1}\r\nNo source language {2}   Review {3}   OCR empty {4}" },
             ["SummaryReviewHint"] = new[] { "其中 {0} 项严格重试后仍未变化，已保留原文。", "其中 {0} 項嚴格重試後仍未變更，已保留原文。", "{0}개 항목은 재시도 후에도 변경되지 않아 원문을 유지했습니다.", "{0} 件は再試行後も変化しなかったため、原文を保持しました。", "{0} items were still unchanged after retry; the originals were kept." },
+            ["ResultCloseCountdown"] = new[] { "确定（{0} 秒后自动关闭）", "確定（{0} 秒後自動關閉）", "확인 ({0}초 후 자동 닫기)", "確認（{0} 秒後に自動で閉じる）", "OK (closes in {0}s)" },
             ["Settings"] = new[] { "设置", "設定", "설정", "設定", "Settings" },
             ["SettingsTitle"] = new[] { "OfficeTranslate 设置", "OfficeTranslate 設定", "OfficeTranslate 설정", "OfficeTranslate 設定", "OfficeTranslate Settings" },
             ["Heading"] = new[] { "翻译服务设置", "翻譯服務設定", "번역 서비스 설정", "翻訳サービス設定", "Translation service" },

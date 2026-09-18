@@ -57,6 +57,11 @@ namespace OfficeTranslate.Core
 
         public string Restore(string translatedText)
         {
+            return Restore(translatedText, false);
+        }
+
+        public string Restore(string translatedText, bool separateLatinWordBoundaries)
+        {
             var restored = translatedText ?? string.Empty;
             foreach (var segment in _segments)
                 restored = NormalizeTokenVariant(restored, segment.Key);
@@ -70,14 +75,53 @@ namespace OfficeTranslate.Core
                     var atStart = Text.StartsWith(segment.Key, StringComparison.Ordinal);
                     var atEnd = Text.EndsWith(segment.Key, StringComparison.Ordinal);
                     if (atStart && atEnd) return segment.Value;
-                    if (atStart) restored = segment.Value + restored;
-                    else if (atEnd) restored += segment.Value;
+                    if (atStart) restored = JoinWithBoundary(segment.Value, restored, separateLatinWordBoundaries);
+                    else if (atEnd) restored = JoinWithBoundary(restored, segment.Value, separateLatinWordBoundaries);
                     else throw new ProtectedContentException("翻译模型修改了受保护的非源语言内容。");
                     continue;
                 }
-                restored = restored.Replace(segment.Key, segment.Value);
+                restored = ReplaceToken(restored, segment.Key, segment.Value, separateLatinWordBoundaries);
             }
             return restored;
+        }
+
+        private static string ReplaceToken(string text, string token, string value, bool separateLatinWordBoundaries)
+        {
+            var position = 0;
+            while ((position = text.IndexOf(token, position, StringComparison.Ordinal)) >= 0)
+            {
+                var replacement = value;
+                if (separateLatinWordBoundaries && replacement.Length > 0)
+                {
+                    if (position > 0 && NeedsBoundarySpace(text[position - 1], replacement[0]))
+                        replacement = " " + replacement;
+                    var afterToken = position + token.Length;
+                    if (afterToken < text.Length && NeedsBoundarySpace(replacement[replacement.Length - 1], text[afterToken]))
+                        replacement += " ";
+                }
+                text = text.Remove(position, token.Length).Insert(position, replacement);
+                position += replacement.Length;
+            }
+            return text;
+        }
+
+        private static string JoinWithBoundary(string left, string right, bool enabled)
+        {
+            if (!enabled || string.IsNullOrEmpty(left) || string.IsNullOrEmpty(right)) return left + right;
+            return NeedsBoundarySpace(left[left.Length - 1], right[0]) ? left + " " + right : left + right;
+        }
+
+        internal static bool NeedsBoundarySpace(char left, char right)
+        {
+            return IsLatinOrDigit(left) && IsLatinOrDigit(right);
+        }
+
+        private static bool IsLatinOrDigit(char value)
+        {
+            return char.IsDigit(value) ||
+                (value >= '\u0041' && value <= '\u024F') ||
+                (value >= '\u1E00' && value <= '\u1EFF') ||
+                (value >= '\uFF21' && value <= '\uFF5A');
         }
 
         private static string NormalizeTokenVariant(string text, string canonicalToken)
@@ -140,14 +184,17 @@ namespace OfficeTranslate.Core
 
                 var start = position;
                 var containsForeignLetter = false;
+                var containsDigit = false;
                 while (position < text.Length && !IsSourceLetter(text[position], sourceLanguage))
                 {
                     if (char.IsLetter(text[position])) containsForeignLetter = true;
+                    if (char.IsDigit(text[position])) containsDigit = true;
                     position++;
                 }
 
                 var segment = text.Substring(start, position - start);
-                if (!containsForeignLetter)
+                var protectNumericBoundary = (sourceLanguage == "韩语" || sourceLanguage == "日语") && containsDigit;
+                if (!containsForeignLetter && !protectNumericBoundary)
                 {
                     output.Append(segment);
                     continue;

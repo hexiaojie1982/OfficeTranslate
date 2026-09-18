@@ -5,7 +5,7 @@ namespace OfficeTranslate.WordAddIn
 {
     internal sealed class AboutForm : Form
     {
-        public const string CurrentVersion = "2.1.12";
+        public const string CurrentVersion = "2.1.13";
         private readonly string _language;
         private readonly TextBox _content = new TextBox();
 
@@ -55,6 +55,11 @@ namespace OfficeTranslate.WordAddIn
         }
 
         private string ChangelogText()
+        {
+            return "OfficeTranslate 2.1.13\r\n• 翻译结束后关闭进度窗口，并显示独立、醒目的结果摘要窗口。\r\n• 结果窗口支持手动确认，并在 5 秒倒计时结束后自动关闭。\r\n• 韩语和日语翻译中的英文术语与相邻字母、数字自动补充边界空格，避免回填粘连。\r\n• 韩语和日语中的数字片段纳入原位保护，增强术语表英文结果的稳定性。\r\n\r\n" + ChangelogVersion212Text();
+        }
+
+        private string ChangelogVersion212Text()
         {
             return "OfficeTranslate 2.1.12\r\n• 新增翻译结果校验：空译文或未变化结果会自动严格重试，仍无有效结果时保留原文并提示检查。\r\n• 新增翻译任务摘要，显示成功翻译、会话缓存命中、跳过、需检查及 OCR 无文本数量。\r\n• 新增 Office 进程内的会话级翻译结果缓存，相同内容和配置可直接复用译文。\r\n• 稳定模型请求的提示词前缀，并为兼容服务提供前缀缓存键及自动降级。\r\n\r\n" + ChangelogVersion211Text();
         }

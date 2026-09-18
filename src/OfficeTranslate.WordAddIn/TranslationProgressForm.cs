@@ -2,9 +2,7 @@ using System;
 using System.Drawing;
 using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
-using System.Threading.Tasks;
 using System.Windows.Forms;
-using OfficeTranslate.Core;
 
 namespace OfficeTranslate.WordAddIn
 {
@@ -14,16 +12,12 @@ namespace OfficeTranslate.WordAddIn
         private readonly ProgressBar _progress = new ProgressBar();
         private readonly Button _cancel = new Button();
         private readonly Action _cancelAction;
-        private readonly string _uiLanguage;
         private readonly string _cancellingText;
         private bool _cancellationRequested;
-        private bool _summaryMode;
-        private TaskCompletionSource<bool>? _summaryCompletion;
 
         public TranslationProgressForm(string uiLanguage, Action cancelAction)
         {
             _cancelAction = cancelAction;
-            _uiLanguage = uiLanguage;
             _cancellingText = UiText.Get(uiLanguage, "CancellingTranslation");
             Text = UiText.Get(uiLanguage, "TranslationProgress");
             Width = 500; Height = 220; MinimumSize = new Size(460, 210); MaximizeBox = false; MinimizeBox = false;
@@ -40,39 +34,6 @@ namespace OfficeTranslate.WordAddIn
             _cancel.BackColor = Color.White; _cancel.ForeColor = Color.FromArgb(42, 58, 78); _cancel.FlatAppearance.BorderColor = Color.FromArgb(190, 200, 214);
             _cancel.Click += CancelClicked;
             root.Controls.Add(_status, 0, 0); root.Controls.Add(_progress, 0, 1); root.Controls.Add(_cancel, 0, 2); Controls.Add(root);
-        }
-
-        public Task ShowSummaryAsync(TranslationTaskSummary summary)
-        {
-            var completion = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-            if (InvokeRequired)
-            {
-                BeginInvoke(new Action(() => PrepareSummary(summary, completion)));
-                return completion.Task;
-            }
-            PrepareSummary(summary, completion);
-            return completion.Task;
-        }
-
-        private void PrepareSummary(TranslationTaskSummary summary, TaskCompletionSource<bool> completion)
-        {
-            if (IsDisposed) { completion.TrySetResult(true); return; }
-            _summaryMode = true;
-            _summaryCompletion = completion;
-            Text = UiText.Get(_uiLanguage, "SummaryTitle");
-            _status.AutoEllipsis = false;
-            _status.Text = string.Format(UiText.Get(_uiLanguage, "SummaryCompleted"), summary.Total) + "\r\n" +
-                string.Format(UiText.Get(_uiLanguage, "SummaryDetails"), summary.Translated, summary.CacheHits,
-                    summary.SkippedNoSource, summary.NeedsReview, summary.OcrNoText);
-            if (summary.NeedsReview > 0)
-                _status.Text += "\r\n" + string.Format(UiText.Get(_uiLanguage, "SummaryReviewHint"), summary.NeedsReview);
-            _progress.Style = ProgressBarStyle.Continuous;
-            _progress.MarqueeAnimationSpeed = 0;
-            _progress.Maximum = 1;
-            _progress.Value = 1;
-            _cancel.Enabled = true;
-            _cancel.Text = UiText.Get(_uiLanguage, "Close");
-            Activate();
         }
 
         public void ShowFor(IntPtr ownerHandle)
@@ -99,13 +60,11 @@ namespace OfficeTranslate.WordAddIn
         {
             if (IsDisposed) return;
             if (InvokeRequired) { BeginInvoke(new Action(CloseSafely)); return; }
-            _summaryCompletion?.TrySetResult(true);
             Close(); Dispose();
         }
 
         private void CancelClicked(object sender, EventArgs e)
         {
-            if (_summaryMode) { CloseSafely(); return; }
             if (_cancellationRequested) return;
             _cancellationRequested = true; _cancel.Enabled = false; _status.Text = _cancellingText;
             _progress.Style = ProgressBarStyle.Marquee; _progress.MarqueeAnimationSpeed = 25;
