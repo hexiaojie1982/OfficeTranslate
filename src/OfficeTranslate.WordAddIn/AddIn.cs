@@ -134,9 +134,8 @@ namespace OfficeTranslate.WordAddIn
                 _progressForm.SetStatus("OfficeTranslate：正在读取文档…");
                 var summary = await service.TranslateAsync(wholeDocument, bilingual, settings, _cancellation.Token, _progressForm.SetStatus);
                 var owner = System.Diagnostics.Process.GetCurrentProcess().MainWindowHandle;
-                _progressForm.CloseSafely();
+                _progressForm.CloseAndShowResult(summary, owner);
                 _progressForm = null;
-                await TranslationResultForm.ShowAsync(settings.UiLanguage, summary, owner);
             }
             catch (OperationCanceledException) { }
             catch (Exception ex) { MessageBox.Show(ex.Message, "OfficeTranslate", MessageBoxButtons.OK, MessageBoxIcon.Error); }

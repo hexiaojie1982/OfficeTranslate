@@ -24,17 +24,33 @@ namespace OfficeTranslate.Core
 
     public sealed class ProtectedTranslationText
     {
+        private readonly string _originalText;
         private readonly IReadOnlyList<KeyValuePair<string, string>> _segments;
 
-        internal ProtectedTranslationText(string text, IReadOnlyList<KeyValuePair<string, string>> segments)
+        internal ProtectedTranslationText(string originalText, string text, IReadOnlyList<KeyValuePair<string, string>> segments)
         {
+            _originalText = originalText;
             Text = text;
             _segments = segments;
         }
 
+        public string OriginalText => _originalText;
         public string Text { get; }
         public bool HasProtectedSegments => _segments.Count > 0;
         public bool IsFullyProtected => _segments.Count == 1 && Text == _segments[0].Key;
+
+        internal bool PreservesProtectedSegmentsInOrder(string candidate)
+        {
+            if (candidate == null) return false;
+            var position = 0;
+            foreach (var segment in _segments)
+            {
+                var found = candidate.IndexOf(segment.Value, position, StringComparison.Ordinal);
+                if (found < 0) return false;
+                position = found + segment.Value.Length;
+            }
+            return true;
+        }
 
         internal IReadOnlyList<ProtectedTranslationPart> GetParts()
         {
@@ -168,7 +184,14 @@ namespace OfficeTranslate.Core
         public static ProtectedTranslationText Protect(string text, string sourceLanguage)
         {
             if (string.IsNullOrEmpty(text) || IsAutomatic(sourceLanguage))
-                return new ProtectedTranslationText(text ?? string.Empty, new KeyValuePair<string, string>[0]);
+                return new ProtectedTranslationText(text ?? string.Empty, text ?? string.Empty, new KeyValuePair<string, string>[0]);
+
+            if (!ContainsSourceLetter(text, sourceLanguage))
+            {
+                var wholeToken = CreateUniqueToken(text, new KeyValuePair<string, string>[0], 1);
+                return new ProtectedTranslationText(text, wholeToken,
+                    new[] { new KeyValuePair<string, string>(wholeToken, text) });
+            }
 
             var output = new StringBuilder(text.Length);
             var protectedSegments = new List<KeyValuePair<string, string>>();
@@ -182,19 +205,23 @@ namespace OfficeTranslate.Core
                     continue;
                 }
 
-                var start = position;
-                var containsForeignLetter = false;
-                var containsDigit = false;
-                while (position < text.Length && !IsSourceLetter(text[position], sourceLanguage))
+                if (!char.IsLetterOrDigit(text[position]))
                 {
-                    if (char.IsLetter(text[position])) containsForeignLetter = true;
-                    if (char.IsDigit(text[position])) containsDigit = true;
+                    output.Append(text[position]);
                     position++;
+                    continue;
                 }
 
+                var start = position;
+                var containsForeignLetter = false;
+                while (position < text.Length && IsForeignTokenCharacter(text, position, sourceLanguage))
+                {
+                    if (char.IsLetter(text[position]) && !IsSourceLetter(text[position], sourceLanguage))
+                        containsForeignLetter = true;
+                    position++;
+                }
                 var segment = text.Substring(start, position - start);
-                var protectNumericBoundary = (sourceLanguage == "韩语" || sourceLanguage == "日语") && containsDigit;
-                if (!containsForeignLetter && !protectNumericBoundary)
+                if (!containsForeignLetter)
                 {
                     output.Append(segment);
                     continue;
@@ -205,7 +232,7 @@ namespace OfficeTranslate.Core
                 output.Append(token);
             }
 
-            return new ProtectedTranslationText(output.ToString(), protectedSegments);
+            return new ProtectedTranslationText(text, output.ToString(), protectedSegments);
         }
 
         public static bool IsAutomatic(string sourceLanguage)
@@ -229,6 +256,69 @@ namespace OfficeTranslate.Core
             for (var i = 0; i < existing.Count; i++)
                 if (existing[i].Key == token) return true;
             return false;
+        }
+
+        private static bool ContainsSourceLetter(string text, string sourceLanguage)
+        {
+            foreach (var character in text)
+                if (IsSourceLetter(character, sourceLanguage)) return true;
+            return false;
+        }
+
+        private static bool IsForeignTokenCharacter(string text, int position, string sourceLanguage)
+        {
+            var character = text[position];
+            if (IsSourceLetter(character, sourceLanguage) || char.IsWhiteSpace(character)) return false;
+            if (char.IsLetterOrDigit(character) || IsCombiningMark(character)) return true;
+            if (!IsWordConnector(character) || position + 1 >= text.Length) return false;
+            var next = text[position + 1];
+            return !IsSourceLetter(next, sourceLanguage) &&
+                (char.IsLetterOrDigit(next) || IsCombiningMark(next));
+        }
+
+        private static bool IsWordConnector(char character)
+        {
+            switch (character)
+            {
+                case '-': case '_': case '/': case '\\': case '.': case '@': case '+':
+                case '#': case '%': case '&': case '=': case ':':
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        private static bool IsCombiningMark(char character)
+        {
+            var category = char.GetUnicodeCategory(character);
+            return category == System.Globalization.UnicodeCategory.NonSpacingMark ||
+                category == System.Globalization.UnicodeCategory.SpacingCombiningMark ||
+                category == System.Globalization.UnicodeCategory.EnclosingMark;
+        }
+
+        internal static int CountDistinctiveSourceLetters(string text, string sourceLanguage)
+        {
+            if (string.IsNullOrEmpty(text)) return 0;
+            var count = 0;
+            foreach (var character in text)
+            {
+                switch (sourceLanguage)
+                {
+                    case "韩语":
+                        if (IsHangul(character)) count++;
+                        break;
+                    case "日语":
+                        if (IsHiragana(character) || IsKatakana(character)) count++;
+                        break;
+                    case "俄语":
+                        if (IsCyrillic(character)) count++;
+                        break;
+                    case "阿拉伯语":
+                        if (IsArabic(character)) count++;
+                        break;
+                }
+            }
+            return count;
         }
 
         private static bool IsSourceLetter(char character, string sourceLanguage)

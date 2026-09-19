@@ -76,7 +76,7 @@ namespace OfficeTranslate.PowerPointAddIn
         private async Task RunAsync(bool whole)
         {
             if (_host == null || _cancellation != null) return; _cancellation = new CancellationTokenSource();
-            try { var settings = LoadForTranslation(); settings.Validate(); _progressForm = new TranslationProgressForm(settings.UiLanguage, () => _cancellation?.Cancel()); _progressForm.ShowFor(GetHostWindow()); var service = new HostService(_host); SetStatus("OfficeTranslate：正在准备翻译…"); var summary = await service.TranslateAsync(whole, settings, _cancellation.Token, SetStatus); var owner = GetHostWindow(); CloseProgress(); await TranslationResultForm.ShowAsync(settings.UiLanguage, summary, owner); }
+            try { var settings = LoadForTranslation(); settings.Validate(); _progressForm = new TranslationProgressForm(settings.UiLanguage, () => _cancellation?.Cancel()); _progressForm.ShowFor(GetHostWindow()); var service = new HostService(_host); SetStatus("OfficeTranslate：正在准备翻译…"); var summary = await service.TranslateAsync(whole, settings, _cancellation.Token, SetStatus); var owner = GetHostWindow(); _progressForm.CloseAndShowResult(summary, owner); _progressForm = null; }
             catch (OperationCanceledException) { SetStatus("OfficeTranslate：已取消"); }
             catch (Exception ex)
             {

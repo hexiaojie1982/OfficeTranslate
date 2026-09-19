@@ -168,101 +168,72 @@ namespace OfficeTranslate.Core
             var protectedText = SourceLanguageProtector.Protect(text, settings.SourceLanguage);
             if (protectedText.IsFullyProtected) return TranslationResult.Skipped(text);
 
-            var prompt = GetPromptDescriptor(settings, false, false);
+            if (protectedText.HasProtectedSegments)
+                return await TranslateMixedLanguageChunkAsync(text, protectedText, settings, token).ConfigureAwait(false);
+
+            var prompt = GetPromptDescriptor(settings, PromptMode.Direct);
             string translated;
-            try
+            translated = await SendTranslationRequestAsync(text, prompt, settings, token).ConfigureAwait(false);
+            if (string.IsNullOrWhiteSpace(translated))
+                return await RetryUnchangedChunkAsync(text, protectedText, settings, token).ConfigureAwait(false);
+
+            if (IsCompleteTranslation(text, translated, settings)) return TranslationResult.Translated(translated);
+            return await RetryUnchangedChunkAsync(text, protectedText, settings, token).ConfigureAwait(false);
+        }
+
+        private async Task<TranslationResult> TranslateMixedLanguageChunkAsync(string original, ProtectedTranslationText protectedText, TranslationSettings settings, CancellationToken token)
+        {
+            // Translating the intact paragraph gives the model enough context and is much faster than
+            // translating dozens of tiny pieces. Protected foreign terms are then verified in order.
+            var directPrompt = GetPromptDescriptor(settings, PromptMode.Direct);
+            var direct = await SendTranslationRequestAsync(original, directPrompt, settings, token).ConfigureAwait(false);
+            if (IsCompleteTranslation(original, direct, settings) && protectedText.PreservesProtectedSegmentsInOrder(direct))
+                return TranslationResult.Translated(direct);
+
+            // Retry at most once. The fallback protects foreign terms with placeholders while still
+            // translating the whole paragraph, so it keeps context without multiplying API calls.
+            var protectedPrompt = GetPromptDescriptor(settings, PromptMode.Protected);
+            var protectedResult = await SendTranslationRequestAsync(protectedText.Text, protectedPrompt, settings, token, true).ConfigureAwait(false);
+            if (!string.IsNullOrWhiteSpace(protectedResult))
             {
-                translated = await SendTranslationRequestAsync(protectedText.Text, prompt, settings, token).ConfigureAwait(false);
-                if (string.IsNullOrWhiteSpace(translated))
-                    return protectedText.HasProtectedSegments
-                        ? await TranslateProtectedPartsAsync(protectedText, settings, token).ConfigureAwait(false)
-                        : await RetryUnchangedChunkAsync(text, protectedText, settings, token).ConfigureAwait(false);
-                translated = protectedText.Restore(translated, NeedsCjkLoanwordSpacing(settings));
-            }
-            catch (ProtectedContentException)
-            {
-                return await TranslateProtectedPartsAsync(protectedText, settings, token).ConfigureAwait(false);
+                try
+                {
+                    var restored = protectedText.Restore(protectedResult, NeedsCjkLoanwordSpacing(settings));
+                    if (IsCompleteTranslation(original, restored, settings))
+                        return TranslationResult.Translated(restored);
+                }
+                catch (ProtectedContentException) { }
             }
 
-            if (!Equivalent(text, translated)) return TranslationResult.Translated(translated);
-            if (protectedText.HasProtectedSegments)
-                return await TranslateProtectedPartsAsync(protectedText, settings, token).ConfigureAwait(false);
-            return await RetryUnchangedChunkAsync(text, protectedText, settings, token).ConfigureAwait(false);
+            throw new InvalidOperationException("翻译结果仍包含大量未翻译的源语言内容，或修改了受保护的非源语言内容。为避免写入残缺译文，本段已停止写回，请重试或更换模型。");
         }
 
         private async Task<TranslationResult> RetryUnchangedChunkAsync(string original, ProtectedTranslationText protectedText, TranslationSettings settings, CancellationToken token)
         {
-            var strictPrompt = GetPromptDescriptor(settings, false, true);
-            var retried = await SendTranslationRequestAsync(protectedText.Text, strictPrompt, settings, token).ConfigureAwait(false);
+            var strictPrompt = GetPromptDescriptor(settings, PromptMode.Strict);
+            var retried = await SendTranslationRequestAsync(protectedText.Text, strictPrompt, settings, token, true).ConfigureAwait(false);
             if (string.IsNullOrWhiteSpace(retried))
                 throw new InvalidOperationException("翻译模型连续返回空内容，已停止写回。");
-            try { retried = protectedText.Restore(retried, NeedsCjkLoanwordSpacing(settings)); }
-            catch (ProtectedContentException)
-            {
-                if (protectedText.HasProtectedSegments)
-                    return await TranslateProtectedPartsAsync(protectedText, settings, token).ConfigureAwait(false);
-                throw;
-            }
-            return Equivalent(original, retried) ? TranslationResult.Unchanged(original) : TranslationResult.Translated(retried);
+            retried = protectedText.Restore(retried, NeedsCjkLoanwordSpacing(settings));
+            return IsCompleteTranslation(original, retried, settings)
+                ? TranslationResult.Translated(retried)
+                : TranslationResult.Unchanged(original);
         }
 
-        private async Task<TranslationResult> TranslateProtectedPartsAsync(ProtectedTranslationText protectedText, TranslationSettings settings, CancellationToken token)
-        {
-            var output = new StringBuilder();
-            var original = new StringBuilder();
-            var prompt = GetPromptDescriptor(settings, true, false);
-            var strictPrompt = GetPromptDescriptor(settings, true, true);
-            var needsReview = false;
-            var separateBoundaries = NeedsCjkLoanwordSpacing(settings);
-            foreach (var part in protectedText.GetParts())
-            {
-                token.ThrowIfCancellationRequested();
-                original.Append(part.Text);
-                if (!part.ShouldTranslate || !part.Text.Any(char.IsLetter))
-                {
-                    AppendWithBoundary(output, part.Text, separateBoundaries);
-                    continue;
-                }
-
-                var start = 0;
-                while (start < part.Text.Length && char.IsWhiteSpace(part.Text[start])) start++;
-                var end = part.Text.Length;
-                while (end > start && char.IsWhiteSpace(part.Text[end - 1])) end--;
-                if (start == end)
-                {
-                    AppendWithBoundary(output, part.Text, separateBoundaries);
-                    continue;
-                }
-
-                AppendWithBoundary(output, part.Text.Substring(0, start), separateBoundaries);
-                var source = part.Text.Substring(start, end - start);
-                var translated = await SendTranslationRequestAsync(source, prompt, settings, token).ConfigureAwait(false);
-                if (string.IsNullOrWhiteSpace(translated) || Equivalent(source, translated))
-                    translated = await SendTranslationRequestAsync(source, strictPrompt, settings, token).ConfigureAwait(false);
-                if (string.IsNullOrWhiteSpace(translated))
-                    throw new InvalidOperationException("翻译模型连续返回空内容，已停止写回。");
-                if (Equivalent(source, translated))
-                {
-                    needsReview = true;
-                    AppendWithBoundary(output, source, separateBoundaries);
-                }
-                else AppendWithBoundary(output, translated.Trim(), separateBoundaries);
-                AppendWithBoundary(output, part.Text.Substring(end), separateBoundaries);
-            }
-
-            var completed = output.ToString();
-            if (Equivalent(original.ToString(), completed)) return TranslationResult.Unchanged(original.ToString());
-            return TranslationResult.Translated(completed, needsReview);
-        }
-
-        private async Task<string> SendTranslationRequestAsync(string text, PromptDescriptor prompt, TranslationSettings settings, CancellationToken token)
+        private async Task<string> SendTranslationRequestAsync(string text, PromptDescriptor prompt, TranslationSettings settings, CancellationToken token, bool expandedOutputBudget = false)
         {
             var endpoint = settings.Provider == ProviderKind.Ollama
                 ? settings.BaseUrl.TrimEnd('/') + "/api/chat"
                 : settings.BaseUrl.TrimEnd('/') + "/chat/completions";
             if (settings.Provider == ProviderKind.Ollama)
             {
-                var body = new { model = settings.Model, stream = false, messages = Messages(prompt.Text, text) };
+                var body = new
+                {
+                    model = settings.Model,
+                    stream = false,
+                    messages = Messages(prompt.Text, text),
+                    options = new { temperature = 0.1, num_predict = EstimateMaxOutputTokens(text, settings.TargetLanguage, expandedOutputBudget) }
+                };
                 using (var request = CreateRequest(endpoint, body, settings.ApiKey))
                 using (var response = await _http.SendAsync(request, token).ConfigureAwait(false))
                 {
@@ -273,15 +244,19 @@ namespace OfficeTranslate.Core
             }
 
             var capabilityKey = settings.BaseUrl.TrimEnd('/');
-            var useCacheKey = !PromptCacheKeySupport.TryGetValue(capabilityKey, out var supported) || supported;
+            var useCacheKey = IsOfficialOpenAiEndpoint(settings.BaseUrl) &&
+                (!PromptCacheKeySupport.TryGetValue(capabilityKey, out var supported) || supported);
             for (var attempt = 0; attempt < 2; attempt++)
             {
                 var body = new Dictionary<string, object>
                 {
                     ["model"] = settings.Model,
-                    ["temperature"] = 0.2,
+                    ["temperature"] = 0.1,
+                    ["max_tokens"] = EstimateMaxOutputTokens(text, settings.TargetLanguage, expandedOutputBudget),
                     ["messages"] = Messages(prompt.Text, text)
                 };
+                if (IsOfficialDeepSeekEndpoint(settings.BaseUrl))
+                    body["thinking"] = new Dictionary<string, object> { ["type"] = "disabled" };
                 if (useCacheKey) body["prompt_cache_key"] = prompt.CacheKey;
                 using (var request = CreateRequest(endpoint, body, settings.ApiKey))
                 using (var response = await _http.SendAsync(request, token).ConfigureAwait(false))
@@ -323,8 +298,63 @@ namespace OfficeTranslate.Core
                 raw.IndexOf("extra input", StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
+        private static bool IsOfficialOpenAiEndpoint(string baseUrl)
+        {
+            if (!Uri.TryCreate(baseUrl, UriKind.Absolute, out var uri)) return false;
+            return uri.Host.Equals("api.openai.com", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool IsOfficialDeepSeekEndpoint(string baseUrl)
+        {
+            if (!Uri.TryCreate(baseUrl, UriKind.Absolute, out var uri)) return false;
+            return uri.Host.Equals("api.deepseek.com", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static int EstimateMaxOutputTokens(string text, string targetLanguage, bool expanded)
+        {
+            var length = string.IsNullOrEmpty(text) ? 0 : text.Length;
+            if (IsCjkTargetLanguage(targetLanguage))
+                return expanded
+                    ? Math.Max(512, Math.Min(8192, (int)Math.Ceiling(length * 2.25) + 256))
+                    : Math.Max(256, Math.Min(4096, (int)Math.Ceiling(length * 1.25) + 128));
+            return expanded
+                ? Math.Max(512, Math.Min(12288, length * 3 + 256))
+                : Math.Max(256, Math.Min(8192, length * 2 + 128));
+        }
+
+        private static bool IsCjkTargetLanguage(string language) =>
+            language == "简体中文" || language == "繁體中文" || language == "日语" || language == "韩语";
+
         private static bool Equivalent(string source, string translated) =>
             string.Equals(NormalizeForComparison(source), NormalizeForComparison(translated), StringComparison.Ordinal);
+
+        private static bool IsCompleteTranslation(string source, string translated, TranslationSettings settings)
+        {
+            if (string.IsNullOrWhiteSpace(translated) || Equivalent(source, translated)) return false;
+            var maximumLength = IsCjkTargetLanguage(settings.TargetLanguage)
+                ? Math.Max(800, (int)Math.Ceiling(source.Length * 1.8))
+                : Math.Max(1200, source.Length * 3);
+            if (translated.Length > maximumLength || HasSuspiciousRepetition(translated)) return false;
+            var sourceLetters = SourceLanguageProtector.CountDistinctiveSourceLetters(source, settings.SourceLanguage);
+            if (sourceLetters < 10) return true;
+            var remainingLetters = SourceLanguageProtector.CountDistinctiveSourceLetters(translated, settings.SourceLanguage);
+            var maximumRemaining = Math.Max(3, (int)Math.Ceiling(sourceLetters * 0.02));
+            return remainingLetters <= maximumRemaining;
+        }
+
+        private static bool HasSuspiciousRepetition(string text)
+        {
+            const int sampleLength = 100;
+            if (string.IsNullOrEmpty(text) || text.Length < sampleLength * 3) return false;
+            for (var start = 0; start + sampleLength <= text.Length; start += sampleLength)
+            {
+                var sample = text.Substring(start, sampleLength);
+                var second = text.IndexOf(sample, start + sampleLength, StringComparison.Ordinal);
+                if (second < 0) continue;
+                if (text.IndexOf(sample, second + sampleLength, StringComparison.Ordinal) >= 0) return true;
+            }
+            return false;
+        }
 
         private static string NormalizeForComparison(string text) =>
             (text ?? string.Empty).Trim().Replace("\r\n", "\n").Replace('\r', '\n');
@@ -333,12 +363,11 @@ namespace OfficeTranslate.Core
             new { role = "system", content = prompt }, new { role = "user", content = text }
         };
 
-        private static PromptDescriptor GetPromptDescriptor(TranslationSettings settings, bool sourcePart, bool strict)
+        private static PromptDescriptor GetPromptDescriptor(TranslationSettings settings, PromptMode mode)
         {
             var descriptorKey = string.Join("\u001F", new[]
             {
-                sourcePart ? "part" : "full",
-                strict ? "strict" : "normal",
+                mode.ToString(),
                 settings.SourceLanguage ?? string.Empty,
                 settings.TargetLanguage ?? string.Empty,
                 settings.CustomInstructions ?? string.Empty,
@@ -346,32 +375,25 @@ namespace OfficeTranslate.Core
             });
             return PromptDescriptors.GetOrAdd(descriptorKey, _ =>
             {
-                var prompt = sourcePart ? BuildSourcePartPrompt(settings) : BuildPrompt(settings);
-                if (strict)
+                var prompt = BuildPrompt(settings, mode == PromptMode.Protected);
+                if (mode == PromptMode.Strict)
                     prompt += "\n重要：上一次结果没有完成翻译。本次必须将输入中的源语言内容实际转换为目标语言；不得原样返回输入，不得返回空内容。";
                 return new PromptDescriptor(prompt, "ot-" + TranslationSessionCache.Hash(prompt));
             });
         }
 
-        private static string BuildPrompt(TranslationSettings s)
+        private static string BuildPrompt(TranslationSettings s, bool protectedPlaceholders)
         {
             var glossary = string.IsNullOrWhiteSpace(s.Glossary) ? "" : "\n必须遵循以下术语表（每行 source=target）：\n" + s.Glossary;
             var spacing = CjkLoanwordSpacingInstruction(s);
             if (SourceLanguageProtector.IsAutomatic(s.SourceLanguage))
                 return $"你是专业翻译。自动识别输入的源语言，将输入完整翻译成{s.TargetLanguage}。只输出译文，不解释，不添加标题；保留换行、编号和占位符。{spacing}{s.CustomInstructions}{glossary}";
 
-            return $"你是专业翻译。输入可能包含多种语言，只翻译其中属于{s.SourceLanguage}的文本片段，将其翻译成{s.TargetLanguage}。" +
-                "所有非源语言内容必须逐字原样保留，包括其他语言的单词和句子、产品名称、型号、缩写、网址、邮箱、代码及大小写；不得翻译、改写、解释、移动或删除。" +
-                "形如 ⟦OT_KEEP_0001⟧ 的保护占位符必须完整、原样、按原位置输出，绝对不能修改。" +
-                $"只输出处理后的完整文本，不解释，不添加标题；保留换行和编号。{spacing}{s.CustomInstructions}{glossary}";
-        }
-
-        private static string BuildSourcePartPrompt(TranslationSettings s)
-        {
-            var glossary = string.IsNullOrWhiteSpace(s.Glossary) ? "" : "\n必须遵循以下术语表（每行 source=target）：\n" + s.Glossary;
-            var spacing = CjkLoanwordSpacingInstruction(s);
-            return $"你是专业翻译。当前输入只包含需要翻译的{s.SourceLanguage}文本片段，请将其翻译成{s.TargetLanguage}。" +
-                $"只输出译文，不解释，不添加标题或原文，不得输出 OT_KEEP 等内部标记。{spacing}{s.CustomInstructions}{glossary}";
+            var protection = protectedPlaceholders
+                ? "形如 ⟦OT_KEEP_0001⟧ 的内容是已保护原文，必须原样、按原顺序和原位置保留。"
+                : "已经是其他语言的单词、缩写、型号、数字、单位、网址和代码保持原样。";
+            return $"你是专业翻译。将输入中的{s.SourceLanguage}内容翻译成{s.TargetLanguage}；{protection}" +
+                $"只输出完整译文，不解释，不附带原文或标题；保留换行和编号。{spacing}{s.CustomInstructions}{glossary}";
         }
 
         private static string CjkLoanwordSpacingInstruction(TranslationSettings settings)
@@ -428,6 +450,8 @@ namespace OfficeTranslate.Core
             public string Text { get; }
             public string CacheKey { get; }
         }
+
+        private enum PromptMode { Direct, Strict, Protected }
 
         public void Dispose() => _http.Dispose();
     }

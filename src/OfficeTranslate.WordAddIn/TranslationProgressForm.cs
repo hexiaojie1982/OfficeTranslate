@@ -3,6 +3,7 @@ using System.Drawing;
 using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
 using System.Windows.Forms;
+using OfficeTranslate.Core;
 
 namespace OfficeTranslate.WordAddIn
 {
@@ -12,12 +13,14 @@ namespace OfficeTranslate.WordAddIn
         private readonly ProgressBar _progress = new ProgressBar();
         private readonly Button _cancel = new Button();
         private readonly Action _cancelAction;
+        private readonly string _uiLanguage;
         private readonly string _cancellingText;
         private bool _cancellationRequested;
 
         public TranslationProgressForm(string uiLanguage, Action cancelAction)
         {
             _cancelAction = cancelAction;
+            _uiLanguage = uiLanguage;
             _cancellingText = UiText.Get(uiLanguage, "CancellingTranslation");
             Text = UiText.Get(uiLanguage, "TranslationProgress");
             Width = 500; Height = 220; MinimumSize = new Size(460, 210); MaximizeBox = false; MinimizeBox = false;
@@ -61,6 +64,19 @@ namespace OfficeTranslate.WordAddIn
             if (IsDisposed) return;
             if (InvokeRequired) { BeginInvoke(new Action(CloseSafely)); return; }
             Close(); Dispose();
+        }
+
+        public void CloseAndShowResult(TranslationTaskSummary summary, IntPtr ownerHandle)
+        {
+            if (IsDisposed) return;
+            if (InvokeRequired)
+            {
+                BeginInvoke(new Action<TranslationTaskSummary, IntPtr>(CloseAndShowResult), summary, ownerHandle);
+                return;
+            }
+            Close();
+            Dispose();
+            TranslationResultForm.ShowResult(_uiLanguage, summary, ownerHandle);
         }
 
         private void CancelClicked(object sender, EventArgs e)

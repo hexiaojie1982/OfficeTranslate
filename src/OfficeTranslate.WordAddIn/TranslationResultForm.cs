@@ -1,7 +1,6 @@
 using System;
 using System.Drawing;
 using System.Runtime.InteropServices;
-using System.Threading.Tasks;
 using System.Windows.Forms;
 using OfficeTranslate.Core;
 
@@ -12,8 +11,6 @@ namespace OfficeTranslate.WordAddIn
         private readonly Button _close = new Button();
         private readonly Timer _timer = new Timer();
         private readonly string _uiLanguage;
-        private readonly TaskCompletionSource<bool> _completion =
-            new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         private int _remainingSeconds = 5;
 
         private TranslationResultForm(string uiLanguage, TranslationTaskSummary summary)
@@ -100,7 +97,7 @@ namespace OfficeTranslate.WordAddIn
             {
                 _timer.Stop();
                 _timer.Dispose();
-                _completion.TrySetResult(true);
+                Dispose();
             };
             _timer.Interval = 1000;
             _timer.Tick += (s, e) =>
@@ -111,18 +108,15 @@ namespace OfficeTranslate.WordAddIn
             };
         }
 
-        public static async Task ShowAsync(string uiLanguage, TranslationTaskSummary summary, IntPtr ownerHandle)
+        public static void ShowResult(string uiLanguage, TranslationTaskSummary summary, IntPtr ownerHandle)
         {
-            using (var form = new TranslationResultForm(uiLanguage, summary))
-            {
-                if (GetWindowRect(ownerHandle, out var rect))
-                    form.Location = new Point(rect.Left + Math.Max(0, (rect.Right - rect.Left - form.Width) / 2),
-                        rect.Top + Math.Max(0, (rect.Bottom - rect.Top - form.Height) / 2));
-                form.Show(ownerHandle == IntPtr.Zero ? null : new WindowHandle(ownerHandle));
-                form.Activate();
-                form._timer.Start();
-                await form._completion.Task;
-            }
+            var form = new TranslationResultForm(uiLanguage, summary);
+            if (GetWindowRect(ownerHandle, out var rect))
+                form.Location = new Point(rect.Left + Math.Max(0, (rect.Right - rect.Left - form.Width) / 2),
+                    rect.Top + Math.Max(0, (rect.Bottom - rect.Top - form.Height) / 2));
+            form.Show(ownerHandle == IntPtr.Zero ? null : new WindowHandle(ownerHandle));
+            form.Activate();
+            form._timer.Start();
         }
 
         private void UpdateCloseText()

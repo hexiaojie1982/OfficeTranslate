@@ -5,7 +5,7 @@ namespace OfficeTranslate.WordAddIn
 {
     internal sealed class AboutForm : Form
     {
-        public const string CurrentVersion = "2.1.13";
+        public const string CurrentVersion = "2.1.20";
         private readonly string _language;
         private readonly TextBox _content = new TextBox();
 
@@ -55,6 +55,41 @@ namespace OfficeTranslate.WordAddIn
         }
 
         private string ChangelogText()
+        {
+            return "OfficeTranslate 2.1.20\r\n• DeepSeek 官方接口的文本翻译明确关闭思考模式，避免思考 Token 挤占译文空间。\r\n• 空正文或校验失败时的唯一一次安全重试使用扩展输出预算，提高复杂模型兼容性。\r\n• 正常请求继续使用较低输出上限，并保持最多两次 API 请求的限制。\r\n\r\n" + ChangelogVersion219Text();
+        }
+
+        private string ChangelogVersion219Text()
+        {
+            return "OfficeTranslate 2.1.19\r\n• 精简指定源语言的翻译提示词，降低混合语言长文的模型推理负担。\r\n• 混合语言保护失败时最多进行一次占位符兜底，API 请求由最多三次降为最多两次。\r\n• 按目标语言自适应限制输出 Token，避免异常重复内容跑满输出上限。\r\n• 新增长度与重复内容校验，防止超长或循环译文写回文档。\r\n• 翻译温度调整为 0.1，提高术语与保护内容输出的稳定性。\r\n\r\n" + ChangelogVersion218Text();
+        }
+
+        private string ChangelogVersion218Text()
+        {
+            return "OfficeTranslate 2.1.18\r\n• 韩语、日语等混合语言改为整段翻译优先，避免拆成大量无上下文碎片。\r\n• 校验英文、缩写、型号等非源语言内容的原文与顺序，保护失败时自动整段重试。\r\n• 新增源语言残留比例校验，严重漏译或半译结果不再写回文档。\r\n• 减少数字类保护片段，解决长文翻译缓慢及只翻译中间少量内容的问题。\r\n\r\n" + ChangelogVersion217Text();
+        }
+
+        private string ChangelogVersion217Text()
+        {
+            return "OfficeTranslate 2.1.17\r\n• DeepSeek 等兼容服务不再发送非官方 prompt_cache_key 参数，继续使用服务自身的自动前缀缓存。\r\n• 为文本翻译设置合理的最大输出长度，避免模型异常长输出造成长时间等待。\r\n• 混合语言安全降级取消重复严格请求；远程 API 最多四路并发，本地 Ollama 保持单路。\r\n\r\n" + ChangelogVersion216Text();
+        }
+
+        private string ChangelogVersion216Text()
+        {
+            return "OfficeTranslate 2.1.16\r\n• 修复翻译结果窗口关闭后访问已释放对象的异常。\r\n• 结果窗口改由 Office UI 线程创建和管理，解决窗口未响应的问题。\r\n• 结果窗口不再阻塞翻译任务收尾，并继续支持 5 秒自动关闭。\r\n\r\n" + ChangelogVersion215Text();
+        }
+
+        private string ChangelogVersion215Text()
+        {
+            return "OfficeTranslate 2.1.15\r\n• 修复以英文缩写开头的混合句被强制逐片请求、导致单段翻译耗时过长的问题。\r\n• 正常情况下恢复为每段一次模型请求；仅在模型实际破坏保护内容时才进入安全降级。\r\n• 降级翻译连续返回空内容时仍会保留原文并标记需要检查，不会中止整个任务。\r\n\r\n" + ChangelogVersion214Text();
+        }
+
+        private string ChangelogVersion214Text()
+        {
+            return "OfficeTranslate 2.1.14\r\n• 增强韩英、日英混合句句首全大写英文缩写的保护恢复。\r\n• 分片模型连续返回空内容时保留原文并标记需要检查，不再中止整个翻译任务。\r\n\r\n" + ChangelogVersion213Text();
+        }
+
+        private string ChangelogVersion213Text()
         {
             return "OfficeTranslate 2.1.13\r\n• 翻译结束后关闭进度窗口，并显示独立、醒目的结果摘要窗口。\r\n• 结果窗口支持手动确认，并在 5 秒倒计时结束后自动关闭。\r\n• 韩语和日语翻译中的英文术语与相邻字母、数字自动补充边界空格，避免回填粘连。\r\n• 韩语和日语中的数字片段纳入原位保护，增强术语表英文结果的稳定性。\r\n\r\n" + ChangelogVersion212Text();
         }
