@@ -5,7 +5,7 @@ namespace OfficeTranslate.WordAddIn
 {
     internal sealed class AboutForm : Form
     {
-        public const string CurrentVersion = "2.1.20";
+        public const string CurrentVersion = "2.1.22";
         private readonly string _language;
         private readonly TextBox _content = new TextBox();
 
@@ -55,6 +55,16 @@ namespace OfficeTranslate.WordAddIn
         }
 
         private string ChangelogText()
+        {
+            return "OfficeTranslate 2.1.22\r\n• 对 Word、Excel 和 PowerPoint 的换行符进行程序级保护，避免多行文本翻译后合并成一行。\r\n• 支持保留 CRLF、CR、LF、Word 手动换行、分页符及 Unicode 行分隔符的原始类型和顺序。\r\n• 正常翻译仍保持整段一次请求，仅在模型破坏换行时进行一次占位符安全重试。\r\n\r\n" + ChangelogVersion221Text();
+        }
+
+        private string ChangelogVersion221Text()
+        {
+            return "OfficeTranslate 2.1.21\r\n• 新增目标语言文字校验，避免中英混合段落翻译为韩语时仍返回中文却被误判为成功。\r\n• 中文源语言纳入残留文字检测，整段未翻译或严重漏译会自动安全重试。\r\n• 自动检测模式会检查非目标文字残留，且提示词明确要求韩文或日文的目标书写系统。\r\n\r\n" + ChangelogVersion220Text();
+        }
+
+        private string ChangelogVersion220Text()
         {
             return "OfficeTranslate 2.1.20\r\n• DeepSeek 官方接口的文本翻译明确关闭思考模式，避免思考 Token 挤占译文空间。\r\n• 空正文或校验失败时的唯一一次安全重试使用扩展输出预算，提高复杂模型兼容性。\r\n• 正常请求继续使用较低输出上限，并保持最多两次 API 请求的限制。\r\n\r\n" + ChangelogVersion219Text();
         }

@@ -195,7 +195,8 @@ namespace OfficeTranslate.WordAddIn
                 // Word uses several low control characters for inline pictures,
                 // fields and anchors. Preserve only normal text plus useful layout.
                 if (character == '\uFFFC') continue;
-                if (char.IsControl(character) && character != '\r' && character != '\n' && character != '\t') continue;
+                if (char.IsControl(character) && character != '\r' && character != '\n' &&
+                    character != '\v' && character != '\f' && character != '\t') continue;
                 output.Append(character);
             }
             return output.ToString();

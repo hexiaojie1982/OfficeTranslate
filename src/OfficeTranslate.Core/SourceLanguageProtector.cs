@@ -183,8 +183,11 @@ namespace OfficeTranslate.Core
     {
         public static ProtectedTranslationText Protect(string text, string sourceLanguage)
         {
-            if (string.IsNullOrEmpty(text) || IsAutomatic(sourceLanguage))
+            if (string.IsNullOrEmpty(text))
                 return new ProtectedTranslationText(text ?? string.Empty, text ?? string.Empty, new KeyValuePair<string, string>[0]);
+
+            if (IsAutomatic(sourceLanguage))
+                return ProtectLayoutSeparators(text);
 
             if (!ContainsSourceLetter(text, sourceLanguage))
             {
@@ -198,6 +201,15 @@ namespace OfficeTranslate.Core
             var position = 0;
             while (position < text.Length)
             {
+                if (TryReadLayoutSeparator(text, position, out var separator))
+                {
+                    var layoutToken = CreateUniqueToken(text, protectedSegments, protectedSegments.Count + 1);
+                    protectedSegments.Add(new KeyValuePair<string, string>(layoutToken, separator));
+                    output.Append(layoutToken);
+                    position += separator.Length;
+                    continue;
+                }
+
                 if (IsSourceLetter(text[position], sourceLanguage))
                 {
                     output.Append(text[position]);
@@ -233,6 +245,47 @@ namespace OfficeTranslate.Core
             }
 
             return new ProtectedTranslationText(text, output.ToString(), protectedSegments);
+        }
+
+        private static ProtectedTranslationText ProtectLayoutSeparators(string text)
+        {
+            var output = new StringBuilder(text.Length);
+            var protectedSegments = new List<KeyValuePair<string, string>>();
+            var position = 0;
+            while (position < text.Length)
+            {
+                if (!TryReadLayoutSeparator(text, position, out var separator))
+                {
+                    output.Append(text[position]);
+                    position++;
+                    continue;
+                }
+
+                var token = CreateUniqueToken(text, protectedSegments, protectedSegments.Count + 1);
+                protectedSegments.Add(new KeyValuePair<string, string>(token, separator));
+                output.Append(token);
+                position += separator.Length;
+            }
+            return new ProtectedTranslationText(text, output.ToString(), protectedSegments);
+        }
+
+        private static bool TryReadLayoutSeparator(string text, int position, out string separator)
+        {
+            separator = string.Empty;
+            if (position < 0 || position >= text.Length) return false;
+            var character = text[position];
+            if (character == '\r')
+            {
+                separator = position + 1 < text.Length && text[position + 1] == '\n' ? "\r\n" : "\r";
+                return true;
+            }
+            if (character == '\n' || character == '\v' || character == '\f' ||
+                character == '\u2028' || character == '\u2029')
+            {
+                separator = character.ToString();
+                return true;
+            }
+            return false;
         }
 
         public static bool IsAutomatic(string sourceLanguage)
@@ -304,6 +357,10 @@ namespace OfficeTranslate.Core
             {
                 switch (sourceLanguage)
                 {
+                    case "简体中文":
+                    case "繁體中文":
+                        if (IsHan(character) || IsBopomofo(character)) count++;
+                        break;
                     case "韩语":
                         if (IsHangul(character)) count++;
                         break;
@@ -315,6 +372,14 @@ namespace OfficeTranslate.Core
                         break;
                     case "阿拉伯语":
                         if (IsArabic(character)) count++;
+                        break;
+                    case "英语":
+                    case "法语":
+                    case "德语":
+                    case "西班牙语":
+                    case "葡萄牙语":
+                    case "意大利语":
+                        if (IsLatin(character)) count++;
                         break;
                 }
             }

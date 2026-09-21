@@ -335,11 +335,73 @@ namespace OfficeTranslate.Core
                 ? Math.Max(800, (int)Math.Ceiling(source.Length * 1.8))
                 : Math.Max(1200, source.Length * 3);
             if (translated.Length > maximumLength || HasSuspiciousRepetition(translated)) return false;
+            if (!HasRequiredTargetLanguageOutput(source, translated, settings)) return false;
+            if (!ShouldCheckSourceResidual(settings.SourceLanguage, settings.TargetLanguage)) return true;
             var sourceLetters = SourceLanguageProtector.CountDistinctiveSourceLetters(source, settings.SourceLanguage);
             if (sourceLetters < 10) return true;
             var remainingLetters = SourceLanguageProtector.CountDistinctiveSourceLetters(translated, settings.SourceLanguage);
             var maximumRemaining = Math.Max(3, (int)Math.Ceiling(sourceLetters * 0.02));
             return remainingLetters <= maximumRemaining;
+        }
+
+        private static bool ShouldCheckSourceResidual(string sourceLanguage, string targetLanguage)
+        {
+            if (SourceLanguageProtector.IsAutomatic(sourceLanguage)) return false;
+            switch (sourceLanguage)
+            {
+                case "英语":
+                case "法语":
+                case "德语":
+                case "西班牙语":
+                case "葡萄牙语":
+                case "意大利语":
+                    // These languages share the Latin writing system, and product names or
+                    // abbreviations can legitimately remain in a correct translation.
+                    return false;
+                case "简体中文":
+                case "繁體中文":
+                    // Japanese and both Chinese variants legitimately retain Han characters.
+                    return targetLanguage != "简体中文" && targetLanguage != "繁體中文" && targetLanguage != "日语";
+                default:
+                    return true;
+            }
+        }
+
+        private static bool HasRequiredTargetLanguageOutput(string source, string translated, TranslationSettings settings)
+        {
+            var sourceLetterCount = source.Count(char.IsLetter);
+            if (sourceLetterCount == 0) return true;
+
+            var sourceTargetLetters = SourceLanguageProtector.CountDistinctiveSourceLetters(source, settings.TargetLanguage);
+            var lettersNeedingConversion = Math.Max(0, sourceLetterCount - sourceTargetLetters);
+            if (lettersNeedingConversion == 0) return true;
+
+            // A result that contains no meaningful amount of the requested writing system is not a
+            // translation. This catches, for example, a Chinese paragraph returned almost unchanged
+            // when the target is Korean, even if punctuation or whitespace changed.
+            var translatedTargetLetters = SourceLanguageProtector.CountDistinctiveSourceLetters(translated, settings.TargetLanguage);
+            var requiredTargetLetters = lettersNeedingConversion < 8
+                ? 1
+                : Math.Max(2, Math.Min(12, (int)Math.Ceiling(lettersNeedingConversion * 0.05)));
+            if (translatedTargetLetters < requiredTargetLetters) return false;
+
+            if (!SourceLanguageProtector.IsAutomatic(settings.SourceLanguage)) return true;
+
+            // Automatic detection has no explicit source script for the regular residual check.
+            // Reject a result that still contains most of a clearly detectable non-target script.
+            var detectableScripts = new[] { "简体中文", "日语", "韩语", "俄语", "阿拉伯语" };
+            foreach (var script in detectableScripts)
+            {
+                if (script == settings.TargetLanguage ||
+                    (settings.TargetLanguage == "繁體中文" && script == "简体中文") ||
+                    (settings.TargetLanguage == "日语" && script == "简体中文")) continue;
+                var originalCount = SourceLanguageProtector.CountDistinctiveSourceLetters(source, script);
+                if (originalCount < 10) continue;
+                var remainingCount = SourceLanguageProtector.CountDistinctiveSourceLetters(translated, script);
+                var maximumRemaining = Math.Max(3, (int)Math.Ceiling(originalCount * 0.05));
+                if (remainingCount > maximumRemaining) return false;
+            }
+            return true;
         }
 
         private static bool HasSuspiciousRepetition(string text)
@@ -386,14 +448,37 @@ namespace OfficeTranslate.Core
         {
             var glossary = string.IsNullOrWhiteSpace(s.Glossary) ? "" : "\n必须遵循以下术语表（每行 source=target）：\n" + s.Glossary;
             var spacing = CjkLoanwordSpacingInstruction(s);
+            var targetOutput = TargetLanguageOutputInstruction(s.TargetLanguage);
             if (SourceLanguageProtector.IsAutomatic(s.SourceLanguage))
-                return $"你是专业翻译。自动识别输入的源语言，将输入完整翻译成{s.TargetLanguage}。只输出译文，不解释，不添加标题；保留换行、编号和占位符。{spacing}{s.CustomInstructions}{glossary}";
+            {
+                var automaticProtection = protectedPlaceholders
+                    ? "形如 ⟦OT_KEEP_0001⟧ 的内容代表受保护的换行或版式标记，必须原样、按原顺序和原位置保留。"
+                    : string.Empty;
+                return $"你是专业翻译。自动识别输入的源语言，将输入完整翻译成{s.TargetLanguage}。{automaticProtection}{targetOutput}只输出译文，不解释，不添加标题；保留换行、编号和占位符。{spacing}{s.CustomInstructions}{glossary}";
+            }
 
             var protection = protectedPlaceholders
                 ? "形如 ⟦OT_KEEP_0001⟧ 的内容是已保护原文，必须原样、按原顺序和原位置保留。"
                 : "已经是其他语言的单词、缩写、型号、数字、单位、网址和代码保持原样。";
             return $"你是专业翻译。将输入中的{s.SourceLanguage}内容翻译成{s.TargetLanguage}；{protection}" +
-                $"只输出完整译文，不解释，不附带原文或标题；保留换行和编号。{spacing}{s.CustomInstructions}{glossary}";
+                $"{targetOutput}只输出完整译文，不解释，不附带原文或标题；保留换行和编号。{spacing}{s.CustomInstructions}{glossary}";
+        }
+
+        private static string TargetLanguageOutputInstruction(string targetLanguage)
+        {
+            switch (targetLanguage)
+            {
+                case "韩语":
+                    return "译文正文必须使用韩文（Hangul/한글）书写，不能继续使用中文充当韩语译文。";
+                case "日语":
+                    return "译文正文必须使用自然的日语书写，并包含必要的平假名或片假名，不能继续使用中文充当日语译文。";
+                case "简体中文":
+                    return "译文正文必须使用简体中文书写。";
+                case "繁體中文":
+                    return "译文正文必须使用繁體中文书写。";
+                default:
+                    return string.Empty;
+            }
         }
 
         private static string CjkLoanwordSpacingInstruction(TranslationSettings settings)
