@@ -16,7 +16,12 @@ namespace OfficeTranslate.Core
     public sealed class TranslationClient : IDisposable
     {
         private readonly HttpClient _http = new HttpClient();
-        private readonly JavaScriptSerializer _json = new JavaScriptSerializer();
+        // Image OCR embeds a whole PNG as base64 in the request body, which can be
+        // megabytes long. Raising MaxJsonLength removes the serializer as a
+        // possible failure point for large payloads. (The exact default
+        // threshold was not measured in the target .NET Framework 4.8 runtime;
+        // verify there before quoting a number.)
+        private readonly JavaScriptSerializer _json = new JavaScriptSerializer { MaxJsonLength = int.MaxValue };
         private static readonly ConcurrentDictionary<string, PromptDescriptor> PromptDescriptors =
             new ConcurrentDictionary<string, PromptDescriptor>(StringComparer.Ordinal);
         private static readonly ConcurrentDictionary<string, bool> PromptCacheKeySupport =
@@ -109,25 +114,65 @@ namespace OfficeTranslate.Core
             var endpoint = settings.Provider == ProviderKind.Ollama
                 ? settings.BaseUrl.TrimEnd('/') + "/api/chat"
                 : settings.BaseUrl.TrimEnd('/') + "/chat/completions";
-            object body;
-            if (settings.Provider == ProviderKind.Ollama)
-                body = new { model, stream = false, format = "json", messages = new[] { new { role = "user", content = prompt, images = new[] { base64 } } } };
-            else
-                body = new { model, temperature = 0.1, messages = new object[] { new { role = "user", content = new object[] { new { type = "text", text = prompt }, new { type = "image_url", image_url = new { url = "data:image/png;base64," + base64 } } } } } };
-            using (var request = new HttpRequestMessage(HttpMethod.Post, endpoint))
+            try
             {
-                request.Content = new StringContent(_json.Serialize(body), Encoding.UTF8, "application/json");
-                if (!string.IsNullOrWhiteSpace(settings.ApiKey)) request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", settings.ApiKey);
-                using (var response = await _http.SendAsync(request, token).ConfigureAwait(false))
-                {
-                    var raw = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
-                    if (!response.IsSuccessStatusCode) throw new InvalidOperationException($"图片识别服务返回 {(int)response.StatusCode}: {raw}");
-                    var root = _json.DeserializeObject(raw) as Dictionary<string, object>;
-                    var content = settings.Provider == ProviderKind.Ollama ? ReadOllama(root) : ReadOpenAi(root);
-                    return ParseImageRegions(content);
-                }
+                return await RequestImageRegionsAsync(endpoint, model, prompt, base64, settings, token, true).ConfigureAwait(false);
+            }
+            catch (ImageFormatNotSupportedException)
+            {
+                // Older OpenAI-compatible servers may reject the structured-output
+                // parameter; fall back to asking for JSON through the prompt only.
+                return await RequestImageRegionsAsync(endpoint, model, prompt, base64, settings, token, false).ConfigureAwait(false);
             }
         }
+
+        private sealed class ImageFormatNotSupportedException : InvalidOperationException
+        {
+            public ImageFormatNotSupportedException(string message) : base(message) { }
+        }
+
+        private async Task<IReadOnlyList<ImageTranslationRegion>> RequestImageRegionsAsync(string endpoint, string model, string prompt, string base64, TranslationSettings settings, CancellationToken token, bool structuredOutput)
+        {
+            object body;
+            if (settings.Provider == ProviderKind.Ollama)
+            {
+                var messages = new[] { new { role = "user", content = prompt, images = new[] { base64 } } };
+                body = structuredOutput
+                    ? (object)new { model, stream = false, format = "json", messages }
+                    : new { model, stream = false, messages };
+            }
+            else
+            {
+                var messages = new object[] { new { role = "user", content = new object[] { new { type = "text", text = prompt }, new { type = "image_url", image_url = new { url = "data:image/png;base64," + base64 } } } } };
+                body = structuredOutput
+                    ? (object)new { model, temperature = 0.1, response_format = new { type = "json_object" }, messages }
+                    : new { model, temperature = 0.1, messages };
+            }
+            using (var response = await SendWithRetryAsync(() => CreateRequest(endpoint, body, settings.ApiKey), token).ConfigureAwait(false))
+            {
+                var raw = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+                if (!response.IsSuccessStatusCode)
+                {
+                    if (ShouldFallbackFromStructuredOutput((int)response.StatusCode, raw))
+                        throw new ImageFormatNotSupportedException($"图片识别服务不支持结构化输出参数，已回退为纯提示词模式: {raw}");
+                    throw new InvalidOperationException($"图片识别服务返回 {(int)response.StatusCode}: {raw}");
+                }
+                var root = _json.DeserializeObject(raw) as Dictionary<string, object>;
+                var imageResponse = settings.Provider == ProviderKind.Ollama ? ReadOllama(root) : ReadOpenAi(root);
+                if (imageResponse.Truncated)
+                    throw new InvalidOperationException("图片模型的输出因长度限制被截断，未生成译文覆盖框。请更换视觉模型或缩小图片后重试。");
+                return ParseImageRegions(imageResponse.Content);
+            }
+        }
+
+        // Some OpenAI-compatible servers (e.g. vLLM front-ends) answer 422 instead
+        // of 400 when they do not understand response_format.
+        internal static bool ShouldFallbackFromStructuredOutput(int statusCode, string raw) =>
+            (statusCode == 400 || statusCode == 422) && IsFormatRejection(raw);
+
+        private static bool IsFormatRejection(string raw) =>
+            raw != null && (raw.IndexOf("response_format", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                            raw.IndexOf("\"format\"", StringComparison.OrdinalIgnoreCase) >= 0);
 
         private IReadOnlyList<ImageTranslationRegion> ParseImageRegions(string content)
         {
@@ -172,12 +217,14 @@ namespace OfficeTranslate.Core
                 return await TranslateMixedLanguageChunkAsync(text, protectedText, settings, token).ConfigureAwait(false);
 
             var prompt = GetPromptDescriptor(settings, PromptMode.Direct);
-            string translated;
-            translated = await SendTranslationRequestAsync(text, prompt, settings, token).ConfigureAwait(false);
+            var response = await SendTranslationRequestAsync(text, prompt, settings, token).ConfigureAwait(false);
+            var translated = response.Content;
             if (string.IsNullOrWhiteSpace(translated))
                 return await RetryUnchangedChunkAsync(text, protectedText, settings, token).ConfigureAwait(false);
 
-            if (IsCompleteTranslation(text, translated, settings)) return TranslationResult.Translated(translated);
+            // A response cut off by the output token limit is never treated as a
+            // complete translation; the strict retry below uses an expanded budget.
+            if (!response.Truncated && IsCompleteTranslation(text, translated, settings)) return TranslationResult.Translated(translated);
             return await RetryUnchangedChunkAsync(text, protectedText, settings, token).ConfigureAwait(false);
         }
 
@@ -186,15 +233,17 @@ namespace OfficeTranslate.Core
             // Translating the intact paragraph gives the model enough context and is much faster than
             // translating dozens of tiny pieces. Protected foreign terms are then verified in order.
             var directPrompt = GetPromptDescriptor(settings, PromptMode.Direct);
-            var direct = await SendTranslationRequestAsync(original, directPrompt, settings, token).ConfigureAwait(false);
-            if (IsCompleteTranslation(original, direct, settings) && protectedText.PreservesProtectedSegmentsInOrder(direct))
+            var directResponse = await SendTranslationRequestAsync(original, directPrompt, settings, token).ConfigureAwait(false);
+            var direct = directResponse.Content;
+            if (!directResponse.Truncated && IsCompleteTranslation(original, direct, settings) && protectedText.PreservesProtectedSegmentsInOrder(direct))
                 return TranslationResult.Translated(direct);
 
             // Retry at most once. The fallback protects foreign terms with placeholders while still
             // translating the whole paragraph, so it keeps context without multiplying API calls.
             var protectedPrompt = GetPromptDescriptor(settings, PromptMode.Protected);
-            var protectedResult = await SendTranslationRequestAsync(protectedText.Text, protectedPrompt, settings, token, true).ConfigureAwait(false);
-            if (!string.IsNullOrWhiteSpace(protectedResult))
+            var protectedResponse = await SendTranslationRequestAsync(protectedText.Text, protectedPrompt, settings, token, true).ConfigureAwait(false);
+            var protectedResult = protectedResponse.Content;
+            if (!protectedResponse.Truncated && !string.IsNullOrWhiteSpace(protectedResult))
             {
                 try
                 {
@@ -205,22 +254,35 @@ namespace OfficeTranslate.Core
                 catch (ProtectedContentException) { }
             }
 
-            throw new InvalidOperationException("翻译结果仍包含大量未翻译的源语言内容，或修改了受保护的非源语言内容。为避免写入残缺译文，本段已停止写回，请重试或更换模型。");
+            // A single stubborn paragraph must not abort the whole task. Keep the
+            // original text and let the task summary flag it for manual review.
+            return TranslationResult.Unchanged(original);
         }
 
         private async Task<TranslationResult> RetryUnchangedChunkAsync(string original, ProtectedTranslationText protectedText, TranslationSettings settings, CancellationToken token)
         {
             var strictPrompt = GetPromptDescriptor(settings, PromptMode.Strict);
-            var retried = await SendTranslationRequestAsync(protectedText.Text, strictPrompt, settings, token, true).ConfigureAwait(false);
+            var response = await SendTranslationRequestAsync(protectedText.Text, strictPrompt, settings, token, true).ConfigureAwait(false);
+            var retried = response.Content;
             if (string.IsNullOrWhiteSpace(retried))
                 throw new InvalidOperationException("翻译模型连续返回空内容，已停止写回。");
-            retried = protectedText.Restore(retried, NeedsCjkLoanwordSpacing(settings));
-            return IsCompleteTranslation(original, retried, settings)
-                ? TranslationResult.Translated(retried)
+            string restored;
+            try
+            {
+                restored = protectedText.Restore(retried, NeedsCjkLoanwordSpacing(settings));
+            }
+            catch (ProtectedContentException)
+            {
+                return TranslationResult.Unchanged(original);
+            }
+            // Even the expanded output budget can be exhausted by a very long chunk.
+            // Never write back a truncated translation as if it were complete.
+            return !response.Truncated && IsCompleteTranslation(original, restored, settings)
+                ? TranslationResult.Translated(restored)
                 : TranslationResult.Unchanged(original);
         }
 
-        private async Task<string> SendTranslationRequestAsync(string text, PromptDescriptor prompt, TranslationSettings settings, CancellationToken token, bool expandedOutputBudget = false)
+        private async Task<ModelResponse> SendTranslationRequestAsync(string text, PromptDescriptor prompt, TranslationSettings settings, CancellationToken token, bool expandedOutputBudget = false)
         {
             var endpoint = settings.Provider == ProviderKind.Ollama
                 ? settings.BaseUrl.TrimEnd('/') + "/api/chat"
@@ -234,8 +296,7 @@ namespace OfficeTranslate.Core
                     messages = Messages(prompt.Text, text),
                     options = new { temperature = 0.1, num_predict = EstimateMaxOutputTokens(text, settings.TargetLanguage, expandedOutputBudget) }
                 };
-                using (var request = CreateRequest(endpoint, body, settings.ApiKey))
-                using (var response = await _http.SendAsync(request, token).ConfigureAwait(false))
+                using (var response = await SendWithRetryAsync(() => CreateRequest(endpoint, body, settings.ApiKey), token).ConfigureAwait(false))
                 {
                     var raw = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
                     if (!response.IsSuccessStatusCode) throw new InvalidOperationException($"翻译服务返回 {(int)response.StatusCode}: {raw}");
@@ -258,8 +319,7 @@ namespace OfficeTranslate.Core
                 if (IsOfficialDeepSeekEndpoint(settings.BaseUrl))
                     body["thinking"] = new Dictionary<string, object> { ["type"] = "disabled" };
                 if (useCacheKey) body["prompt_cache_key"] = prompt.CacheKey;
-                using (var request = CreateRequest(endpoint, body, settings.ApiKey))
-                using (var response = await _http.SendAsync(request, token).ConfigureAwait(false))
+                using (var response = await SendWithRetryAsync(() => CreateRequest(endpoint, body, settings.ApiKey), token).ConfigureAwait(false))
                 {
                     var raw = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
                     if (response.IsSuccessStatusCode)
@@ -277,6 +337,77 @@ namespace OfficeTranslate.Core
                 }
             }
             throw new InvalidOperationException("翻译服务不支持提示词缓存参数，兼容回退失败。");
+        }
+
+        // Retries transient failures (network errors, timeouts, 429 and 5xx) with
+        // exponential backoff. User cancellation is never retried. A fresh
+        // HttpRequestMessage is created per attempt because a sent request
+        // cannot be re-sent.
+        private async Task<HttpResponseMessage> SendWithRetryAsync(Func<HttpRequestMessage> requestFactory, CancellationToken token)
+        {
+            var backoff = new[] { TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(3) };
+            for (var attempt = 0; ; attempt++)
+            {
+                token.ThrowIfCancellationRequested();
+                var lastAttempt = attempt >= backoff.Length;
+                HttpResponseMessage? response = null;
+                try
+                {
+                    using (var request = requestFactory())
+                        response = await _http.SendAsync(request, token).ConfigureAwait(false);
+                }
+                catch (HttpRequestException) when (!lastAttempt)
+                {
+                    await Task.Delay(backoff[attempt], token).ConfigureAwait(false);
+                    continue;
+                }
+                catch (TaskCanceledException) when (!token.IsCancellationRequested && !lastAttempt)
+                {
+                    // HttpClient timeout, not user cancellation.
+                    await Task.Delay(backoff[attempt], token).ConfigureAwait(false);
+                    continue;
+                }
+
+                if (response != null && IsTransientStatusCode(response.StatusCode) && !lastAttempt)
+                {
+                    var wait = GetRetryDelay(response, backoff[attempt]);
+                    response.Dispose();
+                    await Task.Delay(wait, token).ConfigureAwait(false);
+                    continue;
+                }
+                if (response == null)
+                    throw new InvalidOperationException("翻译服务无响应。");
+                return response;
+            }
+        }
+
+        // Note: HttpStatusCode has no TooManyRequests member on .NET Framework 4.8
+        // (CS0117); compare the numeric code instead.
+        internal static bool IsTransientStatusCode(HttpStatusCode status)
+        {
+            var code = (int)status;
+            return code == 429 ||
+                status == HttpStatusCode.InternalServerError ||
+                status == HttpStatusCode.BadGateway ||
+                status == HttpStatusCode.ServiceUnavailable ||
+                status == HttpStatusCode.GatewayTimeout;
+        }
+
+        private static TimeSpan GetRetryDelay(HttpResponseMessage response, TimeSpan fallback)
+        {
+            // Honor Retry-After when the server tells us how long to wait.
+            if (response.Headers.RetryAfter != null)
+            {
+                if (response.Headers.RetryAfter.Delta is TimeSpan delta && delta > TimeSpan.Zero)
+                    return delta > TimeSpan.FromSeconds(30) ? TimeSpan.FromSeconds(30) : delta;
+                if (response.Headers.RetryAfter.Date is DateTimeOffset date)
+                {
+                    var wait = date - DateTimeOffset.UtcNow;
+                    if (wait > TimeSpan.Zero)
+                        return wait > TimeSpan.FromSeconds(30) ? TimeSpan.FromSeconds(30) : wait;
+                }
+            }
+            return fallback;
         }
 
         private HttpRequestMessage CreateRequest(string endpoint, object body, string apiKey)
@@ -501,17 +632,31 @@ namespace OfficeTranslate.Core
             output.Append(value);
         }
 
-        private static string ReadOllama(Dictionary<string, object>? root)
+        private static ModelResponse ReadOllama(Dictionary<string, object>? root)
         {
-            if (root != null && root.TryGetValue("message", out var m) && m is Dictionary<string, object> msg && msg.TryGetValue("content", out var c)) return Convert.ToString(c) ?? "";
+            if (root != null && root.TryGetValue("message", out var m) && m is Dictionary<string, object> msg && msg.TryGetValue("content", out var c))
+            {
+                var doneReason = root.TryGetValue("done_reason", out var reason) ? Convert.ToString(reason) : string.Empty;
+                return new ModelResponse(Convert.ToString(c) ?? "", IsLengthTruncation(doneReason));
+            }
             throw new InvalidOperationException("无法解析 Ollama 响应。");
         }
 
-        private static string ReadOpenAi(Dictionary<string, object>? root)
+        private static ModelResponse ReadOpenAi(Dictionary<string, object>? root)
         {
-            if (root != null && root.TryGetValue("choices", out var value) && value is object[] choices && choices.FirstOrDefault() is Dictionary<string, object> choice && choice["message"] is Dictionary<string, object> msg) return Convert.ToString(msg["content"]) ?? "";
+            if (root != null && root.TryGetValue("choices", out var value) && value is object[] choices &&
+                choices.FirstOrDefault() is Dictionary<string, object> choice &&
+                choice.TryGetValue("message", out var messageValue) && messageValue is Dictionary<string, object> msg)
+            {
+                var finishReason = choice.TryGetValue("finish_reason", out var reason) ? Convert.ToString(reason) : string.Empty;
+                var content = msg.TryGetValue("content", out var c) ? Convert.ToString(c) ?? string.Empty : string.Empty;
+                return new ModelResponse(content, IsLengthTruncation(finishReason));
+            }
             throw new InvalidOperationException("无法解析 OpenAI-compatible 响应。");
         }
+
+        private static bool IsLengthTruncation(string? reason) =>
+            string.Equals(reason, "length", StringComparison.OrdinalIgnoreCase);
 
         private static IEnumerable<string> Split(string text, int max)
         {
@@ -534,6 +679,13 @@ namespace OfficeTranslate.Core
             public PromptDescriptor(string text, string cacheKey) { Text = text; CacheKey = cacheKey; }
             public string Text { get; }
             public string CacheKey { get; }
+        }
+
+        private sealed class ModelResponse
+        {
+            public ModelResponse(string content, bool truncated) { Content = content; Truncated = truncated; }
+            public string Content { get; }
+            public bool Truncated { get; }
         }
 
         private enum PromptMode { Direct, Strict, Protected }

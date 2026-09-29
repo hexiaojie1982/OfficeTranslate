@@ -3,11 +3,8 @@ using Office = Microsoft.Office.Core;
 using OfficeTranslate.Core;
 using System;
 using System.Collections.Generic;
-using System.Drawing.Imaging;
-using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
-using System.Windows.Forms;
 using Task = System.Threading.Tasks.Task;
 using WordApplication = Microsoft.Office.Interop.Word.Application;
 
@@ -84,16 +81,10 @@ namespace OfficeTranslate.WordAddIn
 
         private async Task<bool> TranslateImageAsync(ImageTarget image, TranslationClient client, TranslationSettings settings, CancellationToken token)
         {
-            image.CopyAsPicture();
-            System.Drawing.Image? clipboardImage = null;
-            for (var attempt = 0; attempt < 10 && clipboardImage == null; attempt++)
-            {
-                if (Clipboard.ContainsImage()) clipboardImage = Clipboard.GetImage();
-                if (clipboardImage == null) Thread.Sleep(50);
-            }
-            if (clipboardImage == null) throw new InvalidOperationException("无法从 Word 图片获取可识别图像。");
-            byte[] bytes;
-            using (clipboardImage) using (var stream = new MemoryStream()) { clipboardImage.Save(stream, ImageFormat.Png); bytes = stream.ToArray(); }
+            // Clipboard round-trip is the only way to rasterize a Word shape.
+            // CapturePng saves/restores the user's clipboard and clears stale
+            // content first so a leftover image is never mistaken for the shape.
+            var bytes = ClipboardImageCapture.CapturePng(image.CopyAsPicture, token);
             var regions = await client.TranslateImageAsync(bytes, settings, token);
             foreach (var region in regions)
             {

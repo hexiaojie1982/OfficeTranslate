@@ -58,28 +58,21 @@ namespace OfficeTranslate.ExcelAddIn
         private async Task<bool> TranslateImageAsync(Excel.Shape image, TranslationClient client, TranslationSettings settings, CancellationToken token)
         {
             var sheet = _excel.ActiveSheet as Excel.Worksheet ?? throw new InvalidOperationException("无法确定图片所在的工作表。");
-            byte[] imageBytes;
-            try
+            // For a picture shape, Copy is more reliable than CopyPicture across
+            // Excel builds and does not create the temporary chart that used to flash.
+            // The copy itself runs inside CapturePng (after the user's clipboard is
+            // saved), so a failed probe can never destroy clipboard content.
+            // CapturePng also clears stale content first so a leftover image is
+            // never mistaken for the shape.
+            var imageBytes = ClipboardImageCapture.CapturePng(() =>
             {
-                // For a picture shape, Copy is more reliable than CopyPicture across
-                // Excel builds and does not create the temporary chart that used to flash.
-                image.Copy();
-            }
-            catch (COMException firstError)
-            {
-                try { image.CopyPicture(Excel.XlPictureAppearance.xlScreen, Excel.XlCopyPictureFormat.xlBitmap); }
-                catch (COMException) { throw new InvalidOperationException("Excel 无法复制所选图片，请重新选择图片后再试。", firstError); }
-            }
-            System.Drawing.Image? clipboardImage = null;
-            for (var attempt = 0; attempt < 20 && clipboardImage == null; attempt++)
-            {
-                token.ThrowIfCancellationRequested();
-                Application.DoEvents();
-                if (Clipboard.ContainsImage()) clipboardImage = Clipboard.GetImage();
-                if (clipboardImage == null) Thread.Sleep(50);
-            }
-            if (clipboardImage == null) throw new InvalidOperationException("无法从 Excel 图片获取可识别图像。");
-            using (clipboardImage) using (var stream = new MemoryStream()) { clipboardImage.Save(stream, ImageFormat.Png); imageBytes = stream.ToArray(); }
+                try { image.Copy(); }
+                catch (COMException)
+                {
+                    try { image.CopyPicture(Excel.XlPictureAppearance.xlScreen, Excel.XlCopyPictureFormat.xlBitmap); }
+                    catch (COMException ex) { throw new InvalidOperationException("Excel 无法复制所选图片，请重新选择图片后再试。", ex); }
+                }
+            }, () => Application.DoEvents(), token);
 
             var regions = await client.TranslateImageAsync(imageBytes, settings, token);
             foreach (var region in regions)
@@ -176,19 +169,31 @@ namespace OfficeTranslate.ExcelAddIn
 
         private static List<Target> ReadRangeTargets(Excel.Range range)
         {
-            var result = new List<Target>(); var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (Excel.Range item in range.Cells)
+            var result = new List<Target>();
+            // A selection can hold several Areas. Read each area's values and
+            // formulas in bulk: a few COM calls per area instead of 3+
+            // round-trips per cell. Write-back still touches only cells that
+            // actually get translated.
+            foreach (Excel.Range area in range.Areas)
             {
-                var cell = item;
-                if ((bool)cell.MergeCells) cell = (Excel.Range)cell.MergeArea.Cells[1, 1];
-                var address = cell.Address[false, false, Excel.XlReferenceStyle.xlA1];
-                if (!seen.Add(address) || (bool)cell.HasFormula) continue;
-                var value = cell.Value2 as string;
-                if (value != null && !string.IsNullOrWhiteSpace(value))
-                {
-                    var targetCell = cell;
-                    result.Add(new Target(value, (text, bilingual) => { targetCell.Value2 = text; if (bilingual) targetCell.WrapText = true; }));
-                }
+                var values = RangeGridHelper.Normalize(area.Value2);
+                var formulas = RangeGridHelper.Normalize(area.Formula);
+                var formulaFlags = RangeGridHelper.Normalize(area.HasFormula);
+                var rows = values.GetLength(0);
+                var cols = values.GetLength(1);
+                for (var r = 0; r < rows; r++)
+                    for (var c = 0; c < cols; c++)
+                    {
+                        if (RangeGridHelper.IsFormulaCell(formulaFlags, formulas, r, c)) continue;
+                        if (values[r, c] is string value && !string.IsNullOrWhiteSpace(value))
+                        {
+                            // Merged areas expose their value only in the top-left
+                            // cell; the rest read as empty, so no dedup is needed.
+                            // Cells is 1-based relative to the area.
+                            var targetCell = (Excel.Range)area.Cells[r + 1, c + 1];
+                            result.Add(new Target(value, (text, bilingual) => { targetCell.Value2 = text; if (bilingual) targetCell.WrapText = true; }));
+                        }
+                    }
             }
             return result;
         }

@@ -7,7 +7,6 @@ using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
-using System.Linq;
 using Task = System.Threading.Tasks.Task;
 using WordApplication = Microsoft.Office.Interop.Word.Application;
 
@@ -25,8 +24,6 @@ namespace OfficeTranslate.WordAddIn
         private TranslationProgressForm? _progressForm;
         private readonly SettingsStore _settingsStore = new SettingsStore();
         private TranslationSettings _settings = new TranslationSettings();
-        private static readonly string[] SourceLanguages = { "自动检测", "简体中文", "繁體中文", "英语", "日语", "韩语", "法语", "德语", "西班牙语", "俄语", "葡萄牙语", "意大利语", "阿拉伯语" };
-        private static readonly string[] TargetLanguages = SourceLanguages.Skip(1).ToArray();
 
         public string GetCustomUI(string ribbonId)
         {
@@ -50,12 +47,6 @@ namespace OfficeTranslate.WordAddIn
             var value = UiText.Get(_settings.UiLanguage, key);
             return _settings.UiLanguage == "en" ? value : string.Join("\u2060", value.ToCharArray());
         }
-        public int GetSourceLanguageCount(Microsoft.Office.Core.IRibbonControl control) => SourceLanguages.Length;
-        public string GetSourceLanguageLabel(Microsoft.Office.Core.IRibbonControl control, int index) => SourceLanguages[index];
-        public int GetSourceLanguageIndex(Microsoft.Office.Core.IRibbonControl control) => Math.Max(0, Array.IndexOf(SourceLanguages, _settings.SourceLanguage));
-        public int GetTargetLanguageCount(Microsoft.Office.Core.IRibbonControl control) => TargetLanguages.Length;
-        public string GetTargetLanguageLabel(Microsoft.Office.Core.IRibbonControl control, int index) => TargetLanguages[index];
-        public int GetTargetLanguageIndex(Microsoft.Office.Core.IRibbonControl control) => Math.Max(0, Array.IndexOf(TargetLanguages, _settings.TargetLanguage));
         public bool GetBilingualMode(Microsoft.Office.Core.IRibbonControl control) => _settings.BilingualMode;
         public bool GetImageOcrMode(Microsoft.Office.Core.IRibbonControl control) => _settings.ImageOcrEnabled;
         public bool GetImageOcrVisible(Microsoft.Office.Core.IRibbonControl control) => true;
@@ -75,14 +66,6 @@ namespace OfficeTranslate.WordAddIn
         {
             _settings.TargetLanguage = control.Tag;
             _ribbon?.InvalidateControl("OfficeTranslate.TargetLanguageMenu");
-        }
-        public void SourceLanguageChanged(Microsoft.Office.Core.IRibbonControl control, string selectedId, int selectedIndex)
-        {
-            _settings.SourceLanguage = SourceLanguages[selectedIndex];
-        }
-        public void TargetLanguageChanged(Microsoft.Office.Core.IRibbonControl control, string selectedId, int selectedIndex)
-        {
-            _settings.TargetLanguage = TargetLanguages[selectedIndex];
         }
         public void SwapLanguages(Microsoft.Office.Core.IRibbonControl control)
         {
