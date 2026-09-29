@@ -16,9 +16,11 @@ namespace OfficeTranslate.Core
     public sealed class TranslationClient : IDisposable
     {
         private readonly HttpClient _http = new HttpClient();
-        // Image OCR embeds a whole PNG as base64 in the request body, which easily
-        // exceeds the serializer's default 102400-char limit and would otherwise
-        // throw "The length of the string exceeds the value set on the maxJsonLength property".
+        // Image OCR embeds a whole PNG as base64 in the request body, which can be
+        // megabytes long. Raising MaxJsonLength removes the serializer as a
+        // possible failure point for large payloads. (The exact default
+        // threshold was not measured in the target .NET Framework 4.8 runtime;
+        // verify there before quoting a number.)
         private readonly JavaScriptSerializer _json = new JavaScriptSerializer { MaxJsonLength = int.MaxValue };
         private static readonly ConcurrentDictionary<string, PromptDescriptor> PromptDescriptors =
             new ConcurrentDictionary<string, PromptDescriptor>(StringComparer.Ordinal);
@@ -112,27 +114,60 @@ namespace OfficeTranslate.Core
             var endpoint = settings.Provider == ProviderKind.Ollama
                 ? settings.BaseUrl.TrimEnd('/') + "/api/chat"
                 : settings.BaseUrl.TrimEnd('/') + "/chat/completions";
-            object body;
-            if (settings.Provider == ProviderKind.Ollama)
-                body = new { model, stream = false, format = "json", messages = new[] { new { role = "user", content = prompt, images = new[] { base64 } } } };
-            else
-                body = new { model, temperature = 0.1, messages = new object[] { new { role = "user", content = new object[] { new { type = "text", text = prompt }, new { type = "image_url", image_url = new { url = "data:image/png;base64," + base64 } } } } } };
-            using (var request = new HttpRequestMessage(HttpMethod.Post, endpoint))
+            try
             {
-                request.Content = new StringContent(_json.Serialize(body), Encoding.UTF8, "application/json");
-                if (!string.IsNullOrWhiteSpace(settings.ApiKey)) request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", settings.ApiKey);
-                using (var response = await _http.SendAsync(request, token).ConfigureAwait(false))
-                {
-                    var raw = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
-                    if (!response.IsSuccessStatusCode) throw new InvalidOperationException($"图片识别服务返回 {(int)response.StatusCode}: {raw}");
-                    var root = _json.DeserializeObject(raw) as Dictionary<string, object>;
-                    var imageResponse = settings.Provider == ProviderKind.Ollama ? ReadOllama(root) : ReadOpenAi(root);
-                    if (imageResponse.Truncated)
-                        throw new InvalidOperationException("图片模型的输出因长度限制被截断，未生成译文覆盖框。请更换视觉模型或缩小图片后重试。");
-                    return ParseImageRegions(imageResponse.Content);
-                }
+                return await RequestImageRegionsAsync(endpoint, model, prompt, base64, settings, token, true).ConfigureAwait(false);
+            }
+            catch (ImageFormatNotSupportedException)
+            {
+                // Older OpenAI-compatible servers may reject the structured-output
+                // parameter; fall back to asking for JSON through the prompt only.
+                return await RequestImageRegionsAsync(endpoint, model, prompt, base64, settings, token, false).ConfigureAwait(false);
             }
         }
+
+        private sealed class ImageFormatNotSupportedException : InvalidOperationException
+        {
+            public ImageFormatNotSupportedException(string message) : base(message) { }
+        }
+
+        private async Task<IReadOnlyList<ImageTranslationRegion>> RequestImageRegionsAsync(string endpoint, string model, string prompt, string base64, TranslationSettings settings, CancellationToken token, bool structuredOutput)
+        {
+            object body;
+            if (settings.Provider == ProviderKind.Ollama)
+            {
+                var messages = new[] { new { role = "user", content = prompt, images = new[] { base64 } } };
+                body = structuredOutput
+                    ? (object)new { model, stream = false, format = "json", messages }
+                    : new { model, stream = false, messages };
+            }
+            else
+            {
+                var messages = new object[] { new { role = "user", content = new object[] { new { type = "text", text = prompt }, new { type = "image_url", image_url = new { url = "data:image/png;base64," + base64 } } } } };
+                body = structuredOutput
+                    ? (object)new { model, temperature = 0.1, response_format = new { type = "json_object" }, messages }
+                    : new { model, temperature = 0.1, messages };
+            }
+            using (var response = await SendWithRetryAsync(() => CreateRequest(endpoint, body, settings.ApiKey), token).ConfigureAwait(false))
+            {
+                var raw = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+                if (!response.IsSuccessStatusCode)
+                {
+                    if ((int)response.StatusCode == 400 && IsFormatRejection(raw))
+                        throw new ImageFormatNotSupportedException($"图片识别服务不支持结构化输出参数，已回退为纯提示词模式: {raw}");
+                    throw new InvalidOperationException($"图片识别服务返回 {(int)response.StatusCode}: {raw}");
+                }
+                var root = _json.DeserializeObject(raw) as Dictionary<string, object>;
+                var imageResponse = settings.Provider == ProviderKind.Ollama ? ReadOllama(root) : ReadOpenAi(root);
+                if (imageResponse.Truncated)
+                    throw new InvalidOperationException("图片模型的输出因长度限制被截断，未生成译文覆盖框。请更换视觉模型或缩小图片后重试。");
+                return ParseImageRegions(imageResponse.Content);
+            }
+        }
+
+        private static bool IsFormatRejection(string raw) =>
+            raw != null && (raw.IndexOf("response_format", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                            raw.IndexOf("\"format\"", StringComparison.OrdinalIgnoreCase) >= 0);
 
         private IReadOnlyList<ImageTranslationRegion> ParseImageRegions(string content)
         {
@@ -256,8 +291,7 @@ namespace OfficeTranslate.Core
                     messages = Messages(prompt.Text, text),
                     options = new { temperature = 0.1, num_predict = EstimateMaxOutputTokens(text, settings.TargetLanguage, expandedOutputBudget) }
                 };
-                using (var request = CreateRequest(endpoint, body, settings.ApiKey))
-                using (var response = await _http.SendAsync(request, token).ConfigureAwait(false))
+                using (var response = await SendWithRetryAsync(() => CreateRequest(endpoint, body, settings.ApiKey), token).ConfigureAwait(false))
                 {
                     var raw = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
                     if (!response.IsSuccessStatusCode) throw new InvalidOperationException($"翻译服务返回 {(int)response.StatusCode}: {raw}");
@@ -280,8 +314,7 @@ namespace OfficeTranslate.Core
                 if (IsOfficialDeepSeekEndpoint(settings.BaseUrl))
                     body["thinking"] = new Dictionary<string, object> { ["type"] = "disabled" };
                 if (useCacheKey) body["prompt_cache_key"] = prompt.CacheKey;
-                using (var request = CreateRequest(endpoint, body, settings.ApiKey))
-                using (var response = await _http.SendAsync(request, token).ConfigureAwait(false))
+                using (var response = await SendWithRetryAsync(() => CreateRequest(endpoint, body, settings.ApiKey), token).ConfigureAwait(false))
                 {
                     var raw = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
                     if (response.IsSuccessStatusCode)
@@ -299,6 +332,74 @@ namespace OfficeTranslate.Core
                 }
             }
             throw new InvalidOperationException("翻译服务不支持提示词缓存参数，兼容回退失败。");
+        }
+
+        // Retries transient failures (network errors, timeouts, 429 and 5xx) with
+        // exponential backoff. User cancellation is never retried. A fresh
+        // HttpRequestMessage is created per attempt because a sent request
+        // cannot be re-sent.
+        private async Task<HttpResponseMessage> SendWithRetryAsync(Func<HttpRequestMessage> requestFactory, CancellationToken token)
+        {
+            var backoff = new[] { TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(3) };
+            for (var attempt = 0; ; attempt++)
+            {
+                token.ThrowIfCancellationRequested();
+                var lastAttempt = attempt >= backoff.Length;
+                HttpResponseMessage? response = null;
+                try
+                {
+                    using (var request = requestFactory())
+                        response = await _http.SendAsync(request, token).ConfigureAwait(false);
+                }
+                catch (HttpRequestException) when (!lastAttempt)
+                {
+                    await Task.Delay(backoff[attempt], token).ConfigureAwait(false);
+                    continue;
+                }
+                catch (TaskCanceledException) when (!token.IsCancellationRequested && !lastAttempt)
+                {
+                    // HttpClient timeout, not user cancellation.
+                    await Task.Delay(backoff[attempt], token).ConfigureAwait(false);
+                    continue;
+                }
+
+                if (response != null && IsTransientStatusCode(response.StatusCode) && !lastAttempt)
+                {
+                    var wait = GetRetryDelay(response, backoff[attempt]);
+                    response.Dispose();
+                    await Task.Delay(wait, token).ConfigureAwait(false);
+                    continue;
+                }
+                if (response == null)
+                    throw new InvalidOperationException("翻译服务无响应。");
+                return response;
+            }
+        }
+
+        private static bool IsTransientStatusCode(HttpStatusCode status)
+        {
+            return status == HttpStatusCode.TooManyRequests ||
+                status == HttpStatusCode.InternalServerError ||
+                status == HttpStatusCode.BadGateway ||
+                status == HttpStatusCode.ServiceUnavailable ||
+                status == HttpStatusCode.GatewayTimeout;
+        }
+
+        private static TimeSpan GetRetryDelay(HttpResponseMessage response, TimeSpan fallback)
+        {
+            // Honor Retry-After when the server tells us how long to wait.
+            if (response.Headers.RetryAfter != null)
+            {
+                if (response.Headers.RetryAfter.Delta is TimeSpan delta && delta > TimeSpan.Zero)
+                    return delta > TimeSpan.FromSeconds(30) ? TimeSpan.FromSeconds(30) : delta;
+                if (response.Headers.RetryAfter.Date is DateTimeOffset date)
+                {
+                    var wait = date - DateTimeOffset.UtcNow;
+                    if (wait > TimeSpan.Zero)
+                        return wait > TimeSpan.FromSeconds(30) ? TimeSpan.FromSeconds(30) : wait;
+                }
+            }
+            return fallback;
         }
 
         private HttpRequestMessage CreateRequest(string endpoint, object body, string apiKey)

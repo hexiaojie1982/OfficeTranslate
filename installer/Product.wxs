@@ -16,9 +16,9 @@
   <Fragment>
     <Directory Id="TARGETDIR" Name="SourceDir">
       <Directory Id="ProgramFiles64Folder">
-        <Directory Id="CompanyFolder" Name="OfficeTranslate">
-          <Directory Id="INSTALLFOLDER" Name="Word" />
-        </Directory>
+        <!-- All three add-ins install directly here; the old "Word" subfolder
+             name was a leftover from when only the Word add-in existed. -->
+        <Directory Id="INSTALLFOLDER" Name="OfficeTranslate" />
       </Directory>
     </Directory>
   </Fragment>
