@@ -58,6 +58,10 @@ foreach ($info in $assemblyInfos) {
     if ($content -notlike $pattern) {
         throw "Version mismatch: $($info.FullName) does not declare [assembly: AssemblyVersion(`"$productVersion.0`")]. Update it to match VERSION.txt ($productVersion)."
     }
+    $filePattern = '*`[assembly: AssemblyFileVersion("' + $productVersion + '.0`")]*'
+    if ($content -notlike $filePattern) {
+        throw "Version mismatch: $($info.FullName) does not declare [assembly: AssemblyFileVersion(`"$productVersion.0`")]. Update it to match VERSION.txt ($productVersion)."
+    }
 }
 Write-Host "Version check OK: $productVersion (from VERSION.txt)"
 

@@ -37,7 +37,9 @@ namespace OfficeTranslate.Core
             var saved = SafeGetDataObject();
             try
             {
-                SafeClear();
+                // Must actually clear: if a stale image survives here it would be
+                // captured as the shape.
+                ClearWithRetry();
                 copyToClipboard();
 
                 System.Drawing.Image? image = null;
@@ -80,6 +82,18 @@ namespace OfficeTranslate.Core
         {
             try { Clipboard.Clear(); }
             catch { }
+        }
+
+        // The clipboard is a shared global; another app may hold it open. Retry
+        // briefly, but never silently continue: a stale image left behind could
+        // be captured as the shape, so persistent failure aborts the capture.
+        private static void ClearWithRetry()
+        {
+            for (var attempt = 0; attempt < 5; attempt++)
+            {
+                try { Clipboard.Clear(); return; }
+                catch when (attempt < 4) { Thread.Sleep(100); }
+            }
         }
     }
 }

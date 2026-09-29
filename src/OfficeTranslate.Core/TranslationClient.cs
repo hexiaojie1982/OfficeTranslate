@@ -153,7 +153,7 @@ namespace OfficeTranslate.Core
                 var raw = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
                 if (!response.IsSuccessStatusCode)
                 {
-                    if ((int)response.StatusCode == 400 && IsFormatRejection(raw))
+                    if (ShouldFallbackFromStructuredOutput((int)response.StatusCode, raw))
                         throw new ImageFormatNotSupportedException($"图片识别服务不支持结构化输出参数，已回退为纯提示词模式: {raw}");
                     throw new InvalidOperationException($"图片识别服务返回 {(int)response.StatusCode}: {raw}");
                 }
@@ -164,6 +164,11 @@ namespace OfficeTranslate.Core
                 return ParseImageRegions(imageResponse.Content);
             }
         }
+
+        // Some OpenAI-compatible servers (e.g. vLLM front-ends) answer 422 instead
+        // of 400 when they do not understand response_format.
+        internal static bool ShouldFallbackFromStructuredOutput(int statusCode, string raw) =>
+            (statusCode == 400 || statusCode == 422) && IsFormatRejection(raw);
 
         private static bool IsFormatRejection(string raw) =>
             raw != null && (raw.IndexOf("response_format", StringComparison.OrdinalIgnoreCase) >= 0 ||
@@ -376,9 +381,12 @@ namespace OfficeTranslate.Core
             }
         }
 
-        private static bool IsTransientStatusCode(HttpStatusCode status)
+        // Note: HttpStatusCode has no TooManyRequests member on .NET Framework 4.8
+        // (CS0117); compare the numeric code instead.
+        internal static bool IsTransientStatusCode(HttpStatusCode status)
         {
-            return status == HttpStatusCode.TooManyRequests ||
+            var code = (int)status;
+            return code == 429 ||
                 status == HttpStatusCode.InternalServerError ||
                 status == HttpStatusCode.BadGateway ||
                 status == HttpStatusCode.ServiceUnavailable ||

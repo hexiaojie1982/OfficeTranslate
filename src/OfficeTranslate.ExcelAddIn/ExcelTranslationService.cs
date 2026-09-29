@@ -170,38 +170,32 @@ namespace OfficeTranslate.ExcelAddIn
         private static List<Target> ReadRangeTargets(Excel.Range range)
         {
             var result = new List<Target>();
-            // Two bulk COM calls for the whole range instead of 3+ round-trips per
-            // cell (MergeCells, HasFormula, Value2, Address). On a 10k-cell sheet
-            // this turns minutes of COM chatter into two array transfers.
-            // Write-back still touches only cells that actually get translated.
-            var values = ToCellArray(range.Value2);
-            var hasFormula = ToCellArray(range.HasFormula);
-            var rows = values.GetLength(0);
-            var cols = values.GetLength(1);
-            for (var r = 1; r <= rows; r++)
-                for (var c = 1; c <= cols; c++)
-                {
-                    if (hasFormula[r, c] is bool isFormula && isFormula) continue;
-                    if (values[r, c] is string value && !string.IsNullOrWhiteSpace(value))
+            // A selection can hold several Areas. Read each area's values and
+            // formulas in bulk: a few COM calls per area instead of 3+
+            // round-trips per cell. Write-back still touches only cells that
+            // actually get translated.
+            foreach (Excel.Range area in range.Areas)
+            {
+                var values = RangeGridHelper.Normalize(area.Value2);
+                var formulas = RangeGridHelper.Normalize(area.Formula);
+                var formulaFlags = RangeGridHelper.Normalize(area.HasFormula);
+                var rows = values.GetLength(0);
+                var cols = values.GetLength(1);
+                for (var r = 0; r < rows; r++)
+                    for (var c = 0; c < cols; c++)
                     {
-                        // Array indexes are 1-based relative to the range, matching
-                        // Range.Cells[row, column]. Merged areas expose their value
-                        // only in the top-left cell, so no address dedup is needed.
-                        var targetCell = (Excel.Range)range.Cells[r, c];
-                        result.Add(new Target(value, (text, bilingual) => { targetCell.Value2 = text; if (bilingual) targetCell.WrapText = true; }));
+                        if (RangeGridHelper.IsFormulaCell(formulaFlags, formulas, r, c)) continue;
+                        if (values[r, c] is string value && !string.IsNullOrWhiteSpace(value))
+                        {
+                            // Merged areas expose their value only in the top-left
+                            // cell; the rest read as empty, so no dedup is needed.
+                            // Cells is 1-based relative to the area.
+                            var targetCell = (Excel.Range)area.Cells[r + 1, c + 1];
+                            result.Add(new Target(value, (text, bilingual) => { targetCell.Value2 = text; if (bilingual) targetCell.WrapText = true; }));
+                        }
                     }
-                }
+            }
             return result;
-        }
-
-        // Excel returns a 1-based object[,] for multi-cell ranges but a scalar
-        // for a single cell. Normalize to a 1-based 2-D array either way.
-        private static object[,] ToCellArray(object raw)
-        {
-            if (raw is object[,] grid) return grid;
-            var single = new object[2, 2];
-            single[1, 1] = raw;
-            return single;
         }
 
         private static void AddShape(Excel.Shape shape, List<Target> result)
