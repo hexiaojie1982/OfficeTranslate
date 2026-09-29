@@ -11,7 +11,7 @@ namespace OfficeTranslate.Core
         private readonly string _path = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "OfficeTranslate", "settings.json");
-        private readonly JavaScriptSerializer _json = new JavaScriptSerializer();
+        private readonly JavaScriptSerializer _json = new JavaScriptSerializer { MaxJsonLength = int.MaxValue };
 
         public TranslationSettings Load()
         {

@@ -1,3 +1,4 @@
+using System;
 using System.Drawing;
 using System.Windows.Forms;
 
@@ -5,7 +6,17 @@ namespace OfficeTranslate.WordAddIn
 {
     internal sealed class AboutForm : Form
     {
-        public const string CurrentVersion = "2.1.22";
+        // Version is read from the assembly so it can never drift from the
+        // AssemblyVersion declared in AssemblyInfo.cs (checked by build.ps1
+        // against VERSION.txt).
+        public static string CurrentVersion
+        {
+            get
+            {
+                var version = typeof(AboutForm).Assembly.GetName().Version;
+                return version == null ? string.Empty : version.Major + "." + version.Minor + "." + version.Build;
+            }
+        }
         private readonly string _language;
         private readonly TextBox _content = new TextBox();
 
@@ -56,7 +67,7 @@ namespace OfficeTranslate.WordAddIn
 
         private string ChangelogText()
         {
-            return "OfficeTranslate 2.1.22\r\n• 对 Word、Excel 和 PowerPoint 的换行符进行程序级保护，避免多行文本翻译后合并成一行。\r\n• 支持保留 CRLF、CR、LF、Word 手动换行、分页符及 Unicode 行分隔符的原始类型和顺序。\r\n• 正常翻译仍保持整段一次请求，仅在模型破坏换行时进行一次占位符安全重试。\r\n\r\n" + ChangelogVersion221Text();
+            return "OfficeTranslate " + CurrentVersion + "\r\n• 对 Word、Excel 和 PowerPoint 的换行符进行程序级保护，避免多行文本翻译后合并成一行。\r\n• 支持保留 CRLF、CR、LF、Word 手动换行、分页符及 Unicode 行分隔符的原始类型和顺序。\r\n• 正常翻译仍保持整段一次请求，仅在模型破坏换行时进行一次占位符安全重试。\r\n\r\n" + ChangelogVersion221Text();
         }
 
         private string ChangelogVersion221Text()

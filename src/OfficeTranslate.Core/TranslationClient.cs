@@ -16,7 +16,10 @@ namespace OfficeTranslate.Core
     public sealed class TranslationClient : IDisposable
     {
         private readonly HttpClient _http = new HttpClient();
-        private readonly JavaScriptSerializer _json = new JavaScriptSerializer();
+        // Image OCR embeds a whole PNG as base64 in the request body, which easily
+        // exceeds the serializer's default 102400-char limit and would otherwise
+        // throw "The length of the string exceeds the value set on the maxJsonLength property".
+        private readonly JavaScriptSerializer _json = new JavaScriptSerializer { MaxJsonLength = int.MaxValue };
         private static readonly ConcurrentDictionary<string, PromptDescriptor> PromptDescriptors =
             new ConcurrentDictionary<string, PromptDescriptor>(StringComparer.Ordinal);
         private static readonly ConcurrentDictionary<string, bool> PromptCacheKeySupport =
@@ -123,8 +126,10 @@ namespace OfficeTranslate.Core
                     var raw = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
                     if (!response.IsSuccessStatusCode) throw new InvalidOperationException($"图片识别服务返回 {(int)response.StatusCode}: {raw}");
                     var root = _json.DeserializeObject(raw) as Dictionary<string, object>;
-                    var content = settings.Provider == ProviderKind.Ollama ? ReadOllama(root) : ReadOpenAi(root);
-                    return ParseImageRegions(content);
+                    var imageResponse = settings.Provider == ProviderKind.Ollama ? ReadOllama(root) : ReadOpenAi(root);
+                    if (imageResponse.Truncated)
+                        throw new InvalidOperationException("图片模型的输出因长度限制被截断，未生成译文覆盖框。请更换视觉模型或缩小图片后重试。");
+                    return ParseImageRegions(imageResponse.Content);
                 }
             }
         }
@@ -172,12 +177,14 @@ namespace OfficeTranslate.Core
                 return await TranslateMixedLanguageChunkAsync(text, protectedText, settings, token).ConfigureAwait(false);
 
             var prompt = GetPromptDescriptor(settings, PromptMode.Direct);
-            string translated;
-            translated = await SendTranslationRequestAsync(text, prompt, settings, token).ConfigureAwait(false);
+            var response = await SendTranslationRequestAsync(text, prompt, settings, token).ConfigureAwait(false);
+            var translated = response.Content;
             if (string.IsNullOrWhiteSpace(translated))
                 return await RetryUnchangedChunkAsync(text, protectedText, settings, token).ConfigureAwait(false);
 
-            if (IsCompleteTranslation(text, translated, settings)) return TranslationResult.Translated(translated);
+            // A response cut off by the output token limit is never treated as a
+            // complete translation; the strict retry below uses an expanded budget.
+            if (!response.Truncated && IsCompleteTranslation(text, translated, settings)) return TranslationResult.Translated(translated);
             return await RetryUnchangedChunkAsync(text, protectedText, settings, token).ConfigureAwait(false);
         }
 
@@ -186,15 +193,17 @@ namespace OfficeTranslate.Core
             // Translating the intact paragraph gives the model enough context and is much faster than
             // translating dozens of tiny pieces. Protected foreign terms are then verified in order.
             var directPrompt = GetPromptDescriptor(settings, PromptMode.Direct);
-            var direct = await SendTranslationRequestAsync(original, directPrompt, settings, token).ConfigureAwait(false);
-            if (IsCompleteTranslation(original, direct, settings) && protectedText.PreservesProtectedSegmentsInOrder(direct))
+            var directResponse = await SendTranslationRequestAsync(original, directPrompt, settings, token).ConfigureAwait(false);
+            var direct = directResponse.Content;
+            if (!directResponse.Truncated && IsCompleteTranslation(original, direct, settings) && protectedText.PreservesProtectedSegmentsInOrder(direct))
                 return TranslationResult.Translated(direct);
 
             // Retry at most once. The fallback protects foreign terms with placeholders while still
             // translating the whole paragraph, so it keeps context without multiplying API calls.
             var protectedPrompt = GetPromptDescriptor(settings, PromptMode.Protected);
-            var protectedResult = await SendTranslationRequestAsync(protectedText.Text, protectedPrompt, settings, token, true).ConfigureAwait(false);
-            if (!string.IsNullOrWhiteSpace(protectedResult))
+            var protectedResponse = await SendTranslationRequestAsync(protectedText.Text, protectedPrompt, settings, token, true).ConfigureAwait(false);
+            var protectedResult = protectedResponse.Content;
+            if (!protectedResponse.Truncated && !string.IsNullOrWhiteSpace(protectedResult))
             {
                 try
                 {
@@ -205,22 +214,35 @@ namespace OfficeTranslate.Core
                 catch (ProtectedContentException) { }
             }
 
-            throw new InvalidOperationException("翻译结果仍包含大量未翻译的源语言内容，或修改了受保护的非源语言内容。为避免写入残缺译文，本段已停止写回，请重试或更换模型。");
+            // A single stubborn paragraph must not abort the whole task. Keep the
+            // original text and let the task summary flag it for manual review.
+            return TranslationResult.Unchanged(original);
         }
 
         private async Task<TranslationResult> RetryUnchangedChunkAsync(string original, ProtectedTranslationText protectedText, TranslationSettings settings, CancellationToken token)
         {
             var strictPrompt = GetPromptDescriptor(settings, PromptMode.Strict);
-            var retried = await SendTranslationRequestAsync(protectedText.Text, strictPrompt, settings, token, true).ConfigureAwait(false);
+            var response = await SendTranslationRequestAsync(protectedText.Text, strictPrompt, settings, token, true).ConfigureAwait(false);
+            var retried = response.Content;
             if (string.IsNullOrWhiteSpace(retried))
                 throw new InvalidOperationException("翻译模型连续返回空内容，已停止写回。");
-            retried = protectedText.Restore(retried, NeedsCjkLoanwordSpacing(settings));
-            return IsCompleteTranslation(original, retried, settings)
-                ? TranslationResult.Translated(retried)
+            string restored;
+            try
+            {
+                restored = protectedText.Restore(retried, NeedsCjkLoanwordSpacing(settings));
+            }
+            catch (ProtectedContentException)
+            {
+                return TranslationResult.Unchanged(original);
+            }
+            // Even the expanded output budget can be exhausted by a very long chunk.
+            // Never write back a truncated translation as if it were complete.
+            return !response.Truncated && IsCompleteTranslation(original, restored, settings)
+                ? TranslationResult.Translated(restored)
                 : TranslationResult.Unchanged(original);
         }
 
-        private async Task<string> SendTranslationRequestAsync(string text, PromptDescriptor prompt, TranslationSettings settings, CancellationToken token, bool expandedOutputBudget = false)
+        private async Task<ModelResponse> SendTranslationRequestAsync(string text, PromptDescriptor prompt, TranslationSettings settings, CancellationToken token, bool expandedOutputBudget = false)
         {
             var endpoint = settings.Provider == ProviderKind.Ollama
                 ? settings.BaseUrl.TrimEnd('/') + "/api/chat"
@@ -501,17 +523,31 @@ namespace OfficeTranslate.Core
             output.Append(value);
         }
 
-        private static string ReadOllama(Dictionary<string, object>? root)
+        private static ModelResponse ReadOllama(Dictionary<string, object>? root)
         {
-            if (root != null && root.TryGetValue("message", out var m) && m is Dictionary<string, object> msg && msg.TryGetValue("content", out var c)) return Convert.ToString(c) ?? "";
+            if (root != null && root.TryGetValue("message", out var m) && m is Dictionary<string, object> msg && msg.TryGetValue("content", out var c))
+            {
+                var doneReason = root.TryGetValue("done_reason", out var reason) ? Convert.ToString(reason) : string.Empty;
+                return new ModelResponse(Convert.ToString(c) ?? "", IsLengthTruncation(doneReason));
+            }
             throw new InvalidOperationException("无法解析 Ollama 响应。");
         }
 
-        private static string ReadOpenAi(Dictionary<string, object>? root)
+        private static ModelResponse ReadOpenAi(Dictionary<string, object>? root)
         {
-            if (root != null && root.TryGetValue("choices", out var value) && value is object[] choices && choices.FirstOrDefault() is Dictionary<string, object> choice && choice["message"] is Dictionary<string, object> msg) return Convert.ToString(msg["content"]) ?? "";
+            if (root != null && root.TryGetValue("choices", out var value) && value is object[] choices &&
+                choices.FirstOrDefault() is Dictionary<string, object> choice &&
+                choice.TryGetValue("message", out var messageValue) && messageValue is Dictionary<string, object> msg)
+            {
+                var finishReason = choice.TryGetValue("finish_reason", out var reason) ? Convert.ToString(reason) : string.Empty;
+                var content = msg.TryGetValue("content", out var c) ? Convert.ToString(c) ?? string.Empty : string.Empty;
+                return new ModelResponse(content, IsLengthTruncation(finishReason));
+            }
             throw new InvalidOperationException("无法解析 OpenAI-compatible 响应。");
         }
+
+        private static bool IsLengthTruncation(string? reason) =>
+            string.Equals(reason, "length", StringComparison.OrdinalIgnoreCase);
 
         private static IEnumerable<string> Split(string text, int max)
         {
@@ -534,6 +570,13 @@ namespace OfficeTranslate.Core
             public PromptDescriptor(string text, string cacheKey) { Text = text; CacheKey = cacheKey; }
             public string Text { get; }
             public string CacheKey { get; }
+        }
+
+        private sealed class ModelResponse
+        {
+            public ModelResponse(string content, bool truncated) { Content = content; Truncated = truncated; }
+            public string Content { get; }
+            public bool Truncated { get; }
         }
 
         private enum PromptMode { Direct, Strict, Protected }

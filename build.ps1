@@ -42,13 +42,32 @@ if ($missing.Count -gt 0) {
     throw $message
 }
 
+# Single source of truth for the product version. The MSI, the registry "Assembly"
+# values (which must match the DLL version exactly for COM activation) and the
+# About dialog all derive from this file.
+$versionFile = Join-Path $root 'VERSION.txt'
+if (-not (Test-Path $versionFile)) { throw "VERSION.txt not found at $versionFile" }
+$productVersion = (Get-Content $versionFile -Raw).Trim()
+if ($productVersion -notmatch '^\d+\.\d+\.\d+$') { throw "VERSION.txt must contain a version like 2.1.22, got: '$productVersion'" }
+
+$assemblyInfos = Get-ChildItem (Join-Path $root 'src') -Recurse -Filter AssemblyInfo.cs
+if ($assemblyInfos.Count -eq 0) { throw 'No AssemblyInfo.cs found under src\ - version check cannot run.' }
+foreach ($info in $assemblyInfos) {
+    $content = Get-Content $info.FullName -Raw
+    $pattern = '*`[assembly: AssemblyVersion("' + $productVersion + '.0`")]*'
+    if ($content -notlike $pattern) {
+        throw "Version mismatch: $($info.FullName) does not declare [assembly: AssemblyVersion(`"$productVersion.0`")]. Update it to match VERSION.txt ($productVersion)."
+    }
+}
+Write-Host "Version check OK: $productVersion (from VERSION.txt)"
+
 dotnet restore $solution
 if ($LASTEXITCODE -ne 0) { throw "dotnet restore failed with exit code $LASTEXITCODE" }
 dotnet build $solution -c $Configuration --no-restore
 if ($LASTEXITCODE -ne 0) { throw "dotnet build failed with exit code $LASTEXITCODE" }
 New-Item -ItemType Directory -Force -Path $artifacts | Out-Null
 
-& $candlePath (Join-Path $root 'installer\Product.wxs') ("-dBuildOutput={0}" -f $output) ("-dExcelOutput={0}" -f $excelOutput) ("-dPowerPointOutput={0}" -f $powerPointOutput) ("-dLicenseRtf={0}" -f (Join-Path $root 'installer\License.rtf')) -out (Join-Path $artifacts 'Product.wixobj') -arch x64
+& $candlePath (Join-Path $root 'installer\Product.wxs') ("-dBuildOutput={0}" -f $output) ("-dExcelOutput={0}" -f $excelOutput) ("-dPowerPointOutput={0}" -f $powerPointOutput) ("-dLicenseRtf={0}" -f (Join-Path $root 'installer\License.rtf')) ("-dProductVersion={0}" -f $productVersion) -out (Join-Path $artifacts 'Product.wixobj') -arch x64
 if ($LASTEXITCODE -ne 0) { throw "candle.exe failed with exit code $LASTEXITCODE" }
 & $lightPath (Join-Path $artifacts 'Product.wixobj') -ext WixUIExtension -cultures:zh-cn -sice:ICE61 -out (Join-Path $artifacts 'OfficeTranslate.Office.x64.msi')
 if ($LASTEXITCODE -ne 0) { throw "light.exe failed with exit code $LASTEXITCODE" }
