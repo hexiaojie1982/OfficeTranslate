@@ -7,43 +7,54 @@ namespace OfficeTranslate.Tests
     public sealed class ImageOverlayLayoutTests
     {
         [TestMethod]
-        public void Calculate_ShortText_KeepsOriginalHeight()
+        public void FitFontSize_ShortText_UsesLargeSizeAndFits()
         {
-            // fontSize = 20 * 0.55 = 11; one visual line needs 11 * 1.4 + 4 = 19.4 < 20.
-            var metrics = ImageOverlayLayout.Calculate(200F, 20F, "Hello");
+            // Single short line in a 200x20 region: the largest fitting size wins.
+            var metrics = ImageOverlayLayout.FitFontSize(200F, 20F, "Hello");
 
-            Assert.AreEqual(11F, metrics.FontSize, 0.001);
-            Assert.AreEqual(20F, metrics.Height, 0.001);
+            Assert.IsTrue(metrics.Fits);
+            Assert.IsTrue(metrics.FontSize >= 8F && metrics.FontSize <= 18F);
         }
 
         [TestMethod]
-        public void Calculate_LongText_ExpandsHeight()
+        public void FitFontSize_LongText_ShrinksInsteadOfGrowing()
         {
-            // fontSize = max(8, 12 * 0.55) = 8; 100 CJK units on 96pt width wrap to
-            // 9 visual lines: 9 * 8 * 1.4 + 4 = 104.8.
-            var metrics = ImageOverlayLayout.Calculate(100F, 12F, new string('中', 100));
+            // 100 CJK chars on a 100x12 region cannot fit even at 8pt:
+            // no downward growth is allowed anymore, so this must NOT fit.
+            var metrics = ImageOverlayLayout.FitFontSize(100F, 12F, new string('中', 100));
+
+            Assert.IsFalse(metrics.Fits);
+        }
+
+        [TestMethod]
+        public void FitFontSize_MediumText_ShrinksToFit()
+        {
+            // 20 CJK chars on a 200x30 region: must fit by shrinking, not growing.
+            var metrics = ImageOverlayLayout.FitFontSize(200F, 30F, new string('中', 20));
+
+            Assert.IsTrue(metrics.Fits);
+            Assert.IsTrue(metrics.FontSize >= 8F);
+        }
+
+        [TestMethod]
+        public void FitFontSize_InvalidDimensions_FallsBackToSafeDefaults()
+        {
+            // Defaults are 24x12: usable height 10pt cannot host even 8pt text
+            // (8 * 1.3 = 10.4 > 10), so the honest answer is "does not fit".
+            var metrics = ImageOverlayLayout.FitFontSize(0F, -5F, "x");
 
             Assert.AreEqual(8F, metrics.FontSize, 0.001);
-            Assert.AreEqual(104.8F, metrics.Height, 0.01);
-            Assert.IsTrue(metrics.Height > 12F);
+            Assert.IsFalse(metrics.Fits);
         }
 
         [TestMethod]
-        public void Calculate_InvalidDimensions_FallsBackToSafeDefaults()
+        public void EstimateNoteHeight_GrowsWithText()
         {
-            var metrics = ImageOverlayLayout.Calculate(0F, -5F, "x");
+            var shortNote = ImageOverlayLayout.EstimateNoteHeight(200F, "short", 9F);
+            var longNote = ImageOverlayLayout.EstimateNoteHeight(200F, new string('中', 200), 9F);
 
-            Assert.AreEqual(8F, metrics.FontSize, 0.001);
-            Assert.IsTrue(metrics.Height >= 12F);
-            Assert.IsTrue(metrics.Height <= 720F);
-        }
-
-        [TestMethod]
-        public void Calculate_HugeText_HeightIsCapped()
-        {
-            var metrics = ImageOverlayLayout.Calculate(200F, 20F, new string('中', 100000));
-
-            Assert.AreEqual(720F, metrics.Height, 0.001);
+            Assert.IsTrue(shortNote > 0F && shortNote < longNote);
+            Assert.IsTrue(longNote <= 400F);
         }
     }
 

@@ -48,14 +48,14 @@ namespace OfficeTranslate.ExcelAddIn
                     token.ThrowIfCancellationRequested();
                     var current = targets.Count + i + 1;
                     progress($"OfficeTranslate：正在识别图片 {current}/{total}");
-                    summary.RecordImage(await TranslateImageAsync(images[i], client, settings, token));
+                    await TranslateImageAsync(images[i], client, settings, summary, token);
                     progress($"OfficeTranslate：已完成 {current}/{total}");
                 }
                 return summary;
             }
         }
 
-        private async Task<bool> TranslateImageAsync(Excel.Shape image, TranslationClient client, TranslationSettings settings, CancellationToken token)
+        private async Task TranslateImageAsync(Excel.Shape image, TranslationClient client, TranslationSettings settings, TranslationTaskSummary summary, CancellationToken token)
         {
             var sheet = _excel.ActiveSheet as Excel.Worksheet ?? throw new InvalidOperationException("无法确定图片所在的工作表。");
             // For a picture shape, Copy is more reliable than CopyPicture across
@@ -74,25 +74,56 @@ namespace OfficeTranslate.ExcelAddIn
                 }
             }, () => Application.DoEvents(), token);
 
+            var hasPixels = PngDimensions.TryRead(imageBytes, out var pixelWidth, out var pixelHeight);
             var regions = await client.TranslateImageAsync(imageBytes, settings, token);
+            if (regions.Count == 0) { summary.RecordImage(false); return; }
+            summary.RecordImage(true);
+
+            // Excel shapes live in a single sheet-points frame, so the overlay
+            // rect is the image rect plus the planner's offsets directly.
+            var imageLeft = image.Left; var imageTop = image.Top;
+            var imageWidth = image.Width; var imageHeight = image.Height;
+            var rotation = SafeFloat(() => image.Rotation);
+            // Excel's object model exposes no flip-state property (only the Flip
+            // method), so a flipped picture cannot be detected here.
+            RemoveOverlaysForImage(sheet, imageLeft, imageTop, imageWidth, imageHeight);
+
+            var needsReview = false;
             foreach (var region in regions)
             {
-                var left = image.Left + image.Width * region.X1 / 1000F;
-                var top = image.Top + image.Height * region.Y1 / 1000F;
-                var width = Math.Max(24F, image.Width * (region.X2 - region.X1) / 1000F);
-                var originalHeight = Math.Max(10F, image.Height * (region.Y2 - region.Y1) / 1000F);
-                var overlayText = settings.BilingualMode && !string.IsNullOrWhiteSpace(region.Source) ? region.Source + "\r" + region.Translation : region.Translation;
-                var layout = ImageOverlayLayout.Calculate(width, originalHeight, overlayText);
+                var overlayText = settings.BilingualMode && !string.IsNullOrWhiteSpace(region.Source)
+                    ? region.Source + "\r" + region.Translation
+                    : region.Translation;
+                var plan = hasPixels
+                    ? ImageOverlayPlanner.Plan(
+                        region.X1, region.Y1, region.X2, region.Y2,
+                        pixelWidth, pixelHeight, imageWidth, imageHeight, overlayText,
+                        rotation, false, false)
+                    : new PlannedOverlay(ImageOverlayVerdict.SideNote,
+                        "无法读取捕获图像的像素尺寸，坐标无法可靠换算。", 0F, 0F, 0F, 0F, 0F);
+                LogOverlay(region, pixelWidth, pixelHeight, imageLeft, imageTop, imageWidth, imageHeight,
+                    rotation, plan, overlayText);
+                if (plan.Verdict == ImageOverlayVerdict.SideNote)
+                {
+                    PlaceSideNote(sheet, imageLeft, imageTop, imageWidth, imageHeight, plan.Reason, overlayText);
+                    needsReview = true;
+                    continue;
+                }
                 Excel.Shape? overlay = null;
                 try
                 {
-                    overlay = sheet.Shapes.AddTextbox(Office.MsoTextOrientation.msoTextOrientationHorizontal, left, top, width, layout.Height);
+                    // Exact region rect with an opaque cover: in non-bilingual
+                    // mode the source text must not show through (the old 8%
+                    // transparency did), and the box no longer grows downward.
+                    overlay = sheet.Shapes.AddTextbox(Office.MsoTextOrientation.msoTextOrientationHorizontal,
+                        imageLeft + plan.Left, imageTop + plan.Top, plan.Width, plan.Height);
                     overlay.AlternativeText = "OfficeTranslateOCR";
-                    overlay.Fill.Visible = Office.MsoTriState.msoTrue; overlay.Fill.ForeColor.RGB = 0xFFFFFF; overlay.Fill.Transparency = 0.08F;
+                    overlay.Fill.Visible = Office.MsoTriState.msoTrue; overlay.Fill.ForeColor.RGB = 0xFFFFFF; overlay.Fill.Transparency = 0F;
                     overlay.Line.Visible = Office.MsoTriState.msoFalse;
                     overlay.TextFrame2.MarginLeft = 2; overlay.TextFrame2.MarginRight = 2; overlay.TextFrame2.MarginTop = 1; overlay.TextFrame2.MarginBottom = 1;
+                    overlay.TextFrame2.WordWrap = Office.MsoTriState.msoTrue;
                     overlay.TextFrame2.TextRange.Text = overlayText;
-                    overlay.TextFrame2.TextRange.Font.Size = layout.FontSize;
+                    overlay.TextFrame2.TextRange.Font.Size = plan.FontSize;
                 }
                 catch (COMException ex)
                 {
@@ -100,7 +131,104 @@ namespace OfficeTranslate.ExcelAddIn
                     throw new InvalidOperationException("Excel 已完成图片识别，但创建译文覆盖框失败：" + ex.Message, ex);
                 }
             }
-            return regions.Count > 0;
+            if (needsReview) summary.RecordImageNeedsReview();
+        }
+
+        private void PlaceSideNote(Excel.Worksheet sheet, float imageLeft, float imageTop, float imageWidth, float imageHeight, string reason, string text)
+        {
+            // A side-note explicitly does NOT claim positional coverage: it is
+            // placed below the image.
+            var noteWidth = Math.Min(420F, Math.Max(160F, imageWidth));
+            var noteText = "【图片译文待检查】" + reason + "\r" + text;
+            var noteHeight = ImageOverlayLayout.EstimateNoteHeight(noteWidth, noteText, 9F);
+            var noteLeft = imageLeft;
+            var noteTop = imageTop + imageHeight + 6F;
+            RemoveNotesInZone(sheet, noteLeft, noteTop, noteWidth, noteHeight);
+            var note = sheet.Shapes.AddTextbox(Office.MsoTextOrientation.msoTextOrientationHorizontal,
+                noteLeft, noteTop, noteWidth, noteHeight);
+            note.AlternativeText = "OfficeTranslateOCR-Note";
+            note.Fill.Visible = Office.MsoTriState.msoTrue;
+            note.Fill.ForeColor.RGB = 0xE1FFFF; // light yellow (BGR)
+            note.Fill.Transparency = 0F;
+            note.Line.Visible = Office.MsoTriState.msoFalse;
+            note.TextFrame2.MarginLeft = 4; note.TextFrame2.MarginRight = 4;
+            note.TextFrame2.MarginTop = 3; note.TextFrame2.MarginBottom = 3;
+            note.TextFrame2.WordWrap = Office.MsoTriState.msoTrue;
+            note.TextFrame2.TextRange.Text = noteText;
+            note.TextFrame2.TextRange.Font.Size = 9F;
+        }
+
+        private static void RemoveOverlaysForImage(Excel.Worksheet sheet, float left, float top, float width, float height)
+        {
+            // Re-translating the same image updates its overlays instead of stacking.
+            var doomed = new List<Excel.Shape>();
+            foreach (Excel.Shape shape in sheet.Shapes)
+            {
+                string alt;
+                try { alt = shape.AlternativeText; } catch { continue; }
+                if (alt != "OfficeTranslateOCR") continue;
+                var centerX = shape.Left + shape.Width / 2F;
+                var centerY = shape.Top + shape.Height / 2F;
+                if (centerX >= left - 8F && centerX <= left + width + 8F &&
+                    centerY >= top - 8F && centerY <= top + height + 8F)
+                    doomed.Add(shape);
+            }
+            foreach (var shape in doomed)
+            {
+                try { shape.Delete(); } catch { }
+            }
+        }
+
+        private static void RemoveNotesInZone(Excel.Worksheet sheet, float left, float top, float width, float height)
+        {
+            var doomed = new List<Excel.Shape>();
+            foreach (Excel.Shape shape in sheet.Shapes)
+            {
+                string alt;
+                try { alt = shape.AlternativeText; } catch { continue; }
+                if (alt != "OfficeTranslateOCR-Note") continue;
+                if (shape.Left < left + width && shape.Left + shape.Width > left &&
+                    shape.Top < top + height && shape.Top + shape.Height > top)
+                    doomed.Add(shape);
+            }
+            foreach (var shape in doomed)
+            {
+                try { shape.Delete(); } catch { }
+            }
+        }
+
+        private static void LogOverlay(ImageTranslationRegion region,
+            int pixelWidth, int pixelHeight, float imageLeft, float imageTop,
+            float imageWidth, float imageHeight,
+            float rotation, PlannedOverlay plan, string text)
+        {
+            ImageOverlayDiagnostics.Log(new ImageOverlayDiagnosticEntry
+            {
+                Host = "Excel",
+                ImageKind = "Shape",
+                PixelWidth = pixelWidth,
+                PixelHeight = pixelHeight,
+                BboxX1 = region.X1, BboxY1 = region.Y1, BboxX2 = region.X2, BboxY2 = region.Y2,
+                ShapeLeft = imageLeft, ShapeTop = imageTop,
+                ShapeWidth = imageWidth, ShapeHeight = imageHeight,
+                FrameNote = "SheetPoints",
+                RotationDegrees = rotation,
+                FlipHorizontal = false,
+                FlipVertical = false,
+                OutLeft = imageLeft + plan.Left,
+                OutTop = imageTop + plan.Top,
+                OutWidth = plan.Width,
+                OutHeight = plan.Height,
+                FontSize = plan.FontSize,
+                Verdict = plan.Verdict.ToString(),
+                Reason = plan.Reason,
+                TextLength = text == null ? 0 : text.Length
+            });
+        }
+
+        private static float SafeFloat(Func<float> read)
+        {
+            try { return read(); } catch { return 0F; }
         }
 
         private List<Excel.Shape> ReadSelectionImages()
@@ -200,7 +328,7 @@ namespace OfficeTranslate.ExcelAddIn
 
         private static void AddShape(Excel.Shape shape, List<Target> result)
         {
-            if (shape.AlternativeText == "OfficeTranslateOCR") return;
+            if (shape.AlternativeText != null && shape.AlternativeText.StartsWith("OfficeTranslateOCR", StringComparison.Ordinal)) return;
             if (shape.Type == Office.MsoShapeType.msoGroup)
             {
                 for (var i = 1; i <= shape.GroupItems.Count; i++) AddShape(shape.GroupItems.Item(i), result);

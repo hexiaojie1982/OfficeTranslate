@@ -67,7 +67,12 @@ namespace OfficeTranslate.WordAddIn
 
         private string ChangelogText()
         {
-            return "OfficeTranslate " + CurrentVersion + "\r\n• 增强翻译请求的超时与重试处理，并对异常或截断的模型结果停止写回。\r\n• Excel 按区域批量读取单元格，提高大范围翻译时的读取效率并修复数组边界问题。\r\n• 图片 OCR 增加兼容服务结构化输出回退，并改进剪贴板捕获失败时的处理。\r\n• 修复 MSI 安装目录及版本一致性检查，补充回归测试。\r\n\r\n" + ChangelogVersion222Text();
+            return "OfficeTranslate " + CurrentVersion + "\r\n• 图片 OCR 译文框定位重构：统一 bbox 校验与坐标换算，Word 浮动图片继承自身相对定位基准，修复译文框错位。\r\n• 遮盖层改为不透明并严格限定在原文区域内；译文在区域内换行并自动缩小字号，不再向下扩高；放不下或坐标不可信时生成“图片译文待检查”旁注。\r\n• 重复翻译同一图片时更新已有译文框，不再叠加。\r\n• 新增图片几何诊断日志：记录捕获像素尺寸、模型原始 bbox、Office 图片矩形与最终文本框矩形，便于区分模型定位误差与坐标换算误差（不记录图片内容与密钥）。\r\n• 模型返回的原始 bbox 不再预先截断，异常坐标交由校验器判定并降级为旁注。\r\n\r\n" + ChangelogVersion223Text();
+        }
+
+        private string ChangelogVersion223Text()
+        {
+            return "OfficeTranslate 2.1.23\r\n• 增强翻译请求的超时与重试处理，并对异常或截断的模型结果停止写回。\r\n• Excel 按区域批量读取单元格，提高大范围翻译时的读取效率并修复数组边界问题。\r\n• 图片 OCR 增加兼容服务结构化输出回退，并改进剪贴板捕获失败时的处理。\r\n• 修复 MSI 安装目录及版本一致性检查，补充回归测试。\r\n\r\n" + ChangelogVersion222Text();
         }
 
         private string ChangelogVersion222Text()
