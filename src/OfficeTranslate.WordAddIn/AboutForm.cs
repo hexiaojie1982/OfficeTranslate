@@ -67,7 +67,12 @@ namespace OfficeTranslate.WordAddIn
 
         private string ChangelogText()
         {
-            return "OfficeTranslate " + CurrentVersion + "\r\n• 对 Word、Excel 和 PowerPoint 的换行符进行程序级保护，避免多行文本翻译后合并成一行。\r\n• 支持保留 CRLF、CR、LF、Word 手动换行、分页符及 Unicode 行分隔符的原始类型和顺序。\r\n• 正常翻译仍保持整段一次请求，仅在模型破坏换行时进行一次占位符安全重试。\r\n\r\n" + ChangelogVersion221Text();
+            return "OfficeTranslate " + CurrentVersion + "\r\n• 增强翻译请求的超时与重试处理，并对异常或截断的模型结果停止写回。\r\n• Excel 按区域批量读取单元格，提高大范围翻译时的读取效率并修复数组边界问题。\r\n• 图片 OCR 增加兼容服务结构化输出回退，并改进剪贴板捕获失败时的处理。\r\n• 修复 MSI 安装目录及版本一致性检查，补充回归测试。\r\n\r\n" + ChangelogVersion222Text();
+        }
+
+        private string ChangelogVersion222Text()
+        {
+            return "OfficeTranslate 2.1.22\r\n• 对 Word、Excel 和 PowerPoint 的换行符进行程序级保护，避免多行文本翻译后合并成一行。\r\n• 支持保留 CRLF、CR、LF、Word 手动换行、分页符及 Unicode 行分隔符的原始类型和顺序。\r\n• 正常翻译仍保持整段一次请求，仅在模型破坏换行时进行一次占位符安全重试。\r\n\r\n" + ChangelogVersion221Text();
         }
 
         private string ChangelogVersion221Text()
