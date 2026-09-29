@@ -15,5 +15,10 @@
     <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleTo">
       <_Parameter1>OfficeTranslate.Tests</_Parameter1>
     </AssemblyAttribute>
+    <!-- RangeGridHelper lives in Core (so tests need no Office interop), but is
+         consumed by the Excel add-in. -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleTo">
+      <_Parameter1>OfficeTranslate.ExcelAddIn</_Parameter1>
+    </AssemblyAttribute>
   </ItemGroup>
 </Project>
