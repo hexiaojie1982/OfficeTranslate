@@ -31,8 +31,13 @@ namespace OfficeTranslate.Core
         {
             width = Normalize(width, 24F);
             height = Normalize(height, 12F);
-            var usableWidth = Math.Max(12F, width - HorizontalMargin);
-            var usableHeight = Math.Max(4F, height - VerticalMargin);
+            // R6: no fictional minimum usable sizes. A region narrower than the
+            // margins genuinely cannot hold text and must degrade to SideNote
+            // instead of pretending a 12pt-wide area exists.
+            var usableWidth = width - HorizontalMargin;
+            var usableHeight = height - VerticalMargin;
+            if (usableWidth <= 0F || usableHeight <= 0F)
+                return new ImageOverlayMetrics(MinFontSize, false);
 
             var low = MinFontSize;
             var high = Math.Min(MaxFontSize, usableHeight / LineHeightFactor);
@@ -51,13 +56,15 @@ namespace OfficeTranslate.Core
 
         // Height estimator for side-notes, where vertical growth is acceptable
         // because the note explicitly does NOT claim positional coverage.
+        // R2: no height cap. A side-note must preserve every translation
+        // completely; clipping it would silently lose content.
         public static float EstimateNoteHeight(float width, string text, float fontSize)
         {
             width = Normalize(width, 160F);
             fontSize = Normalize(fontSize, 9F);
             var usableWidth = Math.Max(12F, width - HorizontalMargin);
             var lines = CountVisualLines(text, usableWidth, fontSize);
-            return Math.Min(400F, lines * fontSize * LineHeightFactor + 8F);
+            return lines * fontSize * LineHeightFactor + 8F;
         }
 
         private static bool FitsAt(float fontSize, float usableWidth, float usableHeight, string text)

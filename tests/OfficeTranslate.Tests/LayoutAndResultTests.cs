@@ -48,13 +48,36 @@ namespace OfficeTranslate.Tests
         }
 
         [TestMethod]
+        public void FitFontSize_TooNarrowRegion_DoesNotFit()
+        {
+            // R6: a 2pt-wide region has negative usable width after margins.
+            // The old Math.Max(12F, ...) pretended 12pt existed and could
+            // wrongly report a fit.
+            var metrics = ImageOverlayLayout.FitFontSize(2F, 30F, "A");
+
+            Assert.IsFalse(metrics.Fits);
+        }
+
+        [TestMethod]
+        public void FitFontSize_SmallButUsableRegion_Fits()
+        {
+            var metrics = ImageOverlayLayout.FitFontSize(30F, 30F, "A");
+
+            Assert.IsTrue(metrics.Fits);
+            Assert.IsTrue(metrics.FontSize >= 8F);
+        }
+
+        [TestMethod]
         public void EstimateNoteHeight_GrowsWithText()
         {
             var shortNote = ImageOverlayLayout.EstimateNoteHeight(200F, "short", 9F);
             var longNote = ImageOverlayLayout.EstimateNoteHeight(200F, new string('中', 200), 9F);
 
             Assert.IsTrue(shortNote > 0F && shortNote < longNote);
-            Assert.IsTrue(longNote <= 400F);
+            // R2: no height cap anymore; a side-note must preserve every
+            // translation completely instead of clipping it.
+            var veryLongNote = ImageOverlayLayout.EstimateNoteHeight(200F, new string('中', 2000), 9F);
+            Assert.IsTrue(veryLongNote > 400F);
         }
     }
 

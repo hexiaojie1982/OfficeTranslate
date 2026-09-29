@@ -86,55 +86,142 @@ namespace OfficeTranslate.WordAddIn
             // content first so a leftover image is never mistaken for the shape.
             var bytes = ClipboardImageCapture.CapturePng(image.CopyAsPicture, token);
             var hasPixels = PngDimensions.TryRead(bytes, out var pixelWidth, out var pixelHeight);
+            // R5: owner identity for cleanup. Floating shapes use their Name
+            // (unique per document, persisted, stable across move/resize/
+            // reopen); inline shapes have no Name and fall back to a content
+            // hash of the captured PNG.
+            var ownerId = image.Kind == "Inline"
+                ? ImageOverlayIdentity.ForContent("wdi", bytes)
+                : ImageOverlayIdentity.ForNamedShape("wd", image.ShapeName, bytes);
             var regions = await client.TranslateImageAsync(bytes, settings, token);
             if (regions.Count == 0) { summary.RecordImage(false); return; }
             summary.RecordImage(true);
 
-            // Re-translating the same image updates its overlays instead of stacking new ones.
-            RemoveOverlaysForImage(image);
+            // R4: a floating picture positioned by alignment (center/right/...)
+            // reports a WdShapePosition sentinel (e.g. -999995) as Left/Top,
+            // which is not a coordinate. It cannot be used for overlays, and
+            // the side-note itself must use a real coordinate, so the note is
+            // placed at the anchor's page position instead.
+            var originIsSentinel = IsAlignmentSentinel(image.Left) || IsAlignmentSentinel(image.Top);
+            var sentinelReason = "图片使用对齐定位（如居中/靠右），无法解析实际显示坐标，已降级为旁注。";
 
-            var needsReview = false;
+            // Plan every region first; old results are replaced only after
+            // planning succeeds, so a failure/cancel keeps the previous content.
+            var plans = new List<Tuple<ImageTranslationRegion, PlannedOverlay, string>>();
             foreach (var region in regions)
             {
                 var bilingualImage = settings.BilingualMode && !string.IsNullOrWhiteSpace(region.Source);
                 var overlayText = bilingualImage ? region.Source + "\r" + region.Translation : region.Translation;
-                var plan = hasPixels
-                    ? ImageOverlayPlanner.Plan(
+                PlannedOverlay plan;
+                if (originIsSentinel)
+                    plan = new PlannedOverlay(ImageOverlayVerdict.SideNote, sentinelReason, 0F, 0F, 0F, 0F, 0F);
+                else if (hasPixels)
+                    plan = ImageOverlayPlanner.Plan(
                         region.X1, region.Y1, region.X2, region.Y2,
                         pixelWidth, pixelHeight, image.Width, image.Height, overlayText,
-                        image.Rotation, image.FlipHorizontal, image.FlipVertical)
-                    : new PlannedOverlay(ImageOverlayVerdict.SideNote,
+                        image.Rotation);
+                else
+                    plan = new PlannedOverlay(ImageOverlayVerdict.SideNote,
                         "无法读取捕获图像的像素尺寸，坐标无法可靠换算。", 0F, 0F, 0F, 0F, 0F);
-                LogOverlay(image, region, pixelWidth, pixelHeight, plan, overlayText);
+                LogOverlay(image, region, pixelWidth, pixelHeight, plan, overlayText, ownerId);
+                plans.Add(Tuple.Create(region, plan, overlayText));
+            }
+
+            // R5: replace this image's previous results (overlays and notes).
+            // Matching is by owner id only, never by region center or anchor
+            // character offsets, so overlapping images and anchor shifts after
+            // adding shapes cannot cause wrong deletes or missed deletes.
+            RemovePreviousResults(image, ownerId);
+
+            var noteEntries = new List<string>();
+            foreach (var item in plans)
+            {
+                var plan = item.Item2;
+                var overlayText = item.Item3;
                 if (plan.Verdict == ImageOverlayVerdict.SideNote)
                 {
-                    PlaceSideNote(image, plan.Reason, overlayText);
-                    needsReview = true;
+                    noteEntries.Add(plan.Reason + "\r" + overlayText);
                     continue;
                 }
-                PlaceOverlay(image, plan, overlayText);
+                string frameFailure;
+                if (!PlaceOverlay(image, plan, overlayText, ownerId, out frameFailure))
+                    noteEntries.Add(frameFailure + "\r" + overlayText);
             }
-            if (needsReview) summary.RecordImageNeedsReview();
+            // R2: one image gets ONE combined side-note, placed after all
+            // regions are processed, so no region's translation is lost.
+            if (noteEntries.Count > 0)
+            {
+                float noteLeft, noteTop;
+                if (originIsSentinel)
+                {
+                    // The sentinel Left/Top must never be reused for the note.
+                    float anchorX, anchorY;
+                    TryGetAnchorPagePosition(image, out anchorX, out anchorY);
+                    noteLeft = anchorX;
+                    noteTop = anchorY + 6F;
+                }
+                else
+                {
+                    noteLeft = image.Left;
+                    noteTop = image.Top + image.Height + 6F;
+                }
+                PlaceCombinedNote(image, ownerId, ImageOverlayNotes.Combine(noteEntries), noteLeft, noteTop);
+                summary.RecordImageNeedsReview();
+            }
         }
 
-        private void PlaceOverlay(ImageTarget image, PlannedOverlay plan, string text)
+        // Word reports WdShapePosition alignment constants (wdShapeCenter =
+        // -999995, wdShapeLeft = -999998, wdShapeRight = -999997,
+        // wdShapeInside = -999999, wdShapeOutside = -999996) as Left/Top for
+        // floating pictures positioned by alignment. These are not points.
+        private static bool IsAlignmentSentinel(float value)
         {
+            return value <= -999990F;
+        }
+
+        private static void TryGetAnchorPagePosition(ImageTarget image, out float x, out float y)
+        {
+            x = 72F; y = 72F;
+            try
+            {
+                var px = Convert.ToSingle(image.Anchor.Information[WdInformation.wdHorizontalPositionRelativeToPage]);
+                var py = Convert.ToSingle(image.Anchor.Information[WdInformation.wdVerticalPositionRelativeToPage]);
+                if (!float.IsNaN(px) && !float.IsInfinity(px) && !float.IsNaN(py) && !float.IsInfinity(py))
+                {
+                    x = px; y = py;
+                }
+            }
+            catch { }
+        }
+
+        // Returns false when the reference frame could not be assigned: the
+        // overlay is deleted and the caller degrades the region to a side-note
+        // instead of drawing a box that claims a trustworthy position.
+        private bool PlaceOverlay(ImageTarget image, PlannedOverlay plan, string text, string ownerId, out string failureReason)
+        {
+            failureReason = string.Empty;
             object anchor = image.Anchor.Duplicate;
             var overlay = _word.ActiveDocument.Shapes.AddTextbox(
                 Office.MsoTextOrientation.msoTextOrientationHorizontal,
                 image.Left, image.Top, plan.Width, plan.Height, ref anchor);
-            overlay.AlternativeText = "OfficeTranslateOCR";
             // Inherit the source image's reference frame. A floating picture's
             // own Left/Top may be paragraph/margin-relative rather than
             // page-relative, so forcing page-relative here was the offset bug.
             // Geometry is assigned AFTER the frame so Office interprets
-            // Left/Top in the correct coordinate system.
+            // Left/Top in the correct coordinate system. If the frame cannot
+            // be assigned, the position is untrustworthy: delete the box.
             try
             {
                 overlay.RelativeHorizontalPosition = image.RelativeHorizontalPosition;
                 overlay.RelativeVerticalPosition = image.RelativeVerticalPosition;
             }
-            catch (System.Runtime.InteropServices.COMException) { }
+            catch (System.Runtime.InteropServices.COMException)
+            {
+                try { overlay.Delete(); } catch { }
+                failureReason = "无法设置覆盖框的定位参考系，已降级为旁注。";
+                return false;
+            }
+            overlay.AlternativeText = ImageOverlayTags.OverlayFor(ownerId);
             overlay.Left = image.Left + plan.Left;
             overlay.Top = image.Top + plan.Top;
             overlay.Width = plan.Width;
@@ -148,30 +235,29 @@ namespace OfficeTranslate.WordAddIn
             overlay.Line.Visible = Office.MsoTriState.msoFalse;
             overlay.TextFrame.MarginLeft = 2; overlay.TextFrame.MarginRight = 2;
             overlay.TextFrame.MarginTop = 1; overlay.TextFrame.MarginBottom = 1;
-            overlay.TextFrame.WordWrap = Office.MsoTriState.msoTrue;
+            // R1: Word.TextFrame.WordWrap is int in the interop assembly, not MsoTriState.
+            overlay.TextFrame.WordWrap = (int)Office.MsoTriState.msoTrue;
             overlay.TextFrame.TextRange.Text = text;
             // Word does not consistently support msoAutoSizeTextToFitShape. Some
             // desktop builds reject it with "value out of range", so the font
             // size is fitted inside the region by ImageOverlayPlanner instead
             // of growing the box downward.
             overlay.TextFrame.TextRange.Font.Size = plan.FontSize;
+            return true;
         }
 
-        private void PlaceSideNote(ImageTarget image, string reason, string text)
+        private void PlaceCombinedNote(ImageTarget image, string ownerId, string noteText, float noteLeft, float noteTop)
         {
             // A side-note explicitly does NOT claim positional coverage: it is
-            // placed below the image, in the image's own reference frame.
+            // placed below the image (or below the anchor when the image uses
+            // alignment positioning), in the image's own reference frame.
             var noteWidth = Math.Min(420F, Math.Max(160F, image.Width));
-            var noteText = "【图片译文待检查】" + reason + "\r" + text;
             var noteHeight = ImageOverlayLayout.EstimateNoteHeight(noteWidth, noteText, 9F);
-            var noteLeft = image.Left;
-            var noteTop = image.Top + image.Height + 6F;
-            RemoveNotesInZone(image, noteLeft, noteTop, noteWidth, noteHeight);
             object anchor = image.Anchor.Duplicate;
             var note = _word.ActiveDocument.Shapes.AddTextbox(
                 Office.MsoTextOrientation.msoTextOrientationHorizontal,
                 noteLeft, noteTop, noteWidth, noteHeight, ref anchor);
-            note.AlternativeText = "OfficeTranslateOCR-Note";
+            note.AlternativeText = ImageOverlayTags.NoteFor(ownerId);
             try
             {
                 note.RelativeHorizontalPosition = image.RelativeHorizontalPosition;
@@ -186,65 +272,34 @@ namespace OfficeTranslate.WordAddIn
             note.Line.Visible = Office.MsoTriState.msoFalse;
             note.TextFrame.MarginLeft = 4; note.TextFrame.MarginRight = 4;
             note.TextFrame.MarginTop = 3; note.TextFrame.MarginBottom = 3;
-            note.TextFrame.WordWrap = Office.MsoTriState.msoTrue;
+            // R1: Word.TextFrame.WordWrap is int in the interop assembly, not MsoTriState.
+            note.TextFrame.WordWrap = (int)Office.MsoTriState.msoTrue;
             note.TextFrame.TextRange.Text = noteText;
             note.TextFrame.TextRange.Font.Size = 9F;
         }
 
-        private void RemoveOverlaysForImage(ImageTarget image)
+        private void RemovePreviousResults(ImageTarget image, string ownerId)
         {
+            // Deletes only shapes that belong to this image (by owner id), plus
+            // legacy id-less markers from the first 2.1.24 build, which can
+            // never be attributed again. Never touches other images' results,
+            // even when their rects overlap.
             var doomed = new List<Shape>();
             foreach (Shape shape in _word.ActiveDocument.Shapes)
             {
                 string alt;
                 try { alt = shape.AlternativeText; } catch { continue; }
-                if (alt != "OfficeTranslateOCR") continue;
-                if (!SameAnchorAndFrame(shape, image)) continue;
-                var centerX = shape.Left + shape.Width / 2F;
-                var centerY = shape.Top + shape.Height / 2F;
-                if (centerX >= image.Left - 8F && centerX <= image.Left + image.Width + 8F &&
-                    centerY >= image.Top - 8F && centerY <= image.Top + image.Height + 8F)
-                    doomed.Add(shape);
+                if (!ImageOverlayTags.WordExcelMarkerBelongsTo(alt, ownerId)) continue;
+                doomed.Add(shape);
             }
             foreach (var shape in doomed)
             {
                 try { shape.Delete(); } catch { }
             }
-        }
-
-        private void RemoveNotesInZone(ImageTarget image, float left, float top, float width, float height)
-        {
-            var doomed = new List<Shape>();
-            foreach (Shape shape in _word.ActiveDocument.Shapes)
-            {
-                string alt;
-                try { alt = shape.AlternativeText; } catch { continue; }
-                if (alt != "OfficeTranslateOCR-Note") continue;
-                if (!SameAnchorAndFrame(shape, image)) continue;
-                if (shape.Left < left + width && shape.Left + shape.Width > left &&
-                    shape.Top < top + height && shape.Top + shape.Height > top)
-                    doomed.Add(shape);
-            }
-            foreach (var shape in doomed)
-            {
-                try { shape.Delete(); } catch { }
-            }
-        }
-
-        private static bool SameAnchorAndFrame(Shape shape, ImageTarget image)
-        {
-            try
-            {
-                var anchor = shape.Anchor;
-                return anchor.Start == image.Anchor.Start && anchor.End == image.Anchor.End &&
-                    shape.RelativeHorizontalPosition == image.RelativeHorizontalPosition &&
-                    shape.RelativeVerticalPosition == image.RelativeVerticalPosition;
-            }
-            catch { return false; }
         }
 
         private void LogOverlay(ImageTarget image, ImageTranslationRegion region,
-            int pixelWidth, int pixelHeight, PlannedOverlay plan, string text)
+            int pixelWidth, int pixelHeight, PlannedOverlay plan, string text, string ownerId)
         {
             ImageOverlayDiagnostics.Log(new ImageOverlayDiagnosticEntry
             {
@@ -268,7 +323,8 @@ namespace OfficeTranslate.WordAddIn
                 FontSize = plan.FontSize,
                 Verdict = plan.Verdict.ToString(),
                 Reason = plan.Reason,
-                TextLength = text == null ? 0 : text.Length
+                TextLength = text == null ? 0 : text.Length,
+                OwnerId = ownerId
             });
         }
 
@@ -303,7 +359,7 @@ namespace OfficeTranslate.WordAddIn
 
         private static void AddFloatingImage(Shape shape, List<ImageTarget> result)
         {
-            if (shape.AlternativeText == "OfficeTranslateOCR") return;
+            if (ImageOverlayTags.IsOwnMarker(SafeGet(() => shape.AlternativeText, string.Empty))) return;
             if (shape.Type == Office.MsoShapeType.msoGroup) { for (var i = 1; i <= shape.GroupItems.Count; i++) AddFloatingImage(shape.GroupItems[i], result); return; }
             if (shape.Type != Office.MsoShapeType.msoPicture && shape.Type != Office.MsoShapeType.msoLinkedPicture) return;
             var anchor = shape.Anchor.Duplicate;
@@ -323,6 +379,7 @@ namespace OfficeTranslate.WordAddIn
             }
             target.RelativeHorizontalPosition = SafeGet(() => shape.RelativeHorizontalPosition, WdRelativeHorizontalPosition.wdRelativeHorizontalPositionPage);
             target.RelativeVerticalPosition = SafeGet(() => shape.RelativeVerticalPosition, WdRelativeVerticalPosition.wdRelativeVerticalPositionPage);
+            target.ShapeName = SafeGet(() => shape.Name, string.Empty);
             result.Add(target);
         }
 
@@ -403,6 +460,7 @@ namespace OfficeTranslate.WordAddIn
             public ImageTarget(Range anchor, float left, float top, float width, float height, Action action) { Anchor = anchor; Left = left; Top = top; Width = width; Height = height; _selectOrCopy = action; }
             public Range Anchor { get; } public float Left { get; } public float Top { get; } public float Width { get; } public float Height { get; }
             public string Kind { get; set; } = "Unknown";
+            public string ShapeName { get; set; } = string.Empty;
             public float Rotation { get; set; }
             public bool FlipHorizontal { get; set; }
             public bool FlipVertical { get; set; }

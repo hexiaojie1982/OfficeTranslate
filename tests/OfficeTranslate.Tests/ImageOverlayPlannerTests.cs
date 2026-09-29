@@ -11,7 +11,7 @@ namespace OfficeTranslate.Tests
         {
             // 1000x800 PNG on a 500x400pt shape: same aspect, bbox [100,200,600,400].
             var plan = ImageOverlayPlanner.Plan(100F, 200F, 600F, 400F,
-                1000, 800, 500F, 400F, "Hi", 0F, false, false);
+                1000, 800, 500F, 400F, "Hi", 0F);
 
             Assert.AreEqual(ImageOverlayVerdict.Place, plan.Verdict);
             Assert.AreEqual(50F, plan.Left, 0.001);
@@ -25,7 +25,7 @@ namespace OfficeTranslate.Tests
         public void Plan_InvertedBbox_GoesToSideNote()
         {
             var plan = ImageOverlayPlanner.Plan(600F, 200F, 100F, 400F,
-                1000, 800, 500F, 400F, "Hi", 0F, false, false);
+                1000, 800, 500F, 400F, "Hi", 0F);
 
             Assert.AreEqual(ImageOverlayVerdict.SideNote, plan.Verdict);
             Assert.IsFalse(string.IsNullOrWhiteSpace(plan.Reason));
@@ -35,7 +35,7 @@ namespace OfficeTranslate.Tests
         public void Plan_OutOfRangeBbox_GoesToSideNote()
         {
             var plan = ImageOverlayPlanner.Plan(-5F, 200F, 600F, 400F,
-                1000, 800, 500F, 400F, "Hi", 0F, false, false);
+                1000, 800, 500F, 400F, "Hi", 0F);
 
             Assert.AreEqual(ImageOverlayVerdict.SideNote, plan.Verdict);
         }
@@ -45,7 +45,7 @@ namespace OfficeTranslate.Tests
         {
             // Corrupt model output (NaN) must not become a fake overlay.
             var plan = ImageOverlayPlanner.Plan(float.NaN, 200F, 600F, 400F,
-                1000, 800, 500F, 400F, "Hi", 0F, false, false);
+                1000, 800, 500F, 400F, "Hi", 0F);
 
             Assert.AreEqual(ImageOverlayVerdict.SideNote, plan.Verdict);
         }
@@ -55,7 +55,7 @@ namespace OfficeTranslate.Tests
         {
             // 5x5 units on the 0-1000 scale is noise, not a text region.
             var plan = ImageOverlayPlanner.Plan(100F, 200F, 105F, 205F,
-                1000, 800, 500F, 400F, "Hi", 0F, false, false);
+                1000, 800, 500F, 400F, "Hi", 0F);
 
             Assert.AreEqual(ImageOverlayVerdict.SideNote, plan.Verdict);
         }
@@ -65,7 +65,7 @@ namespace OfficeTranslate.Tests
         {
             // PNG is 2:1 but the shape is 1:1: the capture cannot be trusted.
             var plan = ImageOverlayPlanner.Plan(100F, 200F, 600F, 400F,
-                1000, 500, 400F, 400F, "Hi", 0F, false, false);
+                1000, 500, 400F, 400F, "Hi", 0F);
 
             Assert.AreEqual(ImageOverlayVerdict.SideNote, plan.Verdict);
             Assert.IsTrue(plan.Reason.Contains("长宽比"));
@@ -75,18 +75,22 @@ namespace OfficeTranslate.Tests
         public void Plan_RotatedImage_GoesToSideNote()
         {
             var plan = ImageOverlayPlanner.Plan(100F, 200F, 600F, 400F,
-                1000, 800, 500F, 400F, "Hi", 90F, false, false);
+                1000, 800, 500F, 400F, "Hi", 90F);
 
             Assert.AreEqual(ImageOverlayVerdict.SideNote, plan.Verdict);
             Assert.IsTrue(plan.Reason.Contains("旋转"));
         }
 
         [TestMethod]
-        public void Plan_HorizontalFlip_MirrorsBbox()
+        public void Plan_RenderedPngCoords_MapDirectlyWithoutMirroring()
         {
-            // Displayed (flipped) fraction 0.1-0.3 maps to shape fraction 0.7-0.9.
-            var plan = ImageOverlayPlanner.Plan(100F, 200F, 300F, 400F,
-                1000, 800, 500F, 400F, "Hi", 0F, true, false);
+            // R3 (review 2026-09-30): the bbox is in FINAL RENDERED PNG
+            // coordinates. An asymmetric bbox on the right side must map
+            // directly to the right side of the shape: no flip compensation.
+            // (The old Plan_HorizontalFlip_MirrorsBbox validated the wrong
+            // premise: hosts capture the already-flipped rendering.)
+            var plan = ImageOverlayPlanner.Plan(700F, 200F, 900F, 400F,
+                1000, 800, 500F, 400F, "Hi", 0F);
 
             Assert.AreEqual(ImageOverlayVerdict.Place, plan.Verdict);
             Assert.AreEqual(350F, plan.Left, 0.001);
@@ -94,11 +98,69 @@ namespace OfficeTranslate.Tests
         }
 
         [TestMethod]
+        public void Plan_EdgeTinyRegion_DoesNotExpandBeyondImage()
+        {
+            // R6 (review 2026-09-30): bbox=[980,800,1000,1000] on a 100x100pt
+            // image maps to a 2pt-wide strip at the right edge. The planner
+            // must NOT expand it to 8pt (right=106 > image right=100), and
+            // the text cannot fit anyway, so the verdict is SideNote.
+            var plan = ImageOverlayPlanner.Plan(980F, 800F, 1000F, 1000F,
+                200, 200, 100F, 100F, "A", 0F);
+
+            Assert.AreEqual(ImageOverlayVerdict.SideNote, plan.Verdict);
+        }
+
+        [TestMethod]
+        public void Plan_SmallRegion_KeepsExactSizeWithinBounds()
+        {
+            // bbox=[700,700,1000,1000] on 100x100pt: exact 30x30pt box, text
+            // fits, and the box stays inside the image rect.
+            var plan = ImageOverlayPlanner.Plan(700F, 700F, 1000F, 1000F,
+                200, 200, 100F, 100F, "A", 0F);
+
+            Assert.AreEqual(ImageOverlayVerdict.Place, plan.Verdict);
+            Assert.AreEqual(70F, plan.Left, 0.001);
+            Assert.AreEqual(30F, plan.Width, 0.001);
+            Assert.IsTrue(plan.Left + plan.Width <= 100.001F);
+            Assert.IsTrue(plan.Top + plan.Height <= 100.001F);
+        }
+
+        [TestMethod]
+        public void Plan_NaNShapeWidth_GoesToSideNote()
+        {
+            // R7: NaN shape dimensions used to slip through `<= 0` checks and
+            // produce Place with NaN geometry.
+            var plan = ImageOverlayPlanner.Plan(100F, 200F, 600F, 400F,
+                1000, 800, float.NaN, 400F, "Hi", 0F);
+
+            Assert.AreEqual(ImageOverlayVerdict.SideNote, plan.Verdict);
+        }
+
+        [TestMethod]
+        public void Plan_InfiniteShapeHeight_GoesToSideNote()
+        {
+            var plan = ImageOverlayPlanner.Plan(100F, 200F, 600F, 400F,
+                1000, 800, 500F, float.PositiveInfinity, "Hi", 0F);
+
+            Assert.AreEqual(ImageOverlayVerdict.SideNote, plan.Verdict);
+        }
+
+        [TestMethod]
+        public void Plan_NaNRotation_GoesToSideNote()
+        {
+            // NaN rotation used to pass `Math.Abs(rot) > 0.5` (false for NaN).
+            var plan = ImageOverlayPlanner.Plan(100F, 200F, 600F, 400F,
+                1000, 800, 500F, 400F, "Hi", float.NaN);
+
+            Assert.AreEqual(ImageOverlayVerdict.SideNote, plan.Verdict);
+        }
+
+        [TestMethod]
         public void Plan_TextTooLong_GoesToSideNote()
         {
             // A wall of text can never fit the small region: no fake overlay.
             var plan = ImageOverlayPlanner.Plan(100F, 200F, 300F, 260F,
-                1000, 800, 500F, 400F, new string('中', 500), 0F, false, false);
+                1000, 800, 500F, 400F, new string('中', 500), 0F);
 
             Assert.AreEqual(ImageOverlayVerdict.SideNote, plan.Verdict);
             Assert.IsTrue(plan.Reason.Contains("放不下"));
@@ -108,9 +170,50 @@ namespace OfficeTranslate.Tests
         public void Plan_ZeroPixelSize_GoesToSideNote()
         {
             var plan = ImageOverlayPlanner.Plan(100F, 200F, 600F, 400F,
-                0, 0, 500F, 400F, "Hi", 0F, false, false);
+                0, 0, 500F, 400F, "Hi", 0F);
 
             Assert.AreEqual(ImageOverlayVerdict.SideNote, plan.Verdict);
+        }
+    }
+
+    [TestClass]
+    public sealed class ImageOverlayNotesTests
+    {
+        [TestMethod]
+        public void Combine_MultipleEntries_KeepsEveryTranslation()
+        {
+            // R2: one image gets ONE combined side-note; every degraded
+            // region's translation must survive in it.
+            var combined = ImageOverlayNotes.Combine(new[]
+            {
+                "坐标不可信。\rREGION_ONE",
+                "放不下。\rREGION_TWO",
+            });
+
+            Assert.IsTrue(combined.Contains("REGION_ONE"));
+            Assert.IsTrue(combined.Contains("REGION_TWO"));
+            Assert.AreEqual(1, CountOccurrences(combined, ImageOverlayNotes.Header));
+        }
+
+        [TestMethod]
+        public void Combine_SingleEntry_StillHasHeader()
+        {
+            var combined = ImageOverlayNotes.Combine(new[] { "原因。\r正文" });
+
+            Assert.IsTrue(combined.StartsWith(ImageOverlayNotes.Header));
+            Assert.IsTrue(combined.Contains("正文"));
+        }
+
+        private static int CountOccurrences(string text, string needle)
+        {
+            var count = 0;
+            var index = 0;
+            while ((index = text.IndexOf(needle, index, System.StringComparison.Ordinal)) >= 0)
+            {
+                count++;
+                index += needle.Length;
+            }
+            return count;
         }
     }
 

@@ -54,25 +54,36 @@ namespace OfficeTranslate.PowerPointAddIn
         private async Task TranslateImageAsync(PowerPoint.Shape image, TranslationClient client, TranslationSettings settings, TranslationTaskSummary summary, CancellationToken token)
         {
             var path = Path.Combine(Path.GetTempPath(), "OfficeTranslate-" + Guid.NewGuid().ToString("N") + ".png");
-            var recognized = false;
-            var needsReview = false;
             try
             {
                 image.Export(path, PowerPoint.PpShapeFormat.ppShapeFormatPNG);
                 var imageBytes = File.ReadAllBytes(path);
                 var hasPixels = PngDimensions.TryRead(imageBytes, out var pixelWidth, out var pixelHeight);
+                // R5: owner identity is the slide-unique shape Name (persisted,
+                // stable across move/resize/reopen), falling back to a content
+                // hash when the name is unavailable.
+                var ownerId = ImageOverlayIdentity.ForNamedShape(
+                    "pp", SafeString(() => image.Name), imageBytes);
                 var regions = await client.TranslateImageAsync(imageBytes, settings, token);
-                recognized = regions.Count > 0;
-                if (!recognized) return;
+                // R8: an empty OCR result is still an image outcome and must be
+                // counted, exactly like the Word/Excel paths do.
+                if (regions.Count == 0) { summary.RecordImage(false); return; }
+                summary.RecordImage(true);
                 var slide = image.Parent as PowerPoint.Slide ?? throw new InvalidOperationException("无法确定图片所在的幻灯片。");
                 // Slide shapes live in a single slide-points frame.
                 var imageLeft = image.Left; var imageTop = image.Top;
                 var imageWidth = image.Width; var imageHeight = image.Height;
                 var rotation = SafeFloat(() => image.Rotation);
+                // R3: flip state is recorded for diagnostics only. The exported
+                // PNG already shows the flipped rendering, so the model's bbox
+                // is in final display coordinates and must NOT be mirrored
+                // again by the planner.
                 var flipH = SafeTriState(() => image.HorizontalFlip);
                 var flipV = SafeTriState(() => image.VerticalFlip);
-                // Re-translating the same image updates its overlays instead of stacking.
-                RemoveOverlaysForImage(slide, imageLeft, imageTop, imageWidth, imageHeight);
+
+                // Plan every region first; old results are replaced only after
+                // planning succeeds, so a failure/cancel keeps the previous content.
+                var plans = new List<Tuple<ImageTranslationRegion, PlannedOverlay, string>>();
                 foreach (var region in regions)
                 {
                     var overlayText = settings.BilingualMode && !string.IsNullOrWhiteSpace(region.Source)
@@ -82,15 +93,27 @@ namespace OfficeTranslate.PowerPointAddIn
                         ? ImageOverlayPlanner.Plan(
                             region.X1, region.Y1, region.X2, region.Y2,
                             pixelWidth, pixelHeight, imageWidth, imageHeight, overlayText,
-                            rotation, flipH, flipV)
+                            rotation)
                         : new PlannedOverlay(ImageOverlayVerdict.SideNote,
                             "无法读取导出图像的像素尺寸，坐标无法可靠换算。", 0F, 0F, 0F, 0F, 0F);
                     LogOverlay(region, pixelWidth, pixelHeight, imageLeft, imageTop,
-                        imageWidth, imageHeight, rotation, flipH, flipV, plan, overlayText);
+                        imageWidth, imageHeight, rotation, flipH, flipV, plan, overlayText, ownerId);
+                    plans.Add(Tuple.Create(region, plan, overlayText));
+                }
+
+                // R5: replace this image's previous results (overlays and notes).
+                // Matching is by owner id only, never by region center, so an
+                // overlapping image's cleanup cannot delete this image's boxes.
+                RemovePreviousResults(slide, ownerId);
+
+                var noteEntries = new List<string>();
+                foreach (var item in plans)
+                {
+                    var plan = item.Item2;
+                    var overlayText = item.Item3;
                     if (plan.Verdict == ImageOverlayVerdict.SideNote)
                     {
-                        PlaceSideNote(slide, imageLeft, imageTop, imageWidth, imageHeight, plan.Reason, overlayText);
-                        needsReview = true;
+                        noteEntries.Add(plan.Reason + "\r" + overlayText);
                         continue;
                     }
                     // Exact region rect with an opaque cover: in non-bilingual
@@ -98,7 +121,7 @@ namespace OfficeTranslate.PowerPointAddIn
                     // transparency did), and the box no longer grows downward.
                     var overlay = slide.Shapes.AddTextbox(Office.MsoTextOrientation.msoTextOrientationHorizontal,
                         imageLeft + plan.Left, imageTop + plan.Top, plan.Width, plan.Height);
-                    overlay.Tags.Add("OfficeTranslateOCR", "1");
+                    overlay.Tags.Add("OfficeTranslateOCR", ownerId);
                     overlay.Fill.Visible = Office.MsoTriState.msoTrue; overlay.Fill.ForeColor.RGB = 0xFFFFFF; overlay.Fill.Transparency = 0F;
                     overlay.Line.Visible = Office.MsoTriState.msoFalse;
                     overlay.TextFrame2.MarginLeft = 2; overlay.TextFrame2.MarginRight = 2; overlay.TextFrame2.MarginTop = 1; overlay.TextFrame2.MarginBottom = 1;
@@ -106,25 +129,27 @@ namespace OfficeTranslate.PowerPointAddIn
                     overlay.TextFrame2.TextRange.Text = overlayText;
                     overlay.TextFrame2.TextRange.Font.Size = plan.FontSize;
                 }
+                // R2: one image gets ONE combined side-note, so no region's
+                // translation is lost when several regions degrade.
+                if (noteEntries.Count > 0)
+                {
+                    PlaceCombinedNote(slide, ownerId, ImageOverlayNotes.Combine(noteEntries),
+                        imageLeft, imageTop + imageHeight + 6F, imageWidth);
+                    summary.RecordImageNeedsReview();
+                }
             }
             finally { try { if (File.Exists(path)) File.Delete(path); } catch { } }
-            summary.RecordImage(recognized);
-            if (needsReview) summary.RecordImageNeedsReview();
         }
 
-        private static void PlaceSideNote(PowerPoint.Slide slide, float imageLeft, float imageTop, float imageWidth, float imageHeight, string reason, string text)
+        private static void PlaceCombinedNote(PowerPoint.Slide slide, string ownerId, string noteText, float noteLeft, float noteTop, float imageWidth)
         {
             // A side-note explicitly does NOT claim positional coverage: it is
             // placed below the image.
             var noteWidth = Math.Min(420F, Math.Max(160F, imageWidth));
-            var noteText = "【图片译文待检查】" + reason + "\r" + text;
             var noteHeight = ImageOverlayLayout.EstimateNoteHeight(noteWidth, noteText, 9F);
-            var noteLeft = imageLeft;
-            var noteTop = imageTop + imageHeight + 6F;
-            RemoveNotesInZone(slide, noteLeft, noteTop, noteWidth, noteHeight);
             var note = slide.Shapes.AddTextbox(Office.MsoTextOrientation.msoTextOrientationHorizontal,
                 noteLeft, noteTop, noteWidth, noteHeight);
-            note.Tags.Add("OfficeTranslateOCR", "Note");
+            note.Tags.Add("OfficeTranslateOCR", "Note:" + ownerId);
             note.Fill.Visible = Office.MsoTriState.msoTrue;
             note.Fill.ForeColor.RGB = 0xE1FFFF; // light yellow (BGR)
             note.Fill.Transparency = 0F;
@@ -136,17 +161,20 @@ namespace OfficeTranslate.PowerPointAddIn
             note.TextFrame2.TextRange.Font.Size = 9F;
         }
 
-        private static void RemoveOverlaysForImage(PowerPoint.Slide slide, float left, float top, float width, float height)
+        private static void RemovePreviousResults(PowerPoint.Slide slide, string ownerId)
         {
+            // Deletes only shapes that belong to this image (by owner id), plus
+            // legacy id-less tags from the first 2.1.24 build, which can never
+            // be attributed again. Never touches other images' results, even
+            // when their rects overlap.
             var doomed = new List<PowerPoint.Shape>();
             foreach (PowerPoint.Shape shape in slide.Shapes)
             {
-                if (!HasOcrTag(shape, "1")) continue;
-                var centerX = shape.Left + shape.Width / 2F;
-                var centerY = shape.Top + shape.Height / 2F;
-                if (centerX >= left - 8F && centerX <= left + width + 8F &&
-                    centerY >= top - 8F && centerY <= top + height + 8F)
-                    doomed.Add(shape);
+                string tag;
+                try { tag = shape.Tags["OfficeTranslateOCR"]; } catch (COMException) { continue; }
+                if (string.IsNullOrEmpty(tag)) continue;
+                if (!ImageOverlayTags.PowerPointTagBelongsTo(tag, ownerId)) continue;
+                doomed.Add(shape);
             }
             foreach (var shape in doomed)
             {
@@ -154,33 +182,16 @@ namespace OfficeTranslate.PowerPointAddIn
             }
         }
 
-        private static void RemoveNotesInZone(PowerPoint.Slide slide, float left, float top, float width, float height)
+        private static string SafeString(Func<string> read)
         {
-            var doomed = new List<PowerPoint.Shape>();
-            foreach (PowerPoint.Shape shape in slide.Shapes)
-            {
-                if (!HasOcrTag(shape, "Note")) continue;
-                if (shape.Left < left + width && shape.Left + shape.Width > left &&
-                    shape.Top < top + height && shape.Top + shape.Height > top)
-                    doomed.Add(shape);
-            }
-            foreach (var shape in doomed)
-            {
-                try { shape.Delete(); } catch { }
-            }
-        }
-
-        private static bool HasOcrTag(PowerPoint.Shape shape, string value)
-        {
-            try { return shape.Tags["OfficeTranslateOCR"] == value; }
-            catch (COMException) { return false; }
+            try { return read() ?? string.Empty; } catch { return string.Empty; }
         }
 
         private static void LogOverlay(ImageTranslationRegion region,
             int pixelWidth, int pixelHeight, float imageLeft, float imageTop,
             float imageWidth, float imageHeight,
             float rotation, bool flipH, bool flipV,
-            PlannedOverlay plan, string text)
+            PlannedOverlay plan, string text, string ownerId)
         {
             ImageOverlayDiagnostics.Log(new ImageOverlayDiagnosticEntry
             {
@@ -202,7 +213,8 @@ namespace OfficeTranslate.PowerPointAddIn
                 FontSize = plan.FontSize,
                 Verdict = plan.Verdict.ToString(),
                 Reason = plan.Reason,
-                TextLength = text == null ? 0 : text.Length
+                TextLength = text == null ? 0 : text.Length,
+                OwnerId = ownerId
             });
         }
 
