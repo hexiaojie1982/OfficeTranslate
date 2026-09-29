@@ -86,12 +86,13 @@ namespace OfficeTranslate.WordAddIn
             // content first so a leftover image is never mistaken for the shape.
             var bytes = ClipboardImageCapture.CapturePng(image.CopyAsPicture, token);
             var hasPixels = PngDimensions.TryRead(bytes, out var pixelWidth, out var pixelHeight);
-            // R5: owner identity for cleanup. Floating shapes use their Name
+            // R5/C2: owner identity for cleanup. Floating shapes use their Name
             // (unique per document, persisted, stable across move/resize/
-            // reopen); inline shapes have no Name and fall back to a content
-            // hash of the captured PNG.
+            // reopen). Inline shapes have no Name: each instance gets its own
+            // persistent GUID in a document bookmark, so two identical
+            // pictures never share an owner.
             var ownerId = image.Kind == "Inline"
-                ? ImageOverlayIdentity.ForContent("wdi", bytes)
+                ? GetOrCreateInlineOwnerId(image.Anchor, bytes)
                 : ImageOverlayIdentity.ForNamedShape("wd", image.ShapeName, bytes);
             var regions = await client.TranslateImageAsync(bytes, settings, token);
             if (regions.Count == 0) { summary.RecordImage(false); return; }
@@ -151,21 +152,41 @@ namespace OfficeTranslate.WordAddIn
             // regions are processed, so no region's translation is lost.
             if (noteEntries.Count > 0)
             {
+                // C3: coordinates and their reference frame travel together.
+                // The anchor page position is only meaningful in the page
+                // frame; the image's own numbers are only meaningful in the
+                // image's frame. Mixing them misplaces the note.
                 float noteLeft, noteTop;
+                WdRelativeHorizontalPosition noteRelH;
+                WdRelativeVerticalPosition noteRelV;
                 if (originIsSentinel)
                 {
                     // The sentinel Left/Top must never be reused for the note.
-                    float anchorX, anchorY;
-                    TryGetAnchorPagePosition(image, out anchorX, out anchorY);
-                    noteLeft = anchorX;
-                    noteTop = anchorY + 6F;
+                    if (TryGetAnchorPagePosition(image, out var anchorX, out var anchorY))
+                    {
+                        noteLeft = anchorX;
+                        noteTop = anchorY + 6F;
+                    }
+                    else
+                    {
+                        // Explicit, valid fallback: a fixed page position in
+                        // the page frame, recorded in the note itself.
+                        noteEntries.Insert(0, "无法取得图片锚点的页面坐标，旁注放在页面左上固定位置。");
+                        noteLeft = 72F;
+                        noteTop = 78F;
+                    }
+                    noteRelH = WdRelativeHorizontalPosition.wdRelativeHorizontalPositionPage;
+                    noteRelV = WdRelativeVerticalPosition.wdRelativeVerticalPositionPage;
                 }
                 else
                 {
                     noteLeft = image.Left;
                     noteTop = image.Top + image.Height + 6F;
+                    noteRelH = image.RelativeHorizontalPosition;
+                    noteRelV = image.RelativeVerticalPosition;
                 }
-                PlaceCombinedNote(image, ownerId, ImageOverlayNotes.Combine(noteEntries), noteLeft, noteTop);
+                PlaceCombinedNote(image, ownerId, ImageOverlayNotes.Combine(noteEntries),
+                    noteLeft, noteTop, noteRelH, noteRelV);
                 summary.RecordImageNeedsReview();
             }
         }
@@ -179,19 +200,68 @@ namespace OfficeTranslate.WordAddIn
             return value <= -999990F;
         }
 
-        private static void TryGetAnchorPagePosition(ImageTarget image, out float x, out float y)
+        // C2: every inline picture instance owns a persistent GUID, stored in
+        // a document bookmark named OTImg_<32 hex> (38 chars, under Word's
+        // 40-char bookmark limit). A content hash alone cannot distinguish
+        // two identical pictures, so it must never be the primary owner id.
+        // The bookmark persists across save/reopen, tracks the picture through
+        // edits, and never modifies the picture's own description. The
+        // content hash is only an auxiliary fallback, still position-qualified
+        // so identical pictures at different positions never share an owner.
+        private string GetOrCreateInlineOwnerId(Range imageRange, byte[] pngBytes)
+        {
+            const string prefix = "OTImg_";
+            int start, end;
+            try { start = imageRange.Start; end = imageRange.End; }
+            catch { start = -1; end = -1; }
+            try
+            {
+                var doc = _word.ActiveDocument;
+                foreach (Bookmark bookmark in doc.Bookmarks)
+                {
+                    string name;
+                    try { name = bookmark.Name; }
+                    catch { continue; }
+                    if (string.IsNullOrEmpty(name) || !name.StartsWith(prefix, StringComparison.Ordinal)) continue;
+                    int bStart, bEnd, shapes;
+                    try { bStart = bookmark.Range.Start; bEnd = bookmark.Range.End; shapes = bookmark.Range.InlineShapes.Count; }
+                    catch { continue; }
+                    // The bookmark must still sit on a live inline picture;
+                    // an orphaned bookmark (picture deleted) is not reused.
+                    if (shapes > 0 && bStart == start && bEnd == end)
+                        return "wdi:guid-" + name.Substring(prefix.Length);
+                }
+                var guid = Guid.NewGuid().ToString("N");
+                object rangeObject = imageRange;
+                doc.Bookmarks.Add(prefix + guid, ref rangeObject);
+                return "wdi:guid-" + guid;
+            }
+            catch
+            {
+                return "wdi:img-" + ImageOverlayIdentity.ContentHash(pngBytes) + "-pos" + start;
+            }
+        }
+
+        // C3: returns false when the anchor position is unavailable. Word's
+        // Information[] returns -1 when the position cannot be determined
+        // (e.g. the anchor is not visible); -1, NaN and Infinity are rejected
+        // and never used as coordinates.
+        private static bool TryGetAnchorPagePosition(ImageTarget image, out float x, out float y)
         {
             x = 72F; y = 72F;
             try
             {
                 var px = Convert.ToSingle(image.Anchor.Information[WdInformation.wdHorizontalPositionRelativeToPage]);
                 var py = Convert.ToSingle(image.Anchor.Information[WdInformation.wdVerticalPositionRelativeToPage]);
-                if (!float.IsNaN(px) && !float.IsInfinity(px) && !float.IsNaN(py) && !float.IsInfinity(py))
+                if (ImageOverlayGeometry.IsUsablePageCoordinate(px) &&
+                    ImageOverlayGeometry.IsUsablePageCoordinate(py))
                 {
                     x = px; y = py;
+                    return true;
                 }
             }
             catch { }
+            return false;
         }
 
         // Returns false when the reference frame could not be assigned: the
@@ -246,11 +316,14 @@ namespace OfficeTranslate.WordAddIn
             return true;
         }
 
-        private void PlaceCombinedNote(ImageTarget image, string ownerId, string noteText, float noteLeft, float noteTop)
+        private void PlaceCombinedNote(ImageTarget image, string ownerId, string noteText,
+            float noteLeft, float noteTop,
+            WdRelativeHorizontalPosition relH, WdRelativeVerticalPosition relV)
         {
             // A side-note explicitly does NOT claim positional coverage: it is
-            // placed below the image (or below the anchor when the image uses
-            // alignment positioning), in the image's own reference frame.
+            // placed below the image (or at a fixed page position when the
+            // image uses alignment positioning), in the frame its coordinates
+            // were computed in (C3: coordinates and frame travel together).
             var noteWidth = Math.Min(420F, Math.Max(160F, image.Width));
             var noteHeight = ImageOverlayLayout.EstimateNoteHeight(noteWidth, noteText, 9F);
             object anchor = image.Anchor.Duplicate;
@@ -258,12 +331,22 @@ namespace OfficeTranslate.WordAddIn
                 Office.MsoTextOrientation.msoTextOrientationHorizontal,
                 noteLeft, noteTop, noteWidth, noteHeight, ref anchor);
             note.AlternativeText = ImageOverlayTags.NoteFor(ownerId);
+            // The frame is assigned BEFORE Left/Top so Office interprets the
+            // numbers in the intended system. C3: a note whose frame cannot be
+            // set is deleted and reported instead of being kept in an unknown
+            // frame, which would silently misplace the translations.
             try
             {
-                note.RelativeHorizontalPosition = image.RelativeHorizontalPosition;
-                note.RelativeVerticalPosition = image.RelativeVerticalPosition;
+                note.RelativeHorizontalPosition = relH;
+                note.RelativeVerticalPosition = relV;
             }
-            catch (System.Runtime.InteropServices.COMException) { }
+            catch (System.Runtime.InteropServices.COMException ex)
+            {
+                try { note.Delete(); } catch { }
+                throw new InvalidOperationException(
+                    "已完成图片识别，但无法设置译文旁注的定位参考系，已删除错位旁注避免误导。译文（截断）：" +
+                    TruncateForMessage(noteText), ex);
+            }
             note.Left = noteLeft; note.Top = noteTop; note.Width = noteWidth; note.Height = noteHeight;
             note.WrapFormat.Type = WdWrapType.wdWrapFront;
             note.Fill.Visible = Office.MsoTriState.msoTrue;
@@ -280,10 +363,11 @@ namespace OfficeTranslate.WordAddIn
 
         private void RemovePreviousResults(ImageTarget image, string ownerId)
         {
-            // Deletes only shapes that belong to this image (by owner id), plus
-            // legacy id-less markers from the first 2.1.24 build, which can
-            // never be attributed again. Never touches other images' results,
-            // even when their rects overlap.
+            // Deletes only shapes that provably belong to this image (by owner
+            // id). Legacy id-less markers are retained by default (C4): they
+            // cannot be attributed to an image, and deleting them here would
+            // destroy other images' translations. Never touches other images'
+            // results, even when their rects overlap.
             var doomed = new List<Shape>();
             foreach (Shape shape in _word.ActiveDocument.Shapes)
             {
@@ -391,6 +475,12 @@ namespace OfficeTranslate.WordAddIn
         private static T SafeGet<T>(Func<T> read, T fallback)
         {
             try { return read(); } catch { return fallback; }
+        }
+
+        private static string TruncateForMessage(string text)
+        {
+            if (string.IsNullOrEmpty(text)) return string.Empty;
+            return text.Length <= 500 ? text : text.Substring(0, 500) + "…";
         }
 
         private List<Target> ReadSelection()

@@ -204,8 +204,31 @@ namespace OfficeTranslate.Tests
             Assert.IsTrue(combined.Contains("正文"));
         }
 
+        [TestMethod]
+        public void Header_IsNonEmpty_AndRecognizable()
+        {
+            // C1: the header must never be empty; an empty header both
+            // mislabels the note and hangs naive counting helpers.
+            Assert.IsFalse(string.IsNullOrEmpty(ImageOverlayNotes.Header));
+            Assert.IsTrue(CountOccurrences(
+                ImageOverlayNotes.Combine(new[] { "a\r一", "b\r二" }),
+                ImageOverlayNotes.Header) == 1);
+        }
+
+        [TestMethod]
+        public void CountOccurrences_EmptyNeedle_ReturnsZeroInsteadOfHanging()
+        {
+            // C1 regression: IndexOf("", i) always returns i, so without the
+            // guard this call would never terminate.
+            Assert.AreEqual(0, CountOccurrences("anything", ""));
+            Assert.AreEqual(0, CountOccurrences("anything", null!));
+        }
+
         private static int CountOccurrences(string text, string needle)
         {
+            // C1: an empty needle would match at every position without
+            // advancing (IndexOf("", i) == i, i += 0) and loop forever.
+            if (string.IsNullOrEmpty(needle)) return 0;
             var count = 0;
             var index = 0;
             while ((index = text.IndexOf(needle, index, System.StringComparison.Ordinal)) >= 0)

@@ -163,10 +163,11 @@ namespace OfficeTranslate.PowerPointAddIn
 
         private static void RemovePreviousResults(PowerPoint.Slide slide, string ownerId)
         {
-            // Deletes only shapes that belong to this image (by owner id), plus
-            // legacy id-less tags from the first 2.1.24 build, which can never
-            // be attributed again. Never touches other images' results, even
-            // when their rects overlap.
+            // Deletes only shapes that provably belong to this image (by owner
+            // id). Legacy id-less tags are retained by default (C4): they
+            // cannot be attributed to an image, and deleting them here would
+            // destroy other images' translations. Never touches other images'
+            // results, even when their rects overlap.
             var doomed = new List<PowerPoint.Shape>();
             foreach (PowerPoint.Shape shape in slide.Shapes)
             {
