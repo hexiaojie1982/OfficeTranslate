@@ -3,7 +3,9 @@ using Office = Microsoft.Office.Core;
 using OfficeTranslate.Core;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Task = System.Threading.Tasks.Task;
@@ -37,7 +39,19 @@ namespace OfficeTranslate.WordAddIn
             // the end of the whole task. The duplicate carries the original
             // Document/Story identity (header/footer/footnote safe).
             Range? taskSelection = null;
-            try { taskSelection = ui.Invoke(() => SaveSelectionDuplicate()); }
+            int taskGeneration = 0;
+            try
+            {
+                // N1: every task takes a new selection generation, shared
+                // across service instances (static). A restore ticket from
+                // an older task must never overwrite a newer task's (or
+                // the user's) selection.
+                ui.Invoke(() =>
+                {
+                    taskGeneration = Interlocked.Increment(ref _selectionGeneration);
+                    taskSelection = SaveSelectionDuplicate();
+                });
+            }
             catch { taskSelection = null; }
             try
             {
@@ -121,18 +135,38 @@ namespace OfficeTranslate.WordAddIn
             }
             finally
             {
-                // R1/P2: authoritative restore at the end of the whole task:
-                // success, cancellation, and exception paths all land here,
-                // after every overlay/box/bookmark mutation. Best-effort and
-                // never throwing, so it cannot mask cancellation or the
-                // original exception. Bounded wait: task completion must not
-                // hang if the UI thread is going away.
+                // N1: the 2s bound below is a WAIT boundary, not a guarantee
+                // on the COM call itself. A queued restore callback that only
+                // runs AFTER the wait gave up must not clobber the user's
+                // newer selection, so every restore carries a one-shot
+                // ticket: pending -> running is claimed atomically when the
+                // callback starts on the UI thread, and pending -> expired
+                // is set atomically when the wait gives up. An expired
+                // ticket makes the late callback a no-op. A callback that
+                // already started running cannot be interrupted; its own
+                // generation/staleness checks still apply inside.
                 if (taskSelection != null)
                 {
+                    var ticket = new RestoreTicket(taskSelection, taskGeneration,
+                        Stopwatch.GetTimestamp());
                     try
                     {
-                        var restore = ui.InvokeAsync(() => TryRestoreSelection(taskSelection));
-                        await Task.WhenAny(restore, Task.Delay(2000));
+                        var restore = ui.InvokeAsync(() => ClaimAndRestore(ticket));
+                        var finished = await Task.WhenAny(restore, Task.Delay(SelectionRestoreWaitMs));
+                        if (!ReferenceEquals(finished, restore))
+                        {
+                            // Wait gave up first: expire the ticket so the
+                            // still-queued callback becomes a no-op instead
+                            // of overwriting the user's newer selection.
+                            // Atomic: only pending -> expired. A callback
+                            // that already claimed running is untouched.
+                            if (Interlocked.CompareExchange(ref ticket.State,
+                                    RestoreTicket.Expired, RestoreTicket.Pending) == RestoreTicket.Pending)
+                            {
+                                try { ImageOverlayDiagnostics.LogCaptureFailure("Word", "selection_restore_expired"); }
+                                catch { }
+                            }
+                        }
                     }
                     catch { }
                 }
@@ -1172,8 +1206,19 @@ namespace OfficeTranslate.WordAddIn
             catch { savedSelection = null; }
             try
             {
-                range.Select();
-                _word.Selection.CopyAsPicture();
+                // S1: keep Select and CopyAsPicture as separate guarded
+                // steps. 0x800A11FD ("command not available") is NOT
+                // clipboard-busy and must never be retried blanket-style;
+                // the diagnosis below records which step failed and the
+                // target vs. actual selection identity, so the next review
+                // can tell whether Select() actually landed on the image.
+                // The original exception is rethrown unchanged: the capture
+                // loop's transient/no-image classification must keep seeing
+                // the real HResult.
+                try { range.Select(); }
+                catch (Exception ex) { LogCopyDiagnosis(range, "select", ex); throw; }
+                try { _word.Selection.CopyAsPicture(); }
+                catch (Exception ex) { LogCopyDiagnosis(range, "copy", ex); throw; }
             }
             finally
             {
@@ -1209,6 +1254,113 @@ namespace OfficeTranslate.WordAddIn
                 }
                 catch { }
             }
+        }
+
+        // N1: one-shot restore ticket for the task-end restore. State is
+        // claimed with Interlocked so exactly one of "callback started" /
+        // "wait gave up" wins; an expired ticket makes a late callback a
+        // no-op instead of clobbering the user's newer selection.
+        private sealed class RestoreTicket
+        {
+            public const int Pending = 0;
+            public const int Running = 1;
+            public const int Expired = 2;
+            public int State = Pending;
+            public readonly Range? Selection;
+            public readonly int Generation;
+            public readonly long PostedTicks;
+            public RestoreTicket(Range? selection, int generation, long postedTicks)
+            {
+                Selection = selection;
+                Generation = generation;
+                PostedTicks = postedTicks;
+            }
+        }
+
+        private const int SelectionRestoreWaitMs = 2000;
+
+        // N1: shared across task instances (a new service is created per
+        // task). Bumped at every task entry on the UI thread; a restore
+        // ticket from an older generation must never overwrite a newer
+        // task's (or the user's own) selection.
+        private static int _selectionGeneration;
+
+        // Runs on the UI thread. Atomically claims the ticket, then refuses
+        // a restore that is expired or superseded before touching COM.
+        private void ClaimAndRestore(RestoreTicket ticket)
+        {
+            if (Interlocked.CompareExchange(ref ticket.State,
+                    RestoreTicket.Running, RestoreTicket.Pending) != RestoreTicket.Pending)
+                return; // expired (wait already gave up) or double claim: no-op
+            if (ticket.Generation != _selectionGeneration)
+            {
+                LogRestoreSkipped("superseded");
+                return;
+            }
+            if (ElapsedMs(ticket.PostedTicks) > SelectionRestoreWaitMs)
+            {
+                // Backstop for the corner where the wait path itself never
+                // ran: a restore landing this late would clobber newer
+                // user intent, so it is dropped like an expired ticket.
+                LogRestoreSkipped("stale");
+                return;
+            }
+            TryRestoreSelection(ticket.Selection);
+        }
+
+        private static long ElapsedMs(long startTicks)
+        {
+            return (Stopwatch.GetTimestamp() - startTicks) * 1000 / Stopwatch.Frequency;
+        }
+
+        private static void LogRestoreSkipped(string reason)
+        {
+            try { ImageOverlayDiagnostics.LogCaptureFailure("Word", "selection_restore_skipped reason=" + reason); }
+            catch { }
+        }
+
+        // S1 diagnostics for the Word select -> copy phase. Metadata only:
+        // document/story names and numbers, selection identity, view type,
+        // inline-shape count, exception type/HResult/message. No document
+        // text, no OCR text, no clipboard content. All reads best-effort;
+        // never throws, and the caller rethrows the original exception.
+        private void LogCopyDiagnosis(Range range, string stage, Exception ex)
+        {
+            try
+            {
+                Selection? sel = SafeGet<Selection?>(() => _word.Selection, null);
+                int selStory = -1, selStart = -1, selEnd = -1;
+                string selType = "?";
+                if (sel != null)
+                {
+                    Selection s = sel;
+                    selStory = SafeGet(() => (int)s.Range.StoryType, -1);
+                    selStart = SafeGet(() => s.Range.Start, -1);
+                    selEnd = SafeGet(() => s.Range.End, -1);
+                    selType = SafeGet(() => s.Type.ToString(), "?");
+                }
+                var detail = "select_copy_diag stage=" + stage
+                    + " targetDoc=" + SafeGet(() => (range.Parent as Document)?.Name, "?")
+                    + " targetStory=" + SafeGet(() => (int)range.StoryType, -1)
+                    + " targetRange=" + SafeGet(() => range.Start, -1) + "-" + SafeGet(() => range.End, -1)
+                    + " activeDoc=" + SafeGet(() => _word.ActiveDocument.Name, "?")
+                    + " selStory=" + selStory
+                    + " selRange=" + selStart + "-" + selEnd
+                    + " selType=" + selType
+                    + " view=" + SafeGet(() => _word.ActiveWindow.View.Type.ToString(), "?")
+                    + " inlineShapes=" + SafeGet(() => _word.ActiveDocument.InlineShapes.Count, -1)
+                    + " error=" + ex.GetType().Name
+                    + " hresult=0x" + SafeGet(() => Marshal.GetHRForException(ex).ToString("X8"), "?")
+                    + " msg=" + SafeGet(() => FlattenMessage(ex.Message), "?");
+                ImageOverlayDiagnostics.LogCaptureFailure("Word", detail);
+            }
+            catch { }
+        }
+
+        private static string FlattenMessage(string message)
+        {
+            if (string.IsNullOrEmpty(message)) return "?";
+            return message.Replace('\r', ' ').Replace('\n', ' ');
         }
 
         private static float SafeFloat(Func<float> read)
