@@ -1,6 +1,7 @@
 using Microsoft.Office.Interop.Word;
 using OfficeTranslate.Core;
 using System;
+using System.Runtime.InteropServices;
 using WordApplication = Microsoft.Office.Interop.Word.Application;
 
 namespace OfficeTranslate.WordAddIn
@@ -45,11 +46,17 @@ namespace OfficeTranslate.WordAddIn
                 type = SafeGet(() => sel.Type.ToString(), "?");
             }
             string view = SafeGet(() => word.ActiveWindow.View.Type.ToString(), "?");
+            // S1: SeekView distinguishes the header/footer pane from the
+            // main pane; activeHwnd shows whether Word still owns the
+            // foreground when a post-restore drift is sampled.
+            string seek = SafeGet(() => ((int)word.ActiveWindow.View.SeekView).ToString(), "?");
+            string activeHwnd = SafeGet(() => GetForegroundWindow().ToInt64().ToString("X"), "?");
             string winCap = SafeGet(() => Flatten(word.ActiveWindow.Caption), "?");
             string wins = SafeGet(() => word.Windows.Count.ToString(), "?");
             string docs = SafeGet(() => word.Documents.Count.ToString(), "?");
             return "doc=" + doc + " story=" + story + " range=" + range + " type=" + type
-                + " view=" + view + " winCap=" + winCap + " wins=" + wins + " docs=" + docs;
+                + " view=" + view + " seek=" + seek + " winCap=" + winCap + " wins=" + wins + " docs=" + docs
+                + " activeHwnd=" + activeHwnd;
         }
 
         private static T SafeGet<T>(Func<T> read, T fallback)
@@ -64,5 +71,8 @@ namespace OfficeTranslate.WordAddIn
             string flat = caption.Replace("\r", " ").Replace("\n", " ");
             return flat.Length > 60 ? flat.Substring(0, 60) : flat;
         }
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr GetForegroundWindow();
     }
 }

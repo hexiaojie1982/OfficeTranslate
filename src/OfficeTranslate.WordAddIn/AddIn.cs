@@ -174,8 +174,36 @@ namespace OfficeTranslate.WordAddIn
                 // generation rules (N1); best-effort, never throws.
                 if (service != null) await service.RestoreTaskSelectionAsync(ui);
                 WordSelectionProbe.Log(_word, "after_final_restore", taskWindow);
+                // S1: start the read-only post-restore drift watch (never
+                // awaited: the task is over, the watch only observes).
+                StartPostRestoreWatch(ui, _word, taskWindow);
                 _cancellation.Dispose(); _cancellation = null;
             }
+        }
+
+        // S1: read-only drift watch after the final restore. The error
+        // path showed the selection moving back to the failed image about
+        // 7.6s after after_final_restore while success/cancel stay stable,
+        // so this samples (never restores) at +2/+5/+10s to bracket the
+        // drift in time. Fire-and-forget: never throws, stops itself after
+        // the last sample, holds no ticket and never touches the selection
+        // (N1 untouched). By construction of the finally above, the
+        // progress form is already null and any error dialog already
+        // dismissed when the watch runs.
+        private static async void StartPostRestoreWatch(OfficeUiDispatcher ui, WordApplication? word, IntPtr taskWindow)
+        {
+            try
+            {
+                foreach (var delayMs in new[] { 2000, 3000, 5000 })
+                {
+                    await Task.Delay(delayMs).ConfigureAwait(false);
+                    var w = word;
+                    var hwnd = taskWindow;
+                    try { await ui.InvokeAsync(() => WordSelectionProbe.Log(w, "post_restore_watch", hwnd)).ConfigureAwait(false); }
+                    catch { }
+                }
+            }
+            catch { }
         }
 
         // O1: the document window this task was invoked from. Read on the UI
