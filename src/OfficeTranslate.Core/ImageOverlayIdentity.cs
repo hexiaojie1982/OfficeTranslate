@@ -65,6 +65,54 @@ namespace OfficeTranslate.Core
             for (var i = 1; i < ordered.Count; i++) duplicates.Add(ordered[i].Item1);
             return Tuple.Create(ordered[0].Item1, duplicates);
         }
+
+        // R1: bookmark-name contract for the Word add-in. The canonical
+        // bookmark is "OTImg_" + 32 hex (38 chars, under Word's 40-char
+        // bookmark limit). A tighten staging is "OTTmp_" + the same 32
+        // hex: deterministic and self-describing, so an interrupted
+        // tighten can be recovered -- and its identity re-adopted -- from
+        // the name alone, with no side channel.
+        public const string CanonicalBookmarkPrefix = "OTImg_";
+        public const string StagingBookmarkPrefix = "OTTmp_";
+
+        // A staging bookmark is verifiable only with the exact 38-char hex
+        // shape. Anything else (user bookmarks, old 14-char random
+        // stagings) is never treated as an identity record.
+        public static bool IsVerifiableStagingName(string name)
+        {
+            if (string.IsNullOrEmpty(name)) return false;
+            if (!name.StartsWith(StagingBookmarkPrefix, StringComparison.Ordinal)) return false;
+            if (name.Length != StagingBookmarkPrefix.Length + 32) return false;
+            for (int i = StagingBookmarkPrefix.Length; i < name.Length; i++)
+            {
+                char c = name[i];
+                bool hex = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+                if (!hex) return false;
+            }
+            return true;
+        }
+
+        // Maps a verifiable staging name back to its canonical bookmark
+        // name. Throws for unverifiable names: callers must verify first.
+        public static string CanonicalNameForStaging(string stagingName)
+        {
+            if (!IsVerifiableStagingName(stagingName))
+                throw new ArgumentException("Not a verifiable staging bookmark name.", nameof(stagingName));
+            return CanonicalBookmarkPrefix + stagingName.Substring(StagingBookmarkPrefix.Length);
+        }
+
+        // Derives the deterministic staging name for a canonical bookmark
+        // we minted ("OTImg_" + 32 hex). Returns empty for foreign name
+        // shapes, for which no verifiable mapping exists.
+        public static string StagingNameForCanonical(string canonicalName)
+        {
+            if (string.IsNullOrEmpty(canonicalName)) return string.Empty;
+            if (!canonicalName.StartsWith(CanonicalBookmarkPrefix, StringComparison.Ordinal)) return string.Empty;
+            string hex = canonicalName.Substring(CanonicalBookmarkPrefix.Length);
+            if (hex.Length != 32) return string.Empty;
+            string staging = StagingBookmarkPrefix + hex;
+            return IsVerifiableStagingName(staging) ? staging : string.Empty;
+        }
     }
 
     // Marker scheme for the shapes this add-in creates. Word/Excel store the

@@ -318,11 +318,40 @@ namespace OfficeTranslate.WordAddIn
             // succeeds, so a cancelled/empty/failed run never mutates the
             // document. Empty when the canonical bookmark already existed.
             public string PendingBookmark = string.Empty;
+            // R1: staging adoption. When the pre-network resolve proves a
+            // verifiable OTTmp_<32hex> staging belongs to this image and no
+            // canonical does, the resolution ADOPTS that staging's identity
+            // instead of minting a new owner: AdoptedStaging names the
+            // staging bookmark, and Commit restores its canonical from it
+            // (RecoverInterruptedTightens). RejectedStagings are proven
+            // stagings whose guid lost the canonical choice: their identity
+            // was absorbed into the chosen one, so the commit-phase recovery
+            // drops them WITHOUT resurrecting their canonical.
+            public string AdoptedStaging = string.Empty;
+            public readonly List<string> RejectedStagings = new List<string>();
+        }
+
+        // R1: one bookmark (canonical or verifiable staging) whose strict
+        // ownership proof succeeded for the image being resolved.
+        private sealed class ProvenIdentity
+        {
+            public readonly string BookmarkName;
+            public readonly string Guid;
+            public readonly int BStart;
+            public readonly int BEnd;
+            public readonly bool IsStaging;
+            public ProvenIdentity(string bookmarkName, string guid, int bStart, int bEnd, bool isStaging)
+            {
+                BookmarkName = bookmarkName;
+                Guid = guid;
+                BStart = bStart;
+                BEnd = bEnd;
+                IsStaging = isStaging;
+            }
         }
 
         private InlineOwnerResolution ResolveInlineOwnerId(Range imageRange)
         {
-            const string prefix = "OTImg_";
             var result = new InlineOwnerResolution();
             int start, end;
             WdStoryType story;
@@ -331,13 +360,28 @@ namespace OfficeTranslate.WordAddIn
             try
             {
                 var doc = _word.ActiveDocument;
-                var matches = new List<Tuple<string, int, int>>();
+                // R1: recognize verifiable staging bookmarks (OTTmp_<32hex>)
+                // in addition to canonical ones. A staging left by an
+                // interrupted tighten carries the full identity in its name;
+                // when it provably belongs to this image (exactly the same
+                // strict proof as a canonical) the resolution ADOPTS its guid
+                // instead of minting a new one. A name alone never proves
+                // ownership: unproven stagings are ignored here, exactly as
+                // before, and a cancelled/empty/failed run still returns
+                // before Commit and never mutates the document.
+                var proven = new List<ProvenIdentity>();
                 foreach (Bookmark bookmark in doc.Bookmarks)
                 {
                     string name;
                     try { name = bookmark.Name; }
                     catch { continue; }
-                    if (string.IsNullOrEmpty(name) || !name.StartsWith(prefix, StringComparison.Ordinal)) continue;
+                    if (string.IsNullOrEmpty(name)) continue;
+                    bool isCanonical = name.StartsWith(ImageOverlayIdentity.CanonicalBookmarkPrefix, StringComparison.Ordinal);
+                    bool isStaging = !isCanonical && ImageOverlayIdentity.IsVerifiableStagingName(name);
+                    if (!isCanonical && !isStaging) continue;
+                    string guid = isCanonical
+                        ? name.Substring(ImageOverlayIdentity.CanonicalBookmarkPrefix.Length)
+                        : name.Substring(ImageOverlayIdentity.StagingBookmarkPrefix.Length);
                     Range shapeRange;
                     int bStart, bEnd;
                     try
@@ -361,21 +405,57 @@ namespace OfficeTranslate.WordAddIn
                     // and two identical pictures at different positions have
                     // different ranges, so they never merge.
                     if (sStart == start && sEnd == end && sStory == story)
-                        matches.Add(Tuple.Create(name, bStart, bEnd));
+                        proven.Add(new ProvenIdentity(name, guid, bStart, bEnd, isStaging));
                 }
                 // Deterministic canonical choice: bookmark start, then end,
                 // then name. Bookmark enumeration order is not specified, so
                 // it must not decide. The pure selection lives in Core so it
-                // is unit-testable without COM.
-                if (matches.Count >= 1)
+                // is unit-testable without COM. One identity per guid: a
+                // canonical proof beats a staging proof for the same guid
+                // (the staging is then just a leftover that the commit-phase
+                // recovery drops once the canonical is confirmed).
+                if (proven.Count >= 1)
                 {
+                    var byGuid = new Dictionary<string, ProvenIdentity>(StringComparer.Ordinal);
+                    foreach (var p in proven)
+                    {
+                        ProvenIdentity existing;
+                        if (!byGuid.TryGetValue(p.Guid, out existing) || (!p.IsStaging && existing.IsStaging))
+                            byGuid[p.Guid] = p;
+                    }
+                    var matches = new List<Tuple<string, int, int>>();
+                    foreach (var p in byGuid.Values)
+                        matches.Add(Tuple.Create(p.BookmarkName, p.BStart, p.BEnd));
                     var chosen = ImageOverlayIdentity.ChooseCanonicalBookmark(matches);
-                    result.CanonicalBookmark = chosen.Item1;
-                    result.OwnerId = "wdi:guid-" + chosen.Item1.Substring(prefix.Length);
+                    var byName = new Dictionary<string, ProvenIdentity>(StringComparer.Ordinal);
+                    foreach (var p in byGuid.Values) byName[p.BookmarkName] = p;
+                    if (!byName.TryGetValue(chosen.Item1, out var winner))
+                        throw new InvalidOperationException("内部错误：未能确定图片身份。");
+                    result.CanonicalBookmark = ImageOverlayIdentity.CanonicalBookmarkPrefix + winner.Guid;
+                    result.OwnerId = "wdi:guid-" + winner.Guid;
+                    if (winner.IsStaging)
+                    {
+                        // R1: adopt the interrupted identity. The canonical
+                        // bookmark does not exist yet; Commit restores it
+                        // from this staging (RecoverInterruptedTightens)
+                        // instead of creating a second owner. PendingBookmark
+                        // reuses the existing creation path; the recovery
+                        // reports the restored names so the Add is skipped
+                        // when the restore already succeeded, and a failed
+                        // restore falls through to creating the canonical at
+                        // the current image range -- with the SAME adopted
+                        // guid, never a second identity.
+                        result.PendingBookmark = result.CanonicalBookmark;
+                        result.AdoptedStaging = winner.BookmarkName;
+                    }
                     foreach (var duplicate in chosen.Item2)
                     {
-                        result.DuplicateBookmarks.Add(duplicate);
-                        result.AbsorbedOwnerIds.Add("wdi:guid-" + duplicate.Substring(prefix.Length));
+                        if (!byName.TryGetValue(duplicate, out var dup)) continue;
+                        if (dup.IsStaging)
+                            result.RejectedStagings.Add(dup.BookmarkName);
+                        else
+                            result.DuplicateBookmarks.Add(dup.BookmarkName);
+                        result.AbsorbedOwnerIds.Add("wdi:guid-" + dup.Guid);
                     }
                     return result;
                 }
@@ -383,10 +463,10 @@ namespace OfficeTranslate.WordAddIn
                 // the pending name only. CommitInlineOwnerResolution creates
                 // it after the OCR plan succeeds, so a cancelled/empty/
                 // failed run never mutates the document.
-                var guid = Guid.NewGuid().ToString("N");
-                result.PendingBookmark = prefix + guid;
-                result.CanonicalBookmark = prefix + guid;
-                result.OwnerId = "wdi:guid-" + guid;
+                var newGuid = Guid.NewGuid().ToString("N");
+                result.PendingBookmark = ImageOverlayIdentity.CanonicalBookmarkPrefix + newGuid;
+                result.CanonicalBookmark = ImageOverlayIdentity.CanonicalBookmarkPrefix + newGuid;
+                result.OwnerId = "wdi:guid-" + newGuid;
                 return result;
             }
             catch
@@ -416,9 +496,14 @@ namespace OfficeTranslate.WordAddIn
             // post-success leftover: drop it. A staging whose restore fails
             // is kept for the next run; only bookmarks with a verifiable
             // 38-char hex shape are touched, never a blind prefix sweep.
+            // R1: rejected stagings (proven for this image but absorbed into
+            // the chosen identity) are dropped WITHOUT resurrecting their
+            // canonical -- restoring them would recreate the second owner
+            // this fix removes. Returns the canonical names this call
+            // restored, so the pending creation below does not re-add them.
             // This is independent of this image's resolution, so it runs
             // before the empty-canonical early return.
-            RecoverInterruptedTightens(doc);
+            var restored = RecoverInterruptedTightens(doc, resolution.RejectedStagings);
             if (string.IsNullOrEmpty(resolution.CanonicalBookmark)) return;
             // N2: a first sighting creates its owner bookmark only here,
             // after the plan succeeded. Cancelled/empty/failed runs return
@@ -427,7 +512,13 @@ namespace OfficeTranslate.WordAddIn
             // run would report success while the next run mints a new owner
             // and orphans these shapes, so the image aborts with an
             // explicit error before any shape is created or removed.
-            if (!string.IsNullOrEmpty(resolution.PendingBookmark))
+            // R1: skip the Add when the recovery above already restored this
+            // canonical from its adopted staging (same identity, already
+            // persisted). When the restore failed, fall through and create
+            // the canonical at the current image range -- with the adopted
+            // guid, never a second identity; the kept staging is cleaned up
+            // by the next run once the canonical is confirmed.
+            if (!string.IsNullOrEmpty(resolution.PendingBookmark) && !restored.Contains(resolution.PendingBookmark))
             {
                 try
                 {
@@ -454,10 +545,18 @@ namespace OfficeTranslate.WordAddIn
         // ("OTTmp_" + 32 hex -> "OTImg_" + 32 hex), so the mapping is
         // verifiable from the name alone. Bookmarks that do not have the
         // exact 38-char hex shape are left alone, including user bookmarks
-        // that merely share the prefix.
-        private static void RecoverInterruptedTightens(Document doc)
+        // that merely share the prefix. R1: rejectedStagings are proven
+        // stagings whose identity was absorbed into another owner during
+        // resolve -- they are dropped WITHOUT resurrecting their canonical.
+        // Returns the canonical names this call restored.
+        private static HashSet<string> RecoverInterruptedTightens(Document doc, List<string> rejectedStagings)
         {
-            List<Tuple<string, string>> stagings = null;
+            var restored = new HashSet<string>(StringComparer.Ordinal);
+            var rejected = new HashSet<string>(StringComparer.Ordinal);
+            if (rejectedStagings != null)
+                foreach (var r in rejectedStagings) rejected.Add(r);
+            var stagings = new List<Tuple<string, string>>();
+            var toDrop = new List<string>();
             try
             {
                 foreach (Bookmark bookmark in doc.Bookmarks)
@@ -466,16 +565,18 @@ namespace OfficeTranslate.WordAddIn
                     try { name = bookmark.Name; }
                     catch { continue; }
                     if (string.IsNullOrEmpty(name)) continue;
-                    if (!name.StartsWith("OTTmp_", StringComparison.Ordinal)) continue;
-                    if (name.Length != 38) continue;
-                    var hex = name.Substring("OTTmp_".Length);
-                    if (!IsHex(hex)) continue;
-                    if (stagings == null) stagings = new List<Tuple<string, string>>();
-                    stagings.Add(Tuple.Create(name, "OTImg_" + hex));
+                    if (!ImageOverlayIdentity.IsVerifiableStagingName(name)) continue;
+                    if (rejected.Contains(name))
+                    {
+                        toDrop.Add(name);
+                        continue;
+                    }
+                    stagings.Add(Tuple.Create(name, ImageOverlayIdentity.CanonicalNameForStaging(name)));
                 }
             }
-            catch { return; }
-            if (stagings == null) return;
+            catch { return restored; }
+            foreach (var name in toDrop)
+                try { doc.Bookmarks[name].Delete(); } catch { }
             foreach (var pair in stagings)
             {
                 bool canonicalExists = false;
@@ -487,51 +588,36 @@ namespace OfficeTranslate.WordAddIn
                     // canonical name at the staged (tight) range. If this
                     // fails too, the staging bookmark is the ONLY identity
                     // record left -- keep it; the next run retries.
-                    bool restored = false;
+                    bool ok = false;
                     try
                     {
                         Range stagedRange = doc.Bookmarks[pair.Item1].Range;
                         object r = stagedRange;
                         doc.Bookmarks.Add(pair.Item2, ref r);
-                        restored = true;
+                        ok = true;
                     }
                     catch { /* staging kept; retry next run */ }
-                    if (!restored) continue;
+                    if (!ok) continue;
+                    restored.Add(pair.Item2);
                 }
                 try { doc.Bookmarks[pair.Item1].Delete(); } catch { }
             }
-        }
-
-        private static bool IsHex(string value)
-        {
-            foreach (var c in value)
-            {
-                bool digit = c >= '0' && c <= '9';
-                bool lower = c >= 'a' && c <= 'f';
-                bool upper = c >= 'A' && c <= 'F';
-                if (!digit && !lower && !upper) return false;
-            }
-            return true;
+            return restored;
         }
 
         // N2: derives the staging name for a canonical bookmark. For names
         // we minted ("OTImg_" + 32 hex) the staging is "OTTmp_" + the same
         // 32 hex = 38 chars: deterministic and self-describing, so an
         // interrupted tighten can be recovered without any side channel
-        // (see RecoverInterruptedTightens), and it can never parse as an
-        // OTImg_ owner. For foreign bookmark shapes inside our prefix no
+        // (see RecoverInterruptedTightens and the R1 adoption in
+        // ResolveInlineOwnerId), and it can never parse as an OTImg_
+        // owner. For foreign bookmark shapes inside our prefix no
         // verifiable mapping is possible; keep the old short random
         // staging (14 chars, never an OTImg_ owner).
         private static string StagingNameFor(string canonicalName)
         {
-            const string prefix = "OTImg_";
-            if (!string.IsNullOrEmpty(canonicalName) &&
-                canonicalName.StartsWith(prefix, StringComparison.Ordinal))
-            {
-                var hex = canonicalName.Substring(prefix.Length);
-                if (hex.Length == 32 && IsHex(hex))
-                    return "OTTmp_" + hex;
-            }
+            var mapped = ImageOverlayIdentity.StagingNameForCanonical(canonicalName);
+            if (!string.IsNullOrEmpty(mapped)) return mapped;
             return "OTTmp_" + Guid.NewGuid().ToString("N").Substring(0, 8);
         }
 
