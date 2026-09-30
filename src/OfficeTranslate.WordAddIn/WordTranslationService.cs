@@ -42,6 +42,7 @@ namespace OfficeTranslate.WordAddIn
             // identity (header/footer/footnote safe).
             _taskSelection = null;
             _taskGeneration = 0;
+            _taskViewType = -1;
             try
             {
                 // N1: every task takes a new selection generation, shared
@@ -52,6 +53,10 @@ namespace OfficeTranslate.WordAddIn
                 {
                     _taskGeneration = Interlocked.Increment(ref _selectionGeneration);
                     _taskSelection = SaveSelectionDuplicate();
+                    // Capture the entry window view (Print/Normal/...). The
+                    // final restore puts the window back to this view before
+                    // selecting the entry range; see RestoreSelectionWithDiag.
+                    _taskViewType = SafeGet(() => (int)_word.ActiveWindow.View.Type, -1);
                 });
             }
             catch { _taskSelection = null; }
@@ -1317,6 +1322,14 @@ namespace OfficeTranslate.WordAddIn
         // AFTER its UI teardown (see RestoreTaskSelectionAsync). Instance
         // state: one service is created per task.
         private Range? _taskSelection;
+        // d35ebd5 review: the error path drifts back to Normal view within
+        // ~2s of the final restore because the window was left in Normal
+        // view by the earlier teardown. Selecting a header-story range while
+        // the window is Normal forces only a transient Print view, which
+        // Word flips back. Capture the entry view type so the restore can
+        // put the window back to the entry view BEFORE selecting, making the
+        // restore's precondition match the entry state. -1 = unreadable.
+        private int _taskViewType = -1;
         private int _taskGeneration;
 
         // S1: metadata-only snapshot of a restore target range. Never throws.
@@ -1359,6 +1372,30 @@ namespace OfficeTranslate.WordAddIn
         {
             string targetState = SnapshotRangeState(target);
             string beforeState = SnapshotSelectionState(SafeGet<Selection?>(() => _word.Selection, null));
+            // d35ebd5 review: if the window is not in the entry view (e.g.
+            // Normal after the error-path teardown), selecting a header-story
+            // range only forces a transient Print view that Word flips back
+            // within ~2s, dragging the selection back to the main story.
+            // Restore the entry view FIRST so the Select() precondition
+            // matches the entry state. Best-effort, never throws; runs inside
+            // the ticket claim so a stale/expired ticket never touches the
+            // view (ClaimAndRestore returns before reaching here).
+            string viewFix = "skip";
+            try
+            {
+                if (_taskViewType >= 0)
+                {
+                    Window? win = SafeGet<Window?>(() => _word.ActiveWindow, null);
+                    int curView = win == null ? -2 : SafeGet(() => (int)win.View.Type, -2);
+                    if (curView == _taskViewType) viewFix = "already";
+                    else if (win != null && curView != -2)
+                    {
+                        viewFix = curView + "->" + _taskViewType;
+                        win.View.Type = (WdViewType)_taskViewType;
+                    }
+                }
+            }
+            catch { viewFix = "throw"; }
             string outcome;
             try
             {
@@ -1377,6 +1414,7 @@ namespace OfficeTranslate.WordAddIn
                     + " before=[" + beforeState + "]"
                     + " after=[" + afterState + "]"
                     + " outcome=" + outcome
+                    + " viewfix=" + viewFix
                     + " matched=" + (matched ? "1" : "0"));
             }
             catch { }
