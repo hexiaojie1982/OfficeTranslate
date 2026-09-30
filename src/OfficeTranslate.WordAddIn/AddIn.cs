@@ -111,26 +111,59 @@ namespace OfficeTranslate.WordAddIn
             // writeback operations are dispatched back to this thread by
             // the translation service.
             var ui = OfficeUiDispatcher.Capture("Word");
+            // O1: capture the task's own document window BEFORE the first
+            // await. Process.MainWindowHandle is not necessarily the window
+            // the ribbon was invoked from when several document windows are
+            // open; progress/result/error windows must all be owned by the
+            // task window so dismissing them returns activation to the
+            // right document instead of switching to another one.
+            var taskWindow = GetTaskWindow();
             try
             {
                 var settings = LoadForTranslation();
                 settings.Validate();
                 _progressForm = new TranslationProgressForm(settings.UiLanguage, () => _cancellation?.Cancel());
-                _progressForm.ShowFor(System.Diagnostics.Process.GetCurrentProcess().MainWindowHandle);
+                _progressForm.ShowFor(taskWindow);
                 var bilingual = settings.BilingualMode;
                 var service = new WordTranslationService(_word);
                 _progressForm.SetStatus("OfficeTranslate：正在读取文档…");
                 var summary = await service.TranslateAsync(wholeDocument, bilingual, settings, _cancellation.Token, _progressForm.SetStatus, ui);
-                var owner = System.Diagnostics.Process.GetCurrentProcess().MainWindowHandle;
-                _progressForm.CloseAndShowResult(summary, owner);
+                _progressForm.CloseAndShowResult(summary, taskWindow);
                 _progressForm = null;
             }
             catch (OperationCanceledException) { }
             // N1: error presentation is UI work and must enter the same UI
             // dispatch boundary; the ambient SynchronizationContext cannot
             // be trusted to bring the post-await continuation back to STA.
-            catch (Exception ex) { ui.Invoke(() => MessageBox.Show(ex.Message, "OfficeTranslate", MessageBoxButtons.OK, MessageBoxIcon.Error)); }
+            // O1: close the progress window BEFORE showing the error, and
+            // give the error dialog the task window as its owner. Showing
+            // an ownerless MessageBox while the progress form is still open
+            // lets Windows reactivate a different document window on dismiss.
+            catch (Exception ex)
+            {
+                _progressForm?.CloseSafely(); _progressForm = null;
+                var window = taskWindow;
+                ui.Invoke(() =>
+                {
+                    if (window != IntPtr.Zero) MessageBox.Show(new TranslationProgressForm.WindowHandle(window), ex.Message, "OfficeTranslate", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    else MessageBox.Show(ex.Message, "OfficeTranslate", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                });
+            }
             finally { _progressForm?.CloseSafely(); _progressForm = null; _cancellation.Dispose(); _cancellation = null; }
+        }
+
+        // O1: the document window this task was invoked from. Read on the UI
+        // thread at ribbon entry, before any await; IntPtr.Zero when there
+        // is no usable window (falls back to the previous unowned behavior).
+        private IntPtr GetTaskWindow()
+        {
+            try
+            {
+                var window = _word?.ActiveWindow;
+                if (window == null) return IntPtr.Zero;
+                return new IntPtr(window.Hwnd);
+            }
+            catch { return IntPtr.Zero; }
         }
 
         public void OnConnection(object application, Extensibility.ext_ConnectMode connectMode, object addInInst, ref Array custom)

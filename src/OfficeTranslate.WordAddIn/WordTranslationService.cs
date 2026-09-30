@@ -192,6 +192,9 @@ namespace OfficeTranslate.WordAddIn
                 byte[] captured;
                 try
                 {
+                    // S1: reset the per-image copy counter so the attempt
+                    // number in select_copy_diag matches CapturePng's.
+                    _copyAttempt = 0;
                     captured = ClipboardImageCapture.CapturePng(
                         image.CopyAsPicture,
                         () => System.Windows.Forms.Application.DoEvents(),
@@ -1182,6 +1185,13 @@ namespace OfficeTranslate.WordAddIn
             result.Add(target);
         }
 
+        // S1: counts copy-delegate invocations for the current image. The
+        // delegate is invoked exactly once per CapturePng attempt, images
+        // are translated sequentially, and everything runs on the UI
+        // thread, so this equals the capture attempt number (1-based).
+        // Reset before each CapturePng call.
+        private int _copyAttempt;
+
         // S2: select-then-copy for inline pictures. Saves the user's current
         // selection, selects the image range, copies via Selection, then
         // restores the selection best-effort. Runs synchronously on the UI
@@ -1197,13 +1207,23 @@ namespace OfficeTranslate.WordAddIn
         private void SelectAndCopyAsPicture(Range range)
         {
             Range? savedSelection = null;
+            Selection? beforeSelection = null;
             try
             {
                 var selection = _word.Selection;
                 if (selection != null)
+                {
                     savedSelection = selection.Range.Duplicate;
+                    beforeSelection = selection;
+                }
             }
             catch { savedSelection = null; }
+            _copyAttempt++;
+            // S1: per-attempt condition snapshot BEFORE Select, so the next
+            // review can compare the select/copy preconditions of a failing
+            // attempt against succeeding ones (first image vs second image,
+            // attempt 1 vs attempt 2).
+            string beforeState = SnapshotSelectionState(beforeSelection);
             try
             {
                 // S1: keep Select and CopyAsPicture as separate guarded
@@ -1216,9 +1236,14 @@ namespace OfficeTranslate.WordAddIn
                 // loop's transient/no-image classification must keep seeing
                 // the real HResult.
                 try { range.Select(); }
-                catch (Exception ex) { LogCopyDiagnosis(range, "select", ex); throw; }
+                catch (Exception ex) { LogCopyDiagnosis(range, "select", beforeState, null, ex); throw; }
+                string afterSelectState = SnapshotSelectionState(SafeGet<Selection?>(() => _word.Selection, null));
                 try { _word.Selection.CopyAsPicture(); }
-                catch (Exception ex) { LogCopyDiagnosis(range, "copy", ex); throw; }
+                catch (Exception ex) { LogCopyDiagnosis(range, "copy", beforeState, afterSelectState, ex); throw; }
+                // S1: also record the succeeding attempts' full
+                // before/after conditions; without them a failing attempt
+                // cannot be compared against anything.
+                LogCopyDiagnosis(range, "copied", beforeState, afterSelectState, null);
             }
             finally
             {
@@ -1321,40 +1346,57 @@ namespace OfficeTranslate.WordAddIn
 
         // S1 diagnostics for the Word select -> copy phase. Metadata only:
         // document/story names and numbers, selection identity, view type,
-        // inline-shape count, exception type/HResult/message. No document
-        // text, no OCR text, no clipboard content. All reads best-effort;
-        // never throws, and the caller rethrows the original exception.
-        private void LogCopyDiagnosis(Range range, string stage, Exception ex)
+        // window caption/counts, inline-shape count, exception type/HResult/
+        // message. No document text, no OCR text, no clipboard content. All
+        // reads best-effort; never throws, and the caller rethrows the
+        // original exception. ex == null marks a succeeding attempt
+        // ("copied"): its before/after conditions are the comparison base
+        // for failing attempts.
+        private void LogCopyDiagnosis(Range range, string stage, string beforeState, string? afterSelectState, Exception? ex)
         {
             try
             {
-                Selection? sel = SafeGet<Selection?>(() => _word.Selection, null);
-                int selStory = -1, selStart = -1, selEnd = -1;
-                string selType = "?";
-                if (sel != null)
-                {
-                    Selection s = sel;
-                    selStory = SafeGet(() => (int)s.Range.StoryType, -1);
-                    selStart = SafeGet(() => s.Range.Start, -1);
-                    selEnd = SafeGet(() => s.Range.End, -1);
-                    selType = SafeGet(() => s.Type.ToString(), "?");
-                }
                 var detail = "select_copy_diag stage=" + stage
+                    + " attempt=" + _copyAttempt
                     + " targetDoc=" + SafeGet(() => (range.Parent as Document)?.Name, "?")
                     + " targetStory=" + SafeGet(() => (int)range.StoryType, -1)
                     + " targetRange=" + SafeGet(() => range.Start, -1) + "-" + SafeGet(() => range.End, -1)
-                    + " activeDoc=" + SafeGet(() => _word.ActiveDocument.Name, "?")
-                    + " selStory=" + selStory
-                    + " selRange=" + selStart + "-" + selEnd
-                    + " selType=" + selType
-                    + " view=" + SafeGet(() => _word.ActiveWindow.View.Type.ToString(), "?")
+                    + " before=[" + beforeState + "]"
+                    + (afterSelectState != null ? " afterSelect=[" + afterSelectState + "]" : "")
                     + " inlineShapes=" + SafeGet(() => _word.ActiveDocument.InlineShapes.Count, -1)
-                    + " error=" + ex.GetType().Name
-                    + " hresult=0x" + SafeGet(() => Marshal.GetHRForException(ex).ToString("X8"), "?")
-                    + " msg=" + SafeGet(() => FlattenMessage(ex.Message), "?");
+                    + (ex != null
+                        ? " error=" + ex.GetType().Name
+                            + " hresult=0x" + SafeGet(() => Marshal.GetHRForException(ex).ToString("X8"), "?")
+                            + " msg=" + SafeGet(() => FlattenMessage(ex.Message), "?")
+                        : " ok=1");
                 ImageOverlayDiagnostics.LogCaptureFailure("Word", detail);
             }
             catch { }
+        }
+
+        // S1: compact metadata-only snapshot of the current selection plus
+        // the active window state. Used for the before-select / after-select
+        // per-attempt comparison. Never throws.
+        private string SnapshotSelectionState(Selection? sel)
+        {
+            try
+            {
+                string doc = "?", story = "?", range = "?-?", type = "?";
+                if (sel != null)
+                {
+                    Selection s = sel;
+                    doc = SafeGet(() => (s.Range.Parent as Document)?.Name, "?");
+                    story = SafeGet(() => ((int)s.Range.StoryType).ToString(), "?");
+                    range = SafeGet(() => s.Range.Start, -1) + "-" + SafeGet(() => s.Range.End, -1);
+                    type = SafeGet(() => s.Type.ToString(), "?");
+                }
+                return "doc=" + doc + " story=" + story + " range=" + range + " type=" + type
+                    + " view=" + SafeGet(() => _word.ActiveWindow.View.Type.ToString(), "?")
+                    + " winCap=" + SafeGet(() => FlattenMessage(_word.ActiveWindow.Caption), "?")
+                    + " wins=" + SafeGet(() => _word.Windows.Count, -1)
+                    + " docs=" + SafeGet(() => _word.Documents.Count, -1);
+            }
+            catch { return "?"; }
         }
 
         private static string FlattenMessage(string message)
