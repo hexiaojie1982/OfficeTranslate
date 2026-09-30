@@ -192,9 +192,6 @@ namespace OfficeTranslate.WordAddIn
                 byte[] captured;
                 try
                 {
-                    // S1: reset the per-image copy counter so the attempt
-                    // number in select_copy_diag matches CapturePng's.
-                    _copyAttempt = 0;
                     captured = ClipboardImageCapture.CapturePng(
                         image.CopyAsPicture,
                         () => System.Windows.Forms.Application.DoEvents(),
@@ -1150,7 +1147,7 @@ namespace OfficeTranslate.WordAddIn
             // the multi-image flow. The user's selection is saved and
             // restored best-effort; a stale range now fails visibly at
             // Select() instead of silently copying nothing.
-            var target = new ImageTarget(range, left, top, shape.Width, shape.Height, () => SelectAndCopyAsPicture(range));
+            var target = new ImageTarget(range, left, top, shape.Width, shape.Height, attempt => SelectAndCopyAsPicture(range, attempt));
             target.Kind = "Inline";
             // Inline pictures cannot be rotated in Word, and InlineShape does
             // not expose crop; the planner's aspect-ratio check remains the guard.
@@ -1165,7 +1162,7 @@ namespace OfficeTranslate.WordAddIn
             if (shape.Type == Office.MsoShapeType.msoGroup) { for (var i = 1; i <= shape.GroupItems.Count; i++) AddFloatingImage(shape.GroupItems[i], result); return; }
             if (shape.Type != Office.MsoShapeType.msoPicture && shape.Type != Office.MsoShapeType.msoLinkedPicture) return;
             var anchor = shape.Anchor.Duplicate;
-            var target = new ImageTarget(anchor, shape.Left, shape.Top, shape.Width, shape.Height, () => { object replace = true; shape.Select(ref replace); shape.Anchor.Application.Selection.CopyAsPicture(); });
+            var target = new ImageTarget(anchor, shape.Left, shape.Top, shape.Width, shape.Height, _ => { object replace = true; shape.Select(ref replace); shape.Anchor.Application.Selection.CopyAsPicture(); });
             target.Kind = "Floating";
             target.Rotation = SafeFloat(() => shape.Rotation);
             // Word's object model exposes no flip-state property (only the Flip
@@ -1185,13 +1182,10 @@ namespace OfficeTranslate.WordAddIn
             result.Add(target);
         }
 
-        // S1: counts copy-delegate invocations for the current image. The
-        // delegate is invoked exactly once per CapturePng attempt, images
-        // are translated sequentially, and everything runs on the UI
-        // thread, so this equals the capture attempt number (1-based).
-        // Reset before each CapturePng call.
-        private int _copyAttempt;
-
+        // D1: the capture attempt is passed explicitly by the capture loop
+        // (1-based, same numbering as the "attempt N/3" message). It is NOT
+        // counted here: a clear-phase failure retries without invoking the
+        // delegate at all, so a local counter would undercount.
         // S2: select-then-copy for inline pictures. Saves the user's current
         // selection, selects the image range, copies via Selection, then
         // restores the selection best-effort. Runs synchronously on the UI
@@ -1204,7 +1198,7 @@ namespace OfficeTranslate.WordAddIn
         // identity, so a selection in a header/footer/footnote restores to
         // the same story instead of being rebuilt in the main text via
         // ActiveDocument.Range (which only addresses the main story).
-        private void SelectAndCopyAsPicture(Range range)
+        private void SelectAndCopyAsPicture(Range range, int attempt)
         {
             Range? savedSelection = null;
             Selection? beforeSelection = null;
@@ -1218,7 +1212,6 @@ namespace OfficeTranslate.WordAddIn
                 }
             }
             catch { savedSelection = null; }
-            _copyAttempt++;
             // S1: per-attempt condition snapshot BEFORE Select, so the next
             // review can compare the select/copy preconditions of a failing
             // attempt against succeeding ones (first image vs second image,
@@ -1236,14 +1229,14 @@ namespace OfficeTranslate.WordAddIn
                 // loop's transient/no-image classification must keep seeing
                 // the real HResult.
                 try { range.Select(); }
-                catch (Exception ex) { LogCopyDiagnosis(range, "select", beforeState, null, ex); throw; }
+                catch (Exception ex) { LogCopyDiagnosis(range, "select", attempt, beforeState, null, ex); throw; }
                 string afterSelectState = SnapshotSelectionState(SafeGet<Selection?>(() => _word.Selection, null));
                 try { _word.Selection.CopyAsPicture(); }
-                catch (Exception ex) { LogCopyDiagnosis(range, "copy", beforeState, afterSelectState, ex); throw; }
+                catch (Exception ex) { LogCopyDiagnosis(range, "copy", attempt, beforeState, afterSelectState, ex); throw; }
                 // S1: also record the succeeding attempts' full
                 // before/after conditions; without them a failing attempt
                 // cannot be compared against anything.
-                LogCopyDiagnosis(range, "copied", beforeState, afterSelectState, null);
+                LogCopyDiagnosis(range, "copied", attempt, beforeState, afterSelectState, null);
             }
             finally
             {
@@ -1310,10 +1303,74 @@ namespace OfficeTranslate.WordAddIn
         // task's (or the user's own) selection.
         private static int _selectionGeneration;
 
-        // Runs on the UI thread. Atomically claims the ticket, then refuses
-        // a restore that is expired or superseded before touching COM.
+        // S1: metadata-only snapshot of a restore target range. Never throws.
+        private string SnapshotRangeState(Range? range)
+        {
+            if (range == null) return "none";
+            return "doc=" + SafeGet(() => (range.Parent as Document)?.Name ?? "?", "?")
+                + " story=" + SafeGet(() => ((int)range.StoryType).ToString(), "?")
+                + " range=" + SafeGet(() => range.Start, -1) + "-" + SafeGet(() => range.End, -1);
+        }
+
+        // S1: does the live selection actually match the restore target
+        // (document, story, start, end)? Best-effort; never throws.
+        private bool SelectionMatchesRange(Selection? sel, Range target)
+        {
+            try
+            {
+                if (sel == null) return false;
+                Selection s = sel;
+                string selDoc = SafeGet(() => (s.Range.Parent as Document)?.Name ?? "?", "?");
+                string tgtDoc = SafeGet(() => (target.Parent as Document)?.Name ?? "?", "?");
+                if (!string.Equals(selDoc, tgtDoc, StringComparison.Ordinal)) return false;
+                if (SafeGet(() => (int)s.Range.StoryType, -1) != SafeGet(() => (int)target.StoryType, -1)) return false;
+                if (SafeGet(() => s.Range.Start, -1) != SafeGet(() => target.Start, -1)) return false;
+                if (SafeGet(() => s.Range.End, -1) != SafeGet(() => target.End, -1)) return false;
+                return true;
+            }
+            catch { return false; }
+        }
+
+        // S1 error-path gap: the task-end restore can run Select() without
+        // throwing yet leave the selection on the wrong story/range
+        // (observed: dual-image 0x800A11FD left MainText 13-14 instead of
+        // the header 0-6, with no restore log line at all). Record target
+        // vs actual before and after, plus whether they match, so the next
+        // review can tell a silent no-op from a real restore. Metadata
+        // only; never throws; does NOT re-post anything (that would revive
+        // N1).
+        private void RestoreSelectionWithDiag(Range? target, string scope)
+        {
+            string targetState = SnapshotRangeState(target);
+            string beforeState = SnapshotSelectionState(SafeGet<Selection?>(() => _word.Selection, null));
+            string outcome;
+            try
+            {
+                if (target == null) outcome = "no-target";
+                else { target.Select(); outcome = "select-ok"; }
+            }
+            catch (Exception ex) { outcome = "throw:" + ex.GetType().Name; }
+            Selection? afterSel = SafeGet<Selection?>(() => _word.Selection, null);
+            string afterState = SnapshotSelectionState(afterSel);
+            bool matched = target != null && SelectionMatchesRange(afterSel, target);
+            try
+            {
+                ImageOverlayDiagnostics.LogCaptureFailure("Word",
+                    "selection_restore_diag scope=" + scope
+                    + " target=[" + targetState + "]"
+                    + " before=[" + beforeState + "]"
+                    + " after=[" + afterState + "]"
+                    + " outcome=" + outcome
+                    + " matched=" + (matched ? "1" : "0"));
+            }
+            catch { }
+        }
+
         private void ClaimAndRestore(RestoreTicket ticket)
         {
+            // N1: runs on the UI thread. Atomically claims the ticket, then
+            // refuses a restore that is expired or superseded before
+            // touching COM.
             if (Interlocked.CompareExchange(ref ticket.State,
                     RestoreTicket.Running, RestoreTicket.Pending) != RestoreTicket.Pending)
                 return; // expired (wait already gave up) or double claim: no-op
@@ -1330,7 +1387,9 @@ namespace OfficeTranslate.WordAddIn
                 LogRestoreSkipped("stale");
                 return;
             }
-            TryRestoreSelection(ticket.Selection);
+            // S1: instrumented restore (target vs actual before/after); see
+            // RestoreSelectionWithDiag. Still best-effort and never throws.
+            RestoreSelectionWithDiag(ticket.Selection, "task");
         }
 
         private static long ElapsedMs(long startTicks)
@@ -1352,12 +1411,15 @@ namespace OfficeTranslate.WordAddIn
         // original exception. ex == null marks a succeeding attempt
         // ("copied"): its before/after conditions are the comparison base
         // for failing attempts.
-        private void LogCopyDiagnosis(Range range, string stage, string beforeState, string? afterSelectState, Exception? ex)
+        // D1: attempt is the capture loop's real 1-based attempt number,
+        // passed explicitly by the caller (same as the "attempt N/3"
+        // message). It is not counted locally.
+        private void LogCopyDiagnosis(Range range, string stage, int attempt, string beforeState, string? afterSelectState, Exception? ex)
         {
             try
             {
                 var detail = "select_copy_diag stage=" + stage
-                    + " attempt=" + _copyAttempt
+                    + " attempt=" + attempt
                     + " targetDoc=" + SafeGet(() => (range.Parent as Document)?.Name, "?")
                     + " targetStory=" + SafeGet(() => (int)range.StoryType, -1)
                     + " targetRange=" + SafeGet(() => range.Start, -1) + "-" + SafeGet(() => range.End, -1)
@@ -1385,7 +1447,7 @@ namespace OfficeTranslate.WordAddIn
                 if (sel != null)
                 {
                     Selection s = sel;
-                    doc = SafeGet(() => (s.Range.Parent as Document)?.Name, "?");
+                    doc = SafeGet(() => (s.Range.Parent as Document)?.Name ?? "?", "?");
                     story = SafeGet(() => ((int)s.Range.StoryType).ToString(), "?");
                     range = SafeGet(() => s.Range.Start, -1) + "-" + SafeGet(() => s.Range.End, -1);
                     type = SafeGet(() => s.Type.ToString(), "?");
@@ -1478,8 +1540,8 @@ namespace OfficeTranslate.WordAddIn
 
         private sealed class ImageTarget
         {
-            private readonly Action _selectOrCopy;
-            public ImageTarget(Range anchor, float left, float top, float width, float height, Action action) { Anchor = anchor; Left = left; Top = top; Width = width; Height = height; _selectOrCopy = action; }
+            private readonly Action<int> _selectOrCopy;
+            public ImageTarget(Range anchor, float left, float top, float width, float height, Action<int> action) { Anchor = anchor; Left = left; Top = top; Width = width; Height = height; _selectOrCopy = action; }
             public Range Anchor { get; } public float Left { get; } public float Top { get; } public float Width { get; } public float Height { get; }
             public string Kind { get; set; } = "Unknown";
             public string ShapeName { get; set; } = string.Empty;
@@ -1492,7 +1554,7 @@ namespace OfficeTranslate.WordAddIn
             public float CropBottom { get; set; }
             public WdRelativeHorizontalPosition RelativeHorizontalPosition { get; set; } = WdRelativeHorizontalPosition.wdRelativeHorizontalPositionPage;
             public WdRelativeVerticalPosition RelativeVerticalPosition { get; set; } = WdRelativeVerticalPosition.wdRelativeVerticalPositionPage;
-            public void CopyAsPicture() => _selectOrCopy();
+            public void CopyAsPicture(int attempt) => _selectOrCopy(attempt);
         }
     }
 }

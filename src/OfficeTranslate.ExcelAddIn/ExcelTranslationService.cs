@@ -104,7 +104,7 @@ namespace OfficeTranslate.ExcelAddIn
                 byte[] bytes;
                 try
                 {
-                    bytes = ClipboardImageCapture.CapturePng(() =>
+                    bytes = ClipboardImageCapture.CapturePng(_ =>
                     {
                         // Excel copy diagnostics: keep the ORIGINAL COM HResult/type of
                         // both the Copy attempt and the CopyPicture fallback, plus the

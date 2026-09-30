@@ -145,8 +145,13 @@ namespace OfficeTranslate.WordAddIn
                 var window = taskWindow;
                 ui.Invoke(() =>
                 {
+                    // S1: dialog lifecycle markers so the review can
+                    // correlate the selection state sampled before/after
+                    // the user dismisses the error prompt.
+                    try { ImageOverlayDiagnostics.LogCaptureFailure("Word", "error_dialog_shown"); } catch { }
                     if (window != IntPtr.Zero) MessageBox.Show(new TranslationProgressForm.WindowHandle(window), ex.Message, "OfficeTranslate", MessageBoxButtons.OK, MessageBoxIcon.Error);
                     else MessageBox.Show(ex.Message, "OfficeTranslate", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    try { ImageOverlayDiagnostics.LogCaptureFailure("Word", "error_dialog_dismissed"); } catch { }
                 });
             }
             finally { _progressForm?.CloseSafely(); _progressForm = null; _cancellation.Dispose(); _cancellation = null; }

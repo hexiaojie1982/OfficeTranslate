@@ -65,10 +65,16 @@ namespace OfficeTranslate.Core
         private const int MaxAttempts = 3;
         private const int ClipbrdECantOpen = unchecked((int)0x800401D0);
 
-        public static byte[] CapturePng(Action copyToClipboard, CancellationToken token) =>
+        public static byte[] CapturePng(Action<int> copyToClipboard, CancellationToken token) =>
             CapturePng(copyToClipboard, null, token);
 
-        public static byte[] CapturePng(Action copyToClipboard, Action? pumpMessages, CancellationToken token)
+        // D1: the copy delegate receives the real 1-based capture attempt.
+        // The attempt loop clears the clipboard BEFORE invoking the
+        // delegate, and a clear-phase failure retries without ever calling
+        // it -- so a counter inside the delegate would undercount. Passing
+        // the attempt explicitly keeps per-attempt diagnostics (and the
+        // "attempt N/3" message) on the loop's numbering by construction.
+        public static byte[] CapturePng(Action<int> copyToClipboard, Action? pumpMessages, CancellationToken token)
         {
             if (copyToClipboard == null) throw new ArgumentNullException(nameof(copyToClipboard));
             int uiThread = Thread.CurrentThread.ManagedThreadId;
@@ -122,7 +128,7 @@ namespace OfficeTranslate.Core
             }
         }
 
-        private static byte[] TryCaptureOnce(Action copyToClipboard, Action? pumpMessages, CancellationToken token, int attempt, int uiThread)
+        private static byte[] TryCaptureOnce(Action<int> copyToClipboard, Action? pumpMessages, CancellationToken token, int attempt, int uiThread)
         {
             // Must actually clear: if a stale image survives here it would be
             // captured as the shape. ClearWithRetry aborts (never silently
@@ -136,7 +142,7 @@ namespace OfficeTranslate.Core
             try
             {
                 seqBeforeCopy = ClipboardSequenceNumber();
-                copyToClipboard();
+                copyToClipboard(attempt);
                 seqAfterCopy = ClipboardSequenceNumber();
                 formatsAfterCopy = SafeGetFormats();
             }
