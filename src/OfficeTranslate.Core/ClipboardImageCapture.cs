@@ -221,13 +221,17 @@ namespace OfficeTranslate.Core
             uint seqBeforeCopy, uint seqAfterCopy,
             int polls, bool containsImageSeen, string[] formatsAfterCopy)
         {
+            // The clipboard sequence number is process-global: it can also
+            // change because of another process, and the observation window
+            // sits between Copy's return and the read poll. Record the
+            // observation only; do not present it as proof of the root cause.
             string seqPart;
             if (seqBeforeCopy == 0 && seqAfterCopy == 0)
                 seqPart = "剪贴板序号不可用";
             else if (seqBeforeCopy == seqAfterCopy)
-                seqPart = "复制前后剪贴板序号不变（复制没有写入任何内容）";
+                seqPart = "复制返回后剪贴板序号未变化（未观察到剪贴板写入；全局序号也可能被其他进程改变）";
             else
-                seqPart = "复制前后剪贴板序号变化（复制写入了内容，但不是可识别图像）";
+                seqPart = "复制返回后剪贴板序号变化（观察到剪贴板写入，但不是可识别图像；全局序号也可能被其他进程改变）";
             string formatPart = formatsAfterCopy == null || formatsAfterCopy.Length == 0
                 ? "无"
                 : string.Join(",", formatsAfterCopy);

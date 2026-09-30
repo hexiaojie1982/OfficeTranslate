@@ -1124,21 +1124,21 @@ namespace OfficeTranslate.WordAddIn
         // message-pump reentrancy during the later poll cannot disturb the
         // copy that already happened. Cancellation is honored by the
         // capture loop around this call; the select/copy itself is fast.
+        // P2: the saved selection is a duplicated Range, not start/end
+        // numbers. The duplicate carries the original Document and Story
+        // identity, so a selection in a header/footer/footnote restores to
+        // the same story instead of being rebuilt in the main text via
+        // ActiveDocument.Range (which only addresses the main story).
         private void SelectAndCopyAsPicture(Range range)
         {
-            int selStart = 0, selEnd = 0;
-            bool haveSelection = false;
+            Range? savedSelection = null;
             try
             {
                 var selection = _word.Selection;
                 if (selection != null)
-                {
-                    selStart = selection.Start;
-                    selEnd = selection.End;
-                    haveSelection = true;
-                }
+                    savedSelection = selection.Range.Duplicate;
             }
-            catch { }
+            catch { savedSelection = null; }
             try
             {
                 range.Select();
@@ -1146,10 +1146,22 @@ namespace OfficeTranslate.WordAddIn
             }
             finally
             {
-                if (haveSelection)
+                if (savedSelection != null)
                 {
-                    try { _word.ActiveDocument.Range(selStart, selEnd).Select(); }
-                    catch { }
+                    try { savedSelection.Select(); }
+                    catch (Exception ex)
+                    {
+                        // Best-effort restore only: never guess across
+                        // stories/documents. A diagnosis line (no document
+                        // content) goes to the capture log instead of a
+                        // silent swallow.
+                        try
+                        {
+                            ImageOverlayDiagnostics.LogCaptureFailure("Word",
+                                "selection_restore_failed error=" + ex.GetType().Name);
+                        }
+                        catch { }
+                    }
                 }
             }
         }

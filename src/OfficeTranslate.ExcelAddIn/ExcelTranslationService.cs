@@ -4,6 +4,7 @@ using OfficeTranslate.Core;
 using System;
 using System.Collections.Generic;
 using System.Drawing.Imaging;
+using System.Globalization;
 using System.IO;
 using System.Reflection;
 using System.Runtime.InteropServices;
@@ -73,7 +74,7 @@ namespace OfficeTranslate.ExcelAddIn
                     token.ThrowIfCancellationRequested();
                     var current = targets.Count + i + 1;
                     progress($"OfficeTranslate：正在识别图片 {current}/{total}");
-                    await TranslateImageAsync(images[i], client, settings, summary, token, ui);
+                    await TranslateImageAsync(images[i], current, client, settings, summary, token, ui);
                     progress($"OfficeTranslate：已完成 {current}/{total}");
                 }
                 ui.LogProbe("image_loop_after");
@@ -81,7 +82,7 @@ namespace OfficeTranslate.ExcelAddIn
             }
         }
 
-        private async Task TranslateImageAsync(Excel.Shape image, TranslationClient client, TranslationSettings settings, TranslationTaskSummary summary, CancellationToken token, OfficeUiDispatcher ui)
+        private async Task TranslateImageAsync(Excel.Shape image, int imageNumber, TranslationClient client, TranslationSettings settings, TranslationTaskSummary summary, CancellationToken token, OfficeUiDispatcher ui)
         {
             // M2: clipboard capture runs on the Office UI (STA) thread
             // explicitly -- later menu runs failed here with "Current thread
@@ -96,15 +97,48 @@ namespace OfficeTranslate.ExcelAddIn
                 ui.LogProbe("capture_before");
                 // For a picture shape, Copy is more reliable than CopyPicture across
                 // Excel builds and does not create the temporary chart that used to flash.
-                var bytes = ClipboardImageCapture.CapturePng(() =>
+                // Excel failure log (not only the popup): image number, shape
+                // identity, activation state, and the original COM errors, so
+                // the next review can tell a stale object from an activation
+                // or clipboard issue.
+                byte[] bytes;
+                try
                 {
-                    try { image.Copy(); }
-                    catch (COMException)
+                    bytes = ClipboardImageCapture.CapturePng(() =>
                     {
+                        // Excel copy diagnostics: keep the ORIGINAL COM HResult/type of
+                        // both the Copy attempt and the CopyPicture fallback, plus the
+                        // target identity and activation state. A previous wrapper
+                        // surfaced only the managed 0x80131509 and hid the real
+                        // failure, which made a first-round copy failure unlocatable.
+                        // Only COMException triggers the CopyPicture fallback; other
+                        // exceptions propagate unchanged (no blanket retry).
+                        string copyError;
+                        try { image.Copy(); return; }
+                        catch (COMException ex) { copyError = DescribeComError("Copy", ex); }
                         try { image.CopyPicture(Excel.XlPictureAppearance.xlScreen, Excel.XlCopyPictureFormat.xlBitmap); }
-                        catch (COMException ex) { throw new InvalidOperationException("Excel 无法复制所选图片，请重新选择图片后再试。", ex); }
+                        catch (COMException ex)
+                        {
+                            throw new InvalidOperationException(
+                                "Excel 无法复制图片" + ShapeId(image, imageNumber) + "（" + ShapeState(image) + "）：" +
+                                "Copy 失败[" + copyError + "]；CopyPicture 失败[" + DescribeComError("CopyPicture", ex) + "]。" +
+                                "请选择该图片后重试。", ex);
+                        }
+                    }, () => Application.DoEvents(), token);
+                }
+                catch (Exception ex) when (!(ex is OperationCanceledException))
+                {
+                    try
+                    {
+                        ImageOverlayDiagnostics.LogCaptureFailure("Excel",
+                            "image=" + imageNumber + " shape=" + ShapeId(image, imageNumber) +
+                            " " + ShapeState(image) +
+                            " error=" + ex.GetType().Name +
+                            " msg=" + Flatten(ex.Message));
                     }
-                }, () => Application.DoEvents(), token);
+                    catch { }
+                    throw;
+                }
                 ui.LogProbe("capture_after");
                 // R5: owner identity is the sheet-unique shape Name (persisted,
                 // stable across move/resize/reopen), falling back to a content
@@ -404,6 +438,42 @@ namespace OfficeTranslate.ExcelAddIn
         private static string SafeString(Func<string> read)
         {
             try { return read() ?? string.Empty; } catch { return string.Empty; }
+        }
+
+        // Excel copy diagnostics (review bc69f03): keep the original COM
+        // HResult/type of a failed Copy/CopyPicture instead of surfacing
+        // only the managed wrapper. Newlines are flattened so the text is
+        // safe for both the popup and the single-line capture log.
+        private static string DescribeComError(string op, COMException ex)
+        {
+            return op + ": " + ex.GetType().Name + " HResult=0x" +
+                ex.ErrorCode.ToString("X8", CultureInfo.InvariantCulture) + ": " +
+                Flatten(ex.Message);
+        }
+
+        private static string ShapeId(Excel.Shape image, int imageNumber)
+        {
+            var name = SafeString(() => image.Name);
+            return "#" + imageNumber + (string.IsNullOrEmpty(name) ? string.Empty : " " + name);
+        }
+
+        private string ShapeState(Excel.Shape image)
+        {
+            try
+            {
+                var sheet = image.Parent as Excel.Worksheet;
+                var sheetName = sheet != null ? SafeString(() => sheet.Name) : "?";
+                var active = _excel.ActiveSheet as Excel.Worksheet;
+                var activeName = active != null ? SafeString(() => active.Name) : string.Empty;
+                return "sheet=" + sheetName +
+                    (string.Equals(activeName, sheetName, StringComparison.Ordinal) ? ",active" : ",inactive");
+            }
+            catch { return "sheet=?"; }
+        }
+
+        private static string Flatten(string? value)
+        {
+            return (value ?? string.Empty).Replace("\r", " ").Replace("\n", " ");
         }
 
         private static void LogOverlay(ImageTranslationRegion region,
