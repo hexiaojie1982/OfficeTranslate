@@ -118,6 +118,9 @@ namespace OfficeTranslate.WordAddIn
             // task window so dismissing them returns activation to the
             // right document instead of switching to another one.
             var taskWindow = GetTaskWindow();
+            // S1: hoisted so the finally can run the final selection
+            // restore after the UI teardown.
+            WordTranslationService? service = null;
             try
             {
                 var settings = LoadForTranslation();
@@ -125,7 +128,7 @@ namespace OfficeTranslate.WordAddIn
                 _progressForm = new TranslationProgressForm(settings.UiLanguage, () => _cancellation?.Cancel());
                 _progressForm.ShowFor(taskWindow);
                 var bilingual = settings.BilingualMode;
-                var service = new WordTranslationService(_word);
+                service = new WordTranslationService(_word);
                 _progressForm.SetStatus("OfficeTranslate：正在读取文档…");
                 var summary = await service.TranslateAsync(wholeDocument, bilingual, settings, _cancellation.Token, _progressForm.SetStatus, ui);
                 _progressForm.CloseAndShowResult(summary, taskWindow);
@@ -160,7 +163,19 @@ namespace OfficeTranslate.WordAddIn
                     WordSelectionProbe.Log(_word, "error_dialog_dismissed", window);
                 });
             }
-            finally { _progressForm?.CloseSafely(); _progressForm = null; _cancellation.Dispose(); _cancellation = null; }
+            finally
+            {
+                _progressForm?.CloseSafely(); _progressForm = null;
+                // S1: final restore AFTER the host UI teardown. The
+                // boundary probes showed closing the owned progress window
+                // reactivates Word and moves Application.Selection back to
+                // the pre-restore state, so the old service-finally restore
+                // did not stick. Same one-shot ticket, expiry and
+                // generation rules (N1); best-effort, never throws.
+                if (service != null) await service.RestoreTaskSelectionAsync(ui);
+                WordSelectionProbe.Log(_word, "after_final_restore", taskWindow);
+                _cancellation.Dispose(); _cancellation = null;
+            }
         }
 
         // O1: the document window this task was invoked from. Read on the UI

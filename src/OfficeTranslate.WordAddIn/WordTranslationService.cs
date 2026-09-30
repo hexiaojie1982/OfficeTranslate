@@ -35,11 +35,13 @@ namespace OfficeTranslate.WordAddIn
             // the first selection-changing COM op. The per-image restore in
             // SelectAndCopyAsPicture only covers the copy phase; overlay
             // box/bookmark creation moves the selection again afterwards,
-            // so the authoritative restore runs in the finally below, at
-            // the end of the whole task. The duplicate carries the original
-            // Document/Story identity (header/footer/footnote safe).
-            Range? taskSelection = null;
-            int taskGeneration = 0;
+            // so the authoritative restore runs after the host's UI
+            // teardown (see RestoreTaskSelectionAsync): closing the host's
+            // owned progress window reactivates Word and undoes an earlier
+            // restore. The duplicate carries the original Document/Story
+            // identity (header/footer/footnote safe).
+            _taskSelection = null;
+            _taskGeneration = 0;
             try
             {
                 // N1: every task takes a new selection generation, shared
@@ -48,11 +50,11 @@ namespace OfficeTranslate.WordAddIn
                 // the user's) selection.
                 ui.Invoke(() =>
                 {
-                    taskGeneration = Interlocked.Increment(ref _selectionGeneration);
-                    taskSelection = SaveSelectionDuplicate();
+                    _taskGeneration = Interlocked.Increment(ref _selectionGeneration);
+                    _taskSelection = SaveSelectionDuplicate();
                 });
             }
-            catch { taskSelection = null; }
+            catch { _taskSelection = null; }
             try
             {
             var targets = wholeDocument ? ReadDocumentParagraphs() : ReadSelection();
@@ -135,42 +137,50 @@ namespace OfficeTranslate.WordAddIn
             }
             finally
             {
-                // N1: the 2s bound below is a WAIT boundary, not a guarantee
-                // on the COM call itself. A queued restore callback that only
-                // runs AFTER the wait gave up must not clobber the user's
-                // newer selection, so every restore carries a one-shot
-                // ticket: pending -> running is claimed atomically when the
-                // callback starts on the UI thread, and pending -> expired
-                // is set atomically when the wait gives up. An expired
-                // ticket makes the late callback a no-op. A callback that
-                // already started running cannot be interrupted; its own
-                // generation/staleness checks still apply inside.
-                if (taskSelection != null)
+                // S1: the authoritative restore no longer runs here. The
+                // boundary probes showed the host's teardown (closing the
+                // owned progress window) reactivates Word and moves
+                // Application.Selection back to the pre-restore state, so a
+                // restore issued before the teardown does not stick. The
+                // host calls RestoreTaskSelectionAsync after its UI
+                // teardown instead (same one-shot ticket, expiry and
+                // generation rules; N1 intact).
+            }
+        }
+
+        // S1: final task-end restore, called by the host AFTER its UI
+        // teardown (progress/result/error windows closed). The boundary
+        // probes showed the teardown's window reactivation moves
+        // Application.Selection back to the pre-restore state, so a
+        // restore issued before the teardown does not stick. Runs the
+        // same one-shot ticket claim with the same expiry and generation
+        // rules (N1); best-effort, never throws.
+        public async Task RestoreTaskSelectionAsync(OfficeUiDispatcher ui)
+        {
+            var selection = _taskSelection;
+            if (selection == null) return;
+            var ticket = new RestoreTicket(selection, _taskGeneration,
+                Stopwatch.GetTimestamp());
+            try
+            {
+                var restore = ui.InvokeAsync(() => ClaimAndRestore(ticket));
+                var finished = await Task.WhenAny(restore, Task.Delay(SelectionRestoreWaitMs));
+                if (!ReferenceEquals(finished, restore))
                 {
-                    var ticket = new RestoreTicket(taskSelection, taskGeneration,
-                        Stopwatch.GetTimestamp());
-                    try
+                    // Wait gave up first: expire the ticket so the
+                    // still-queued callback becomes a no-op instead of
+                    // overwriting the user's newer selection. Atomic:
+                    // only pending -> expired. A callback that already
+                    // claimed running is untouched.
+                    if (Interlocked.CompareExchange(ref ticket.State,
+                            RestoreTicket.Expired, RestoreTicket.Pending) == RestoreTicket.Pending)
                     {
-                        var restore = ui.InvokeAsync(() => ClaimAndRestore(ticket));
-                        var finished = await Task.WhenAny(restore, Task.Delay(SelectionRestoreWaitMs));
-                        if (!ReferenceEquals(finished, restore))
-                        {
-                            // Wait gave up first: expire the ticket so the
-                            // still-queued callback becomes a no-op instead
-                            // of overwriting the user's newer selection.
-                            // Atomic: only pending -> expired. A callback
-                            // that already claimed running is untouched.
-                            if (Interlocked.CompareExchange(ref ticket.State,
-                                    RestoreTicket.Expired, RestoreTicket.Pending) == RestoreTicket.Pending)
-                            {
-                                try { ImageOverlayDiagnostics.LogCaptureFailure("Word", "selection_restore_expired"); }
-                                catch { }
-                            }
-                        }
+                        try { ImageOverlayDiagnostics.LogCaptureFailure("Word", "selection_restore_expired"); }
+                        catch { }
                     }
-                    catch { }
                 }
             }
+            catch { }
         }
 
         private async Task TranslateImageAsync(ImageTarget image, int imageNumber, TranslationClient client, TranslationSettings settings, TranslationTaskSummary summary, CancellationToken token, OfficeUiDispatcher ui)
@@ -1302,6 +1312,12 @@ namespace OfficeTranslate.WordAddIn
         // ticket from an older generation must never overwrite a newer
         // task's (or the user's own) selection.
         private static int _selectionGeneration;
+
+        // S1: the task-entry selection snapshot, restored by the host
+        // AFTER its UI teardown (see RestoreTaskSelectionAsync). Instance
+        // state: one service is created per task.
+        private Range? _taskSelection;
+        private int _taskGeneration;
 
         // S1: metadata-only snapshot of a restore target range. Never throws.
         private string SnapshotRangeState(Range? range)
