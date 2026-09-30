@@ -19,6 +19,12 @@ namespace OfficeTranslate.Core
         public const float MinFontSize = 8F;
         public const float MaxFontSize = 18F;
 
+        // W2/D3: side-notes may grow downward, but the growth is bounded.
+        // A note that cannot fit inside this height is deleted and reported
+        // explicitly instead of being kept silently clipped. Supersedes the
+        // old R2 "no height cap" rule.
+        public const float MaxNoteHeightPt = 1400F;
+
         private const float LineHeightFactor = 1.3F;
         private const float HorizontalMargin = 4F;
         private const float VerticalMargin = 2F;
@@ -56,8 +62,9 @@ namespace OfficeTranslate.Core
 
         // Height estimator for side-notes, where vertical growth is acceptable
         // because the note explicitly does NOT claim positional coverage.
-        // R2: no height cap. A side-note must preserve every translation
-        // completely; clipping it would silently lose content.
+        // The estimate itself is uncapped; callers clamp it to
+        // MaxNoteHeightPt and grow/shrink under that cap with real-layout
+        // checks (W2/D3). A side-note must never be kept silently clipped.
         public static float EstimateNoteHeight(float width, string text, float fontSize)
         {
             width = Normalize(width, 160F);

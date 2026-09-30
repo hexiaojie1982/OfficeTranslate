@@ -21,8 +21,11 @@ namespace OfficeTranslate.PowerPointAddIn
             // Menu acceptance must prove which DLL served the request: record
             // this add-in's assembly version so the reviewer can verify it in
             // the diagnostics log instead of inferring from registry keys.
+            // The module MVID is unique per compilation and distinguishes
+            // candidate builds that share the same assembly version.
             ImageOverlayDiagnostics.LogVersion("PowerPoint",
-                typeof(PowerPointTranslationService).Assembly.GetName().Version?.ToString() ?? "unknown");
+                typeof(PowerPointTranslationService).Assembly.GetName().Version?.ToString() ?? "unknown",
+                typeof(PowerPointTranslationService).Module.ModuleVersionId.ToString());
             if (_powerPoint.Presentations.Count == 0) throw new InvalidOperationException("请先打开演示文稿。");
             var targets = wholePresentation ? ReadPresentation() : ReadSelection();
             var images = settings.ImageOcrEnabled ? (wholePresentation ? ReadPresentationImages() : ReadSelectionImages()) : new List<PowerPoint.Shape>();
@@ -128,6 +131,13 @@ namespace OfficeTranslate.PowerPointAddIn
                     var overlay = slide.Shapes.AddTextbox(Office.MsoTextOrientation.msoTextOrientationHorizontal,
                         imageLeft + plan.Left, imageTop + plan.Top, plan.Width, plan.Height);
                     overlay.Tags.Add("OfficeTranslateOCR", ownerId);
+                    // D2: the host must never resize the cover by itself. New
+                    // textboxes default to auto-size-to-fit-text on some
+                    // builds, which would let the box grow beyond the validated
+                    // region and make the fit check measure the grown box. The
+                    // box keeps the planner's fixed geometry; only the font
+                    // size adapts.
+                    overlay.TextFrame2.AutoSize = Office.MsoAutoSize.msoAutoSizeNone;
                     overlay.Fill.Visible = Office.MsoTriState.msoTrue; overlay.Fill.ForeColor.RGB = 0xFFFFFF; overlay.Fill.Transparency = 0F;
                     overlay.Line.Visible = Office.MsoTriState.msoFalse;
                     overlay.TextFrame2.MarginLeft = 2; overlay.TextFrame2.MarginRight = 2; overlay.TextFrame2.MarginTop = 1; overlay.TextFrame2.MarginBottom = 1;
@@ -142,6 +152,15 @@ namespace OfficeTranslate.PowerPointAddIn
                     {
                         try { overlay.Delete(); } catch { }
                         noteEntries.Add("覆盖框内译文按真实排版在最小字号下仍溢出，已降级为旁注。\r" + overlayText);
+                        continue;
+                    }
+                    // D2: re-read the geometry and confirm the host did not
+                    // move or resize the cover behind our back; it must still
+                    // match the planner's fixed rect.
+                    if (!MatchesPlan(overlay, imageLeft + plan.Left, imageTop + plan.Top, plan.Width, plan.Height))
+                    {
+                        try { overlay.Delete(); } catch { }
+                        noteEntries.Add("覆盖框几何被宿主改动，已删除并降级为旁注。\r" + overlayText);
                         continue;
                     }
                 }
@@ -162,10 +181,17 @@ namespace OfficeTranslate.PowerPointAddIn
             // A side-note explicitly does NOT claim positional coverage: it is
             // placed below the image.
             var noteWidth = Math.Min(420F, Math.Max(160F, imageWidth));
-            var noteHeight = ImageOverlayLayout.EstimateNoteHeight(noteWidth, noteText, 9F);
+            // D3: clamp the initial height to the cap up front; an estimate
+            // that already exceeds the cap must go through the bounded growth
+            // check instead of returning success immediately.
+            var noteHeight = Math.Min(ImageOverlayLayout.MaxNoteHeightPt,
+                ImageOverlayLayout.EstimateNoteHeight(noteWidth, noteText, 9F));
             var note = slide.Shapes.AddTextbox(Office.MsoTextOrientation.msoTextOrientationHorizontal,
                 noteLeft, noteTop, noteWidth, noteHeight);
             note.Tags.Add("OfficeTranslateOCR", "Note:" + ownerId);
+            // D2/D3: no host auto-growth for notes either; W2 grows the note
+            // manually under the cap so the limit cannot be bypassed.
+            note.TextFrame2.AutoSize = Office.MsoAutoSize.msoAutoSizeNone;
             note.Fill.Visible = Office.MsoTriState.msoTrue;
             note.Fill.ForeColor.RGB = 0xE1FFFF; // light yellow (BGR)
             note.Fill.Transparency = 0F;
@@ -210,13 +236,32 @@ namespace OfficeTranslate.PowerPointAddIn
         }
 
         // W2: grows the side-note downward until its real laid-out height fits.
-        // Bounded at maxHeight; exceeding it means pathological input, which
-        // is reported explicitly (with the text) instead of silently clipped.
+        // D3: the cap is enforced BEFORE the fit check on every pass, so an
+        // over-cap box can never return success, however it got that tall
+        // (estimator overshoot or host auto-growth). Text that cannot fit
+        // inside the cap is deleted and reported explicitly instead of being
+        // kept silently clipped.
         private static void GrowNoteToFit(PowerPoint.Shape note)
         {
-            const float maxHeight = 1400F;
             for (var i = 0; i < 12; i++)
             {
+                float height;
+                try { height = note.Height; }
+                catch (COMException ex)
+                {
+                    try { note.Delete(); } catch { }
+                    throw new InvalidOperationException("已完成图片识别，但无法读取译文旁注的尺寸，已删除旁注避免显示不全。", ex);
+                }
+                if (height > ImageOverlayLayout.MaxNoteHeightPt)
+                {
+                    try { note.Height = ImageOverlayLayout.MaxNoteHeightPt; }
+                    catch (COMException ex)
+                    {
+                        try { note.Delete(); } catch { }
+                        throw new InvalidOperationException("已完成图片识别，但无法约束译文旁注的高度，已删除避免显示不全。", ex);
+                    }
+                    height = ImageOverlayLayout.MaxNoteHeightPt;
+                }
                 float boundHeight, availHeight;
                 try
                 {
@@ -229,10 +274,7 @@ namespace OfficeTranslate.PowerPointAddIn
                     throw new InvalidOperationException("已完成图片识别，但无法校验译文旁注的排版溢出，已删除旁注避免显示不全。", ex);
                 }
                 if (boundHeight <= availHeight + 0.5F) return;
-                float height;
-                try { height = note.Height; }
-                catch { height = maxHeight; }
-                if (height >= maxHeight)
+                if (height >= ImageOverlayLayout.MaxNoteHeightPt)
                 {
                     string text;
                     try { text = note.TextFrame2.TextRange.Text; } catch { text = string.Empty; }
@@ -241,7 +283,7 @@ namespace OfficeTranslate.PowerPointAddIn
                         "译文旁注过长，增高到上限仍无法完整显示，已删除避免静默裁切。译文（截断）：" +
                         ImageOverlayText.Truncate(text));
                 }
-                try { note.Height = Math.Min(maxHeight, height * 1.5F + 12F); }
+                try { note.Height = Math.Min(ImageOverlayLayout.MaxNoteHeightPt, height * 1.5F + 12F); }
                 catch (COMException ex)
                 {
                     try { note.Delete(); } catch { }
@@ -254,6 +296,22 @@ namespace OfficeTranslate.PowerPointAddIn
             throw new InvalidOperationException(
                 "译文旁注排版校验未收敛，已删除避免静默裁切。译文（截断）：" +
                 ImageOverlayText.Truncate(leftover));
+        }
+
+        // D2: confirms a box still matches the planner's fixed rect. Guards
+        // against host auto-size behaviors that would silently expand the
+        // cover beyond the validated region.
+        private static bool MatchesPlan(PowerPoint.Shape box, float left, float top, float width, float height)
+        {
+            const float epsilon = 0.5F;
+            try
+            {
+                return Math.Abs(box.Left - left) <= epsilon
+                    && Math.Abs(box.Top - top) <= epsilon
+                    && Math.Abs(box.Width - width) <= epsilon
+                    && Math.Abs(box.Height - height) <= epsilon;
+            }
+            catch { return false; }
         }
 
         private static void RemovePreviousResults(PowerPoint.Slide slide, string ownerId)

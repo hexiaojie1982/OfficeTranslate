@@ -50,13 +50,18 @@ namespace OfficeTranslate.Core
         // Records which add-in build actually served a translation request.
         // The menu-acceptance test reads the newest line of this log after
         // clicking the ribbon button to prove the expected DLL was loaded,
-        // instead of inferring it from registry keys.
-        public static void LogVersion(string host, string version)
+        // instead of inferring it from registry keys. The build id (module
+        // MVID, unique per compilation) distinguishes candidate builds that
+        // share the same assembly version, so a stale cached DLL cannot be
+        // mistaken for the candidate under test.
+        public static void LogVersion(string host, string version, string buildId)
         {
             if (string.IsNullOrEmpty(host)) return;
             var line = string.Format(CultureInfo.InvariantCulture,
-                "{0:O} host={1} addin_version={2} event=translate_start",
-                DateTime.UtcNow, host, string.IsNullOrEmpty(version) ? "unknown" : version);
+                "{0:O} host={1} addin_version={2} build={3} event=translate_start",
+                DateTime.UtcNow, host,
+                string.IsNullOrEmpty(version) ? "unknown" : version,
+                string.IsNullOrEmpty(buildId) ? "unknown" : buildId);
             Trace.WriteLine("OfficeTranslate: " + line);
             try
             {

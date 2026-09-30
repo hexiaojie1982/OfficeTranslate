@@ -21,8 +21,11 @@ namespace OfficeTranslate.WordAddIn
             // Menu acceptance must prove which DLL served the request: record
             // this add-in's assembly version so the reviewer can verify it in
             // the diagnostics log instead of inferring from registry keys.
+            // The module MVID is unique per compilation and distinguishes
+            // candidate builds that share the same assembly version.
             ImageOverlayDiagnostics.LogVersion("Word",
-                typeof(WordTranslationService).Assembly.GetName().Version?.ToString() ?? "unknown");
+                typeof(WordTranslationService).Assembly.GetName().Version?.ToString() ?? "unknown",
+                typeof(WordTranslationService).Module.ModuleVersionId.ToString());
             var targets = wholeDocument ? ReadDocumentParagraphs() : ReadSelection();
             var images = settings.ImageOcrEnabled ? (wholeDocument ? ReadDocumentImages() : ReadSelectionImages()) : new List<ImageTarget>();
             if (targets.Count == 0 && images.Count == 0) throw new InvalidOperationException(wholeDocument ? "文档中没有可翻译的正文或图片。" : "请先选择需要翻译的文字或图片。");
@@ -313,6 +316,11 @@ namespace OfficeTranslate.WordAddIn
             overlay.TextFrame.MarginTop = 1; overlay.TextFrame.MarginBottom = 1;
             // R1: Word.TextFrame.WordWrap is int in the interop assembly, not MsoTriState.
             overlay.TextFrame.WordWrap = (int)Office.MsoTriState.msoTrue;
+            // D2: the host must never resize the cover by itself. Some builds
+            // default a new textbox to auto-size-to-fit-text, which would let
+            // the box grow beyond the validated region. The box keeps the
+            // planner's fixed geometry; only the font size adapts.
+            overlay.TextFrame.AutoSize = Office.MsoAutoSize.msoAutoSizeNone;
             overlay.TextFrame.TextRange.Text = text;
             // Word does not consistently support msoAutoSizeTextToFitShape. Some
             // desktop builds reject it with "value out of range", so the font
@@ -330,7 +338,32 @@ namespace OfficeTranslate.WordAddIn
                 failureReason = "覆盖框内译文按真实排版在最小字号下仍溢出，已降级为旁注。";
                 return false;
             }
+            // D2: re-read the geometry and confirm the host did not move or
+            // resize the cover behind our back; it must still match the
+            // planner's fixed rect.
+            if (!MatchesPlan(overlay, image.Left + plan.Left, image.Top + plan.Top, plan.Width, plan.Height))
+            {
+                try { overlay.Delete(); } catch { }
+                failureReason = "覆盖框几何被宿主改动，已删除并降级为旁注。";
+                return false;
+            }
             return true;
+        }
+
+        // D2: confirms a box still matches the planner's fixed rect. Guards
+        // against host auto-size behaviors that would silently expand the
+        // cover beyond the validated region.
+        private static bool MatchesPlan(Shape box, float left, float top, float width, float height)
+        {
+            const float epsilon = 0.5F;
+            try
+            {
+                return Math.Abs(box.Left - left) <= epsilon
+                    && Math.Abs(box.Top - top) <= epsilon
+                    && Math.Abs(box.Width - width) <= epsilon
+                    && Math.Abs(box.Height - height) <= epsilon;
+            }
+            catch { return false; }
         }
 
         // W1: real-layout overflow check. TextFrame.Overflowing reports whether
@@ -349,7 +382,9 @@ namespace OfficeTranslate.WordAddIn
                 try
                 {
                     _word.ActiveDocument.Repaginate();
-                    overflowing = box.TextFrame.Overflowing == Office.MsoTriState.msoTrue;
+                    // D1: Word's TextFrame.Overflowing is bool in this interop
+                    // assembly, not MsoTriState; read it directly.
+                    overflowing = box.TextFrame.Overflowing;
                 }
                 catch { return false; }
                 if (!overflowing) return true;
@@ -370,12 +405,19 @@ namespace OfficeTranslate.WordAddIn
             // image uses alignment positioning), in the frame its coordinates
             // were computed in (C3: coordinates and frame travel together).
             var noteWidth = Math.Min(420F, Math.Max(160F, image.Width));
-            var noteHeight = ImageOverlayLayout.EstimateNoteHeight(noteWidth, noteText, 9F);
+            // D3: clamp the initial height to the cap up front; an estimate
+            // that already exceeds the cap must go through the bounded growth
+            // check instead of returning success immediately.
+            var noteHeight = Math.Min(ImageOverlayLayout.MaxNoteHeightPt,
+                ImageOverlayLayout.EstimateNoteHeight(noteWidth, noteText, 9F));
             object anchor = image.Anchor.Duplicate;
             var note = _word.ActiveDocument.Shapes.AddTextbox(
                 Office.MsoTextOrientation.msoTextOrientationHorizontal,
                 noteLeft, noteTop, noteWidth, noteHeight, ref anchor);
             note.AlternativeText = ImageOverlayTags.NoteFor(ownerId);
+            // D2/D3: no host auto-growth for notes either; W2 grows the note
+            // manually under the cap so the limit cannot be bypassed.
+            note.TextFrame.AutoSize = Office.MsoAutoSize.msoAutoSizeNone;
             // The frame is assigned BEFORE Left/Top so Office interprets the
             // numbers in the intended system. C3: a note whose frame cannot be
             // set is deleted and reported instead of being kept in an unknown
@@ -412,18 +454,40 @@ namespace OfficeTranslate.WordAddIn
         }
 
         // W2: grows the side-note downward until its real layout fits.
-        // Bounded at maxHeight; exceeding it means pathological input, which
-        // is reported explicitly (with the text) instead of silently clipped.
+        // D3: the cap is enforced BEFORE the fit check on every pass, so an
+        // over-cap box can never return success, however it got that tall
+        // (estimator overshoot or host auto-growth). Text that cannot fit
+        // inside the cap is deleted and reported explicitly instead of being
+        // kept silently clipped.
         private void GrowNoteToFit(Shape note)
         {
-            const float maxHeight = 1400F;
             for (var i = 0; i < 12; i++)
             {
+                float height;
+                try { height = note.Height; }
+                catch (System.Runtime.InteropServices.COMException ex)
+                {
+                    try { note.Delete(); } catch { }
+                    throw new InvalidOperationException(
+                        "已完成图片识别，但无法读取译文旁注的尺寸，已删除旁注避免显示不全。", ex);
+                }
+                if (height > ImageOverlayLayout.MaxNoteHeightPt)
+                {
+                    try { note.Height = ImageOverlayLayout.MaxNoteHeightPt; }
+                    catch (System.Runtime.InteropServices.COMException ex)
+                    {
+                        try { note.Delete(); } catch { }
+                        throw new InvalidOperationException(
+                            "已完成图片识别，但无法约束译文旁注的高度，已删除避免显示不全。", ex);
+                    }
+                    height = ImageOverlayLayout.MaxNoteHeightPt;
+                }
                 bool overflowing;
                 try
                 {
                     _word.ActiveDocument.Repaginate();
-                    overflowing = note.TextFrame.Overflowing == Office.MsoTriState.msoTrue;
+                    // D1: bool, not MsoTriState (see ShrinkFontToFit).
+                    overflowing = note.TextFrame.Overflowing;
                 }
                 catch (System.Runtime.InteropServices.COMException ex)
                 {
@@ -432,10 +496,7 @@ namespace OfficeTranslate.WordAddIn
                         "已完成图片识别，但无法校验译文旁注的排版溢出，已删除旁注避免显示不全。", ex);
                 }
                 if (!overflowing) return;
-                float height;
-                try { height = note.Height; }
-                catch { height = maxHeight; }
-                if (height >= maxHeight)
+                if (height >= ImageOverlayLayout.MaxNoteHeightPt)
                 {
                     string text;
                     try { text = note.TextFrame.TextRange.Text; } catch { text = string.Empty; }
@@ -444,7 +505,7 @@ namespace OfficeTranslate.WordAddIn
                         "译文旁注过长，增高到上限仍无法完整显示，已删除避免静默裁切。译文（截断）：" +
                         ImageOverlayText.Truncate(text));
                 }
-                try { note.Height = Math.Min(maxHeight, height * 1.5F + 12F); }
+                try { note.Height = Math.Min(ImageOverlayLayout.MaxNoteHeightPt, height * 1.5F + 12F); }
                 catch (System.Runtime.InteropServices.COMException ex)
                 {
                     try { note.Delete(); } catch { }
