@@ -47,6 +47,32 @@ namespace OfficeTranslate.Core
         private const string LogFileName = "image-overlay.log";
         private static readonly object Gate = new object();
 
+        // Records which add-in build actually served a translation request.
+        // The menu-acceptance test reads the newest line of this log after
+        // clicking the ribbon button to prove the expected DLL was loaded,
+        // instead of inferring it from registry keys.
+        public static void LogVersion(string host, string version)
+        {
+            if (string.IsNullOrEmpty(host)) return;
+            var line = string.Format(CultureInfo.InvariantCulture,
+                "{0:O} host={1} addin_version={2} event=translate_start",
+                DateTime.UtcNow, host, string.IsNullOrEmpty(version) ? "unknown" : version);
+            Trace.WriteLine("OfficeTranslate: " + line);
+            try
+            {
+                var directory = Path.Combine(Path.GetTempPath(), "OfficeTranslate");
+                lock (Gate)
+                {
+                    Directory.CreateDirectory(directory);
+                    File.AppendAllText(Path.Combine(directory, LogFileName), line + Environment.NewLine, Encoding.UTF8);
+                }
+            }
+            catch (Exception)
+            {
+                // Diagnostics must never break translation.
+            }
+        }
+
         public static void Log(ImageOverlayDiagnosticEntry entry)
         {
             if (entry == null) return;

@@ -3,6 +3,7 @@ using Office = Microsoft.Office.Core;
 using OfficeTranslate.Core;
 using System;
 using System.Collections.Generic;
+using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 using Task = System.Threading.Tasks.Task;
@@ -17,6 +18,11 @@ namespace OfficeTranslate.WordAddIn
 
         public async Task<TranslationTaskSummary> TranslateAsync(bool wholeDocument, bool bilingual, TranslationSettings settings, CancellationToken token, Action<string> progress)
         {
+            // Menu acceptance must prove which DLL served the request: record
+            // this add-in's assembly version so the reviewer can verify it in
+            // the diagnostics log instead of inferring from registry keys.
+            ImageOverlayDiagnostics.LogVersion("Word",
+                typeof(WordTranslationService).Assembly.GetName().Version?.ToString() ?? "unknown");
             var targets = wholeDocument ? ReadDocumentParagraphs() : ReadSelection();
             var images = settings.ImageOcrEnabled ? (wholeDocument ? ReadDocumentImages() : ReadSelectionImages()) : new List<ImageTarget>();
             if (targets.Count == 0 && images.Count == 0) throw new InvalidOperationException(wholeDocument ? "文档中没有可翻译的正文或图片。" : "请先选择需要翻译的文字或图片。");
@@ -313,7 +319,46 @@ namespace OfficeTranslate.WordAddIn
             // size is fitted inside the region by ImageOverlayPlanner instead
             // of growing the box downward.
             overlay.TextFrame.TextRange.Font.Size = plan.FontSize;
+            // W1: the planner's character-width/line-height estimate cannot
+            // replace Word's real layout. Shrink the font (never the box)
+            // until the text actually fits; if it still overflows at the
+            // floor, the box is deleted and the caller degrades the region
+            // to a side-note instead of showing clipped text as success.
+            if (!ShrinkFontToFit(overlay, plan.FontSize))
+            {
+                try { overlay.Delete(); } catch { }
+                failureReason = "覆盖框内译文按真实排版在最小字号下仍溢出，已降级为旁注。";
+                return false;
+            }
             return true;
+        }
+
+        // W1: real-layout overflow check. TextFrame.Overflowing reports whether
+        // the current text actually fits the fixed box (after Repaginate).
+        // The font shrinks stepwise from the planned size to the 8pt floor
+        // (the planner's minimum); the box geometry is never expanded.
+        private bool ShrinkFontToFit(Shape box, float startSize)
+        {
+            const float floorSize = 8F;
+            var size = Math.Min(startSize, 18F);
+            try { box.TextFrame.TextRange.Font.Size = size; }
+            catch { return false; }
+            for (var i = 0; i < 12; i++)
+            {
+                bool overflowing;
+                try
+                {
+                    _word.ActiveDocument.Repaginate();
+                    overflowing = box.TextFrame.Overflowing == Office.MsoTriState.msoTrue;
+                }
+                catch { return false; }
+                if (!overflowing) return true;
+                if (size <= floorSize) return false;
+                size = Math.Max(floorSize, size - 1F);
+                try { box.TextFrame.TextRange.Font.Size = size; }
+                catch { return false; }
+            }
+            return false;
         }
 
         private void PlaceCombinedNote(ImageTarget image, string ownerId, string noteText,
@@ -345,7 +390,7 @@ namespace OfficeTranslate.WordAddIn
                 try { note.Delete(); } catch { }
                 throw new InvalidOperationException(
                     "已完成图片识别，但无法设置译文旁注的定位参考系，已删除错位旁注避免误导。译文（截断）：" +
-                    TruncateForMessage(noteText), ex);
+                    ImageOverlayText.Truncate(noteText), ex);
             }
             note.Left = noteLeft; note.Top = noteTop; note.Width = noteWidth; note.Height = noteHeight;
             note.WrapFormat.Type = WdWrapType.wdWrapFront;
@@ -359,6 +404,60 @@ namespace OfficeTranslate.WordAddIn
             note.TextFrame.WordWrap = (int)Office.MsoTriState.msoTrue;
             note.TextFrame.TextRange.Text = noteText;
             note.TextFrame.TextRange.Font.Size = 9F;
+            // W2: "no height cap" is not "fully visible". Grow the note
+            // downward until Word's real layout reports no overflow. Bounded;
+            // a note that still overflows at the cap is deleted and reported
+            // explicitly instead of being kept clipped.
+            GrowNoteToFit(note);
+        }
+
+        // W2: grows the side-note downward until its real layout fits.
+        // Bounded at maxHeight; exceeding it means pathological input, which
+        // is reported explicitly (with the text) instead of silently clipped.
+        private void GrowNoteToFit(Shape note)
+        {
+            const float maxHeight = 1400F;
+            for (var i = 0; i < 12; i++)
+            {
+                bool overflowing;
+                try
+                {
+                    _word.ActiveDocument.Repaginate();
+                    overflowing = note.TextFrame.Overflowing == Office.MsoTriState.msoTrue;
+                }
+                catch (System.Runtime.InteropServices.COMException ex)
+                {
+                    try { note.Delete(); } catch { }
+                    throw new InvalidOperationException(
+                        "已完成图片识别，但无法校验译文旁注的排版溢出，已删除旁注避免显示不全。", ex);
+                }
+                if (!overflowing) return;
+                float height;
+                try { height = note.Height; }
+                catch { height = maxHeight; }
+                if (height >= maxHeight)
+                {
+                    string text;
+                    try { text = note.TextFrame.TextRange.Text; } catch { text = string.Empty; }
+                    try { note.Delete(); } catch { }
+                    throw new InvalidOperationException(
+                        "译文旁注过长，增高到上限仍无法完整显示，已删除避免静默裁切。译文（截断）：" +
+                        ImageOverlayText.Truncate(text));
+                }
+                try { note.Height = Math.Min(maxHeight, height * 1.5F + 12F); }
+                catch (System.Runtime.InteropServices.COMException ex)
+                {
+                    try { note.Delete(); } catch { }
+                    throw new InvalidOperationException(
+                        "已完成图片识别，但无法增高译文旁注，已删除避免显示不全。", ex);
+                }
+            }
+            string leftover;
+            try { leftover = note.TextFrame.TextRange.Text; } catch { leftover = string.Empty; }
+            try { note.Delete(); } catch { }
+            throw new InvalidOperationException(
+                "译文旁注排版校验未收敛，已删除避免静默裁切。译文（截断）：" +
+                ImageOverlayText.Truncate(leftover));
         }
 
         private void RemovePreviousResults(ImageTarget image, string ownerId)
@@ -475,12 +574,6 @@ namespace OfficeTranslate.WordAddIn
         private static T SafeGet<T>(Func<T> read, T fallback)
         {
             try { return read(); } catch { return fallback; }
-        }
-
-        private static string TruncateForMessage(string text)
-        {
-            if (string.IsNullOrEmpty(text)) return string.Empty;
-            return text.Length <= 500 ? text : text.Substring(0, 500) + "…";
         }
 
         private List<Target> ReadSelection()

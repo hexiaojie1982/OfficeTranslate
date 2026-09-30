@@ -4,6 +4,7 @@ using OfficeTranslate.Core;
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
@@ -17,6 +18,11 @@ namespace OfficeTranslate.PowerPointAddIn
 
         public async Task<TranslationTaskSummary> TranslateAsync(bool wholePresentation, TranslationSettings settings, CancellationToken token, Action<string> progress)
         {
+            // Menu acceptance must prove which DLL served the request: record
+            // this add-in's assembly version so the reviewer can verify it in
+            // the diagnostics log instead of inferring from registry keys.
+            ImageOverlayDiagnostics.LogVersion("PowerPoint",
+                typeof(PowerPointTranslationService).Assembly.GetName().Version?.ToString() ?? "unknown");
             if (_powerPoint.Presentations.Count == 0) throw new InvalidOperationException("请先打开演示文稿。");
             var targets = wholePresentation ? ReadPresentation() : ReadSelection();
             var images = settings.ImageOcrEnabled ? (wholePresentation ? ReadPresentationImages() : ReadSelectionImages()) : new List<PowerPoint.Shape>();
@@ -128,6 +134,16 @@ namespace OfficeTranslate.PowerPointAddIn
                     overlay.TextFrame2.WordWrap = Office.MsoTriState.msoTrue;
                     overlay.TextFrame2.TextRange.Text = overlayText;
                     overlay.TextFrame2.TextRange.Font.Size = plan.FontSize;
+                    // W1: shrink the font (never the box) until the real
+                    // laid-out text height fits the fixed box; a box that still
+                    // overflows at the floor is deleted and the region degrades
+                    // to a side-note instead of showing clipped text.
+                    if (!TextFitsBox(overlay, plan.FontSize))
+                    {
+                        try { overlay.Delete(); } catch { }
+                        noteEntries.Add("覆盖框内译文按真实排版在最小字号下仍溢出，已降级为旁注。\r" + overlayText);
+                        continue;
+                    }
                 }
                 // R2: one image gets ONE combined side-note, so no region's
                 // translation is lost when several regions degrade.
@@ -159,6 +175,85 @@ namespace OfficeTranslate.PowerPointAddIn
             note.TextFrame2.WordWrap = Office.MsoTriState.msoTrue;
             note.TextFrame2.TextRange.Text = noteText;
             note.TextFrame2.TextRange.Font.Size = 9F;
+            // W2: grow the note downward until the real laid-out text height
+            // fits. Bounded; a note that still overflows at the cap is deleted
+            // and reported explicitly instead of being kept clipped.
+            GrowNoteToFit(note);
+        }
+
+        // W1: real-layout fit check for PowerPoint overlays.
+        // TextRange2.BoundHeight is the actual rendered text height with word
+        // wrap applied. The font shrinks stepwise to the 8pt floor; the box
+        // geometry never expands.
+        private static bool TextFitsBox(PowerPoint.Shape box, float startSize)
+        {
+            const float floorSize = 8F;
+            var size = Math.Min(startSize, 18F);
+            try { box.TextFrame2.TextRange.Font.Size = size; }
+            catch { return false; }
+            for (var i = 0; i < 12; i++)
+            {
+                float boundHeight, availHeight;
+                try
+                {
+                    boundHeight = box.TextFrame2.TextRange.BoundHeight;
+                    availHeight = box.Height - box.TextFrame2.MarginTop - box.TextFrame2.MarginBottom;
+                }
+                catch { return false; }
+                if (boundHeight <= availHeight + 0.5F) return true;
+                if (size <= floorSize) return false;
+                size = Math.Max(floorSize, size - 1F);
+                try { box.TextFrame2.TextRange.Font.Size = size; }
+                catch { return false; }
+            }
+            return false;
+        }
+
+        // W2: grows the side-note downward until its real laid-out height fits.
+        // Bounded at maxHeight; exceeding it means pathological input, which
+        // is reported explicitly (with the text) instead of silently clipped.
+        private static void GrowNoteToFit(PowerPoint.Shape note)
+        {
+            const float maxHeight = 1400F;
+            for (var i = 0; i < 12; i++)
+            {
+                float boundHeight, availHeight;
+                try
+                {
+                    boundHeight = note.TextFrame2.TextRange.BoundHeight;
+                    availHeight = note.Height - note.TextFrame2.MarginTop - note.TextFrame2.MarginBottom;
+                }
+                catch (COMException ex)
+                {
+                    try { note.Delete(); } catch { }
+                    throw new InvalidOperationException("已完成图片识别，但无法校验译文旁注的排版溢出，已删除旁注避免显示不全。", ex);
+                }
+                if (boundHeight <= availHeight + 0.5F) return;
+                float height;
+                try { height = note.Height; }
+                catch { height = maxHeight; }
+                if (height >= maxHeight)
+                {
+                    string text;
+                    try { text = note.TextFrame2.TextRange.Text; } catch { text = string.Empty; }
+                    try { note.Delete(); } catch { }
+                    throw new InvalidOperationException(
+                        "译文旁注过长，增高到上限仍无法完整显示，已删除避免静默裁切。译文（截断）：" +
+                        ImageOverlayText.Truncate(text));
+                }
+                try { note.Height = Math.Min(maxHeight, height * 1.5F + 12F); }
+                catch (COMException ex)
+                {
+                    try { note.Delete(); } catch { }
+                    throw new InvalidOperationException("已完成图片识别，但无法增高译文旁注，已删除避免显示不全。", ex);
+                }
+            }
+            string leftover;
+            try { leftover = note.TextFrame2.TextRange.Text; } catch { leftover = string.Empty; }
+            try { note.Delete(); } catch { }
+            throw new InvalidOperationException(
+                "译文旁注排版校验未收敛，已删除避免静默裁切。译文（截断）：" +
+                ImageOverlayText.Truncate(leftover));
         }
 
         private static void RemovePreviousResults(PowerPoint.Slide slide, string ownerId)
