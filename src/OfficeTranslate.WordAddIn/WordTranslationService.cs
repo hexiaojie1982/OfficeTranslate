@@ -44,7 +44,7 @@ namespace OfficeTranslate.WordAddIn
                 {
                     token.ThrowIfCancellationRequested(); var current = i + 1;
                     progress($"OfficeTranslate：正在识别图片 {current}/{total}");
-                    await TranslateImageAsync(images[i], client, settings, summary, token, ui);
+                    await TranslateImageAsync(images[i], current, client, settings, summary, token, ui);
                     progress($"OfficeTranslate：已完成 {current}/{total}");
                 }
                 ui.LogProbe("image_loop_after");
@@ -108,7 +108,7 @@ namespace OfficeTranslate.WordAddIn
             }
         }
 
-        private async Task TranslateImageAsync(ImageTarget image, TranslationClient client, TranslationSettings settings, TranslationTaskSummary summary, CancellationToken token, OfficeUiDispatcher ui)
+        private async Task TranslateImageAsync(ImageTarget image, int imageNumber, TranslationClient client, TranslationSettings settings, TranslationTaskSummary summary, CancellationToken token, OfficeUiDispatcher ui)
         {
             // M2: clipboard capture and owner-identity bookkeeping touch COM
             // and the clipboard, so they run on the Office UI (STA) thread
@@ -120,7 +120,23 @@ namespace OfficeTranslate.WordAddIn
                 // Clipboard round-trip is the only way to rasterize a Word shape.
                 // CapturePng saves/restores the user's clipboard and clears stale
                 // content first so a leftover image is never mistaken for the shape.
-                var captured = ClipboardImageCapture.CapturePng(image.CopyAsPicture, token);
+                // S1: pump the UI message loop while capturing (like the Excel
+                // host): Office delayed clipboard rendering may need its
+                // messages dispatched, and a transiently busy clipboard is
+                // retried a bounded number of times inside CapturePng.
+                byte[] captured;
+                try
+                {
+                    captured = ClipboardImageCapture.CapturePng(
+                        image.CopyAsPicture,
+                        () => System.Windows.Forms.Application.DoEvents(),
+                        token);
+                }
+                catch (Exception ex) when (!(ex is OperationCanceledException))
+                {
+                    throw new InvalidOperationException(
+                        "第 " + imageNumber + " 张图片捕获失败：" + ex.Message, ex);
+                }
                 ui.LogProbe("capture_after");
                 // R5/C2: owner identity for cleanup. Floating shapes use their Name
                 // (unique per document, persisted, stable across move/resize/
