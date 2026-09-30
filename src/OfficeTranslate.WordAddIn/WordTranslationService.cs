@@ -16,7 +16,7 @@ namespace OfficeTranslate.WordAddIn
         private readonly WordApplication _word;
         public WordTranslationService(WordApplication word) => _word = word;
 
-        public async Task<TranslationTaskSummary> TranslateAsync(bool wholeDocument, bool bilingual, TranslationSettings settings, CancellationToken token, Action<string> progress)
+        public async Task<TranslationTaskSummary> TranslateAsync(bool wholeDocument, bool bilingual, TranslationSettings settings, CancellationToken token, Action<string> progress, OfficeUiDispatcher ui)
         {
             // Menu acceptance must prove which DLL served the request: record
             // this add-in's assembly version so the reviewer can verify it in
@@ -26,6 +26,9 @@ namespace OfficeTranslate.WordAddIn
             ImageOverlayDiagnostics.LogVersion("Word",
                 typeof(WordTranslationService).Assembly.GetName().Version?.ToString() ?? "unknown",
                 typeof(WordTranslationService).Module.ModuleVersionId.ToString());
+            // M2: prove which thread the synchronous prefix runs on; every
+            // COM/clipboard section below is dispatched explicitly.
+            ui.LogProbe("translate_start");
             var targets = wholeDocument ? ReadDocumentParagraphs() : ReadSelection();
             var images = settings.ImageOcrEnabled ? (wholeDocument ? ReadDocumentImages() : ReadSelectionImages()) : new List<ImageTarget>();
             if (targets.Count == 0 && images.Count == 0) throw new InvalidOperationException(wholeDocument ? "文档中没有可翻译的正文或图片。" : "请先选择需要翻译的文字或图片。");
@@ -36,13 +39,16 @@ namespace OfficeTranslate.WordAddIn
                 // Word represents a selected inline picture with a non-printing object
                 // character. Image-only selections are filtered below, and images are
                 // handled before ordinary text so OCR is always the first real request.
+                ui.LogProbe("image_loop_before");
                 for (var i = 0; i < images.Count; i++)
                 {
                     token.ThrowIfCancellationRequested(); var current = i + 1;
                     progress($"OfficeTranslate：正在识别图片 {current}/{total}");
-                    await TranslateImageAsync(images[i], client, settings, summary, token);
+                    await TranslateImageAsync(images[i], client, settings, summary, token, ui);
                     progress($"OfficeTranslate：已完成 {current}/{total}");
                 }
+                ui.LogProbe("image_loop_after");
+                ui.LogProbe("text_loop_before");
                 for (var i = 0; i < targets.Count; i++)
                 {
                     token.ThrowIfCancellationRequested();
@@ -68,41 +74,73 @@ namespace OfficeTranslate.WordAddIn
                     var translatedText = result.Text.TrimEnd('\r', '\a');
                     progress($"OfficeTranslate：正在写回 {i + 1}/{targets.Count}");
 
-                    var undo = _word.UndoRecord;
-                    undo.StartCustomRecord(bilingual ? $"OfficeTranslate 双语排版 {i + 1}/{targets.Count}" : $"OfficeTranslate 翻译 {i + 1}/{targets.Count}");
-                    try
+                    // M2: the writeback touches the Word object model, so it
+                    // runs on the Office UI (STA) thread explicitly instead of
+                    // on whatever thread the network await resumed on.
+                    await ui.InvokeAsync(() =>
                     {
-                        if (bilingual)
+                        var undo = _word.UndoRecord;
+                        undo.StartCustomRecord(bilingual ? $"OfficeTranslate 双语排版 {i + 1}/{targets.Count}" : $"OfficeTranslate 翻译 {i + 1}/{targets.Count}");
+                        try
                         {
-                            var insertion = targets[i].Range.Duplicate;
-                            insertion.Collapse(WdCollapseDirection.wdCollapseEnd);
-                            insertion.InsertAfter("\r" + translatedText);
+                            if (bilingual)
+                            {
+                                var insertion = targets[i].Range.Duplicate;
+                                insertion.Collapse(WdCollapseDirection.wdCollapseEnd);
+                                insertion.InsertAfter("\r" + translatedText);
+                            }
+                            else
+                                targets[i].Range.Text = translatedText;
                         }
-                        else
-                            targets[i].Range.Text = translatedText;
-                    }
-                    finally { undo.EndCustomRecord(); }
+                        finally { undo.EndCustomRecord(); }
+                    });
                     progress($"OfficeTranslate：已完成 {current}/{total}");
                 }
+                ui.LogProbe("text_loop_after");
                 return summary;
             }
         }
 
-        private async Task TranslateImageAsync(ImageTarget image, TranslationClient client, TranslationSettings settings, TranslationTaskSummary summary, CancellationToken token)
+        private async Task TranslateImageAsync(ImageTarget image, TranslationClient client, TranslationSettings settings, TranslationTaskSummary summary, CancellationToken token, OfficeUiDispatcher ui)
         {
-            // Clipboard round-trip is the only way to rasterize a Word shape.
-            // CapturePng saves/restores the user's clipboard and clears stale
-            // content first so a leftover image is never mistaken for the shape.
-            var bytes = ClipboardImageCapture.CapturePng(image.CopyAsPicture, token);
+            // M2: clipboard capture and owner-identity bookkeeping touch COM
+            // and the clipboard, so they run on the Office UI (STA) thread
+            // explicitly. Async continuations are not guaranteed to resume
+            // there (a later menu run used to fail here with an STA/OLE error).
+            var preNetwork = await ui.InvokeAsync(() =>
+            {
+                ui.LogProbe("capture_before");
+                // Clipboard round-trip is the only way to rasterize a Word shape.
+                // CapturePng saves/restores the user's clipboard and clears stale
+                // content first so a leftover image is never mistaken for the shape.
+                var captured = ClipboardImageCapture.CapturePng(image.CopyAsPicture, token);
+                ui.LogProbe("capture_after");
+                // R5/C2: owner identity for cleanup. Floating shapes use their Name
+                // (unique per document, persisted, stable across move/resize/
+                // reopen). Inline shapes have no Name: each instance gets its own
+                // persistent GUID in a document bookmark, so two identical
+                // pictures never share an owner.
+                // M1: ResolveInlineOwnerId only PROVES identity here; bookmark
+                // deletion and re-tightening are committed after the OCR plan
+                // succeeds, so a cancelled/failed/empty run never mutates the
+                // document.
+                InlineOwnerResolution? inlineResolution = null;
+                string owner;
+                if (image.Kind == "Inline")
+                {
+                    inlineResolution = ResolveInlineOwnerId(image.Anchor);
+                    owner = inlineResolution.OwnerId;
+                }
+                else
+                {
+                    owner = ImageOverlayIdentity.ForNamedShape("wd", image.ShapeName, captured);
+                }
+                return Tuple.Create(captured, owner, inlineResolution);
+            });
+            var bytes = preNetwork.Item1;
+            var ownerId = preNetwork.Item2;
+            var inlineResolution = preNetwork.Item3;
             var hasPixels = PngDimensions.TryRead(bytes, out var pixelWidth, out var pixelHeight);
-            // R5/C2: owner identity for cleanup. Floating shapes use their Name
-            // (unique per document, persisted, stable across move/resize/
-            // reopen). Inline shapes have no Name: each instance gets its own
-            // persistent GUID in a document bookmark, so two identical
-            // pictures never share an owner.
-            var ownerId = image.Kind == "Inline"
-                ? GetOrCreateInlineOwnerId(image.Anchor, bytes)
-                : ImageOverlayIdentity.ForNamedShape("wd", image.ShapeName, bytes);
             var regions = await client.TranslateImageAsync(bytes, settings, token);
             if (regions.Count == 0) { summary.RecordImage(false); return; }
             summary.RecordImage(true);
@@ -141,63 +179,76 @@ namespace OfficeTranslate.WordAddIn
             // Matching is by owner id only, never by region center or anchor
             // character offsets, so overlapping images and anchor shifts after
             // adding shapes cannot cause wrong deletes or missed deletes.
-            RemovePreviousResults(image, ownerId);
+            // M1: commit owner bookkeeping only after planning succeeded.
+            // Duplicate bookmarks are deleted and the canonical bookmark
+            // re-tightened here; their stale boxes are removed below by the
+            // absorbed owner ids.
+            // M2: all shape surgery below runs on the Office UI (STA) thread.
+            await ui.InvokeAsync(() =>
+            {
+                if (inlineResolution != null)
+                    CommitInlineOwnerResolution(image.Anchor, inlineResolution);
+                RemovePreviousResults(image, ownerId);
+                if (inlineResolution != null)
+                    foreach (var absorbed in inlineResolution.AbsorbedOwnerIds)
+                        RemovePreviousResults(image, absorbed);
 
-            var noteEntries = new List<string>();
-            foreach (var item in plans)
-            {
-                var plan = item.Item2;
-                var overlayText = item.Item3;
-                if (plan.Verdict == ImageOverlayVerdict.SideNote)
+                var noteEntries = new List<string>();
+                foreach (var item in plans)
                 {
-                    noteEntries.Add(plan.Reason + "\r" + overlayText);
-                    continue;
-                }
-                string frameFailure;
-                if (!PlaceOverlay(image, plan, overlayText, ownerId, out frameFailure))
-                    noteEntries.Add(frameFailure + "\r" + overlayText);
-            }
-            // R2: one image gets ONE combined side-note, placed after all
-            // regions are processed, so no region's translation is lost.
-            if (noteEntries.Count > 0)
-            {
-                // C3: coordinates and their reference frame travel together.
-                // The anchor page position is only meaningful in the page
-                // frame; the image's own numbers are only meaningful in the
-                // image's frame. Mixing them misplaces the note.
-                float noteLeft, noteTop;
-                WdRelativeHorizontalPosition noteRelH;
-                WdRelativeVerticalPosition noteRelV;
-                if (originIsSentinel)
-                {
-                    // The sentinel Left/Top must never be reused for the note.
-                    if (TryGetAnchorPagePosition(image, out var anchorX, out var anchorY))
+                    var plan = item.Item2;
+                    var overlayText = item.Item3;
+                    if (plan.Verdict == ImageOverlayVerdict.SideNote)
                     {
-                        noteLeft = anchorX;
-                        noteTop = anchorY + 6F;
+                        noteEntries.Add(plan.Reason + "\r" + overlayText);
+                        continue;
+                    }
+                    string frameFailure;
+                    if (!PlaceOverlay(image, plan, overlayText, ownerId, out frameFailure))
+                        noteEntries.Add(frameFailure + "\r" + overlayText);
+                }
+                // R2: one image gets ONE combined side-note, placed after all
+                // regions are processed, so no region's translation is lost.
+                if (noteEntries.Count > 0)
+                {
+                    // C3: coordinates and their reference frame travel together.
+                    // The anchor page position is only meaningful in the page
+                    // frame; the image's own numbers are only meaningful in the
+                    // image's frame. Mixing them misplaces the note.
+                    float noteLeft, noteTop;
+                    WdRelativeHorizontalPosition noteRelH;
+                    WdRelativeVerticalPosition noteRelV;
+                    if (originIsSentinel)
+                    {
+                        // The sentinel Left/Top must never be reused for the note.
+                        if (TryGetAnchorPagePosition(image, out var anchorX, out var anchorY))
+                        {
+                            noteLeft = anchorX;
+                            noteTop = anchorY + 6F;
+                        }
+                        else
+                        {
+                            // Explicit, valid fallback: a fixed page position in
+                            // the page frame, recorded in the note itself.
+                            noteEntries.Insert(0, "无法取得图片锚点的页面坐标，旁注放在页面左上固定位置。");
+                            noteLeft = 72F;
+                            noteTop = 78F;
+                        }
+                        noteRelH = WdRelativeHorizontalPosition.wdRelativeHorizontalPositionPage;
+                        noteRelV = WdRelativeVerticalPosition.wdRelativeVerticalPositionPage;
                     }
                     else
                     {
-                        // Explicit, valid fallback: a fixed page position in
-                        // the page frame, recorded in the note itself.
-                        noteEntries.Insert(0, "无法取得图片锚点的页面坐标，旁注放在页面左上固定位置。");
-                        noteLeft = 72F;
-                        noteTop = 78F;
+                        noteLeft = image.Left;
+                        noteTop = image.Top + image.Height + 6F;
+                        noteRelH = image.RelativeHorizontalPosition;
+                        noteRelV = image.RelativeVerticalPosition;
                     }
-                    noteRelH = WdRelativeHorizontalPosition.wdRelativeHorizontalPositionPage;
-                    noteRelV = WdRelativeVerticalPosition.wdRelativeVerticalPositionPage;
+                    PlaceCombinedNote(image, ownerId, ImageOverlayNotes.Combine(noteEntries),
+                        noteLeft, noteTop, noteRelH, noteRelV);
+                    summary.RecordImageNeedsReview();
                 }
-                else
-                {
-                    noteLeft = image.Left;
-                    noteTop = image.Top + image.Height + 6F;
-                    noteRelH = image.RelativeHorizontalPosition;
-                    noteRelV = image.RelativeVerticalPosition;
-                }
-                PlaceCombinedNote(image, ownerId, ImageOverlayNotes.Combine(noteEntries),
-                    noteLeft, noteTop, noteRelH, noteRelV);
-                summary.RecordImageNeedsReview();
-            }
+            });
         }
 
         // Word reports WdShapePosition alignment constants (wdShapeCenter =
@@ -209,7 +260,7 @@ namespace OfficeTranslate.WordAddIn
             return value <= -999990F;
         }
 
-        // C2: every inline picture instance owns a persistent GUID, stored in
+        // C2/M1: every inline picture instance owns a persistent GUID, stored in
         // a document bookmark named OTImg_<32 hex> (38 chars, under Word's
         // 40-char bookmark limit). A content hash alone cannot distinguish
         // two identical pictures, so it must never be the primary owner id.
@@ -217,37 +268,176 @@ namespace OfficeTranslate.WordAddIn
         // edits, and never modifies the picture's own description. The
         // content hash is only an auxiliary fallback, still position-qualified
         // so identical pictures at different positions never share an owner.
-        private string GetOrCreateInlineOwnerId(Range imageRange, byte[] pngBytes)
+        //
+        // M1: a bookmark's Range EXPANDS when the document is edited (text
+        // writeback, overlay insertion), so the bookmark's outer bounds are no
+        // longer a reliable identity test -- the old strict bounds comparison
+        // minted a fresh GUID on every re-translation and orphaned the
+        // previous boxes. Identity is now proven by the bookmark's range
+        // containing exactly ONE inline shape whose range and story match the
+        // image. A bookmark spanning zero or several inline shapes is
+        // ambiguous (or orphaned) and is never reused: no content-hash or
+        // center-point guessing.
+        //
+        // Two phases, separated by the network call:
+        //   - ResolveInlineOwnerId (pre-network) only READS: it proves which
+        //     bookmarks name this exact instance, picks the canonical one by
+        //     a deterministic order (bookmark start, end, name), and reports
+        //     the rest as duplicates. It changes nothing except creating the
+        //     first bookmark when none exists.
+        //   - CommitInlineOwnerResolution (post-plan, UI thread) deletes the
+        //     duplicate bookmarks and re-tightens the canonical bookmark to
+        //     the image range. A cancelled/failed/empty OCR run therefore
+        //     never mutates the document.
+        // Re-tightening matters because an expanded bookmark range could pick
+        // up an unrelated nearby picture later and turn ambiguous.
+        private sealed class InlineOwnerResolution
+        {
+            public string OwnerId = string.Empty;
+            public string CanonicalBookmark = string.Empty;
+            public readonly List<string> DuplicateBookmarks = new List<string>();
+            public readonly List<string> AbsorbedOwnerIds = new List<string>();
+        }
+
+        private InlineOwnerResolution ResolveInlineOwnerId(Range imageRange)
         {
             const string prefix = "OTImg_";
+            var result = new InlineOwnerResolution();
             int start, end;
-            try { start = imageRange.Start; end = imageRange.End; }
-            catch { start = -1; end = -1; }
+            WdStoryType story;
+            try { start = imageRange.Start; end = imageRange.End; story = imageRange.StoryType; }
+            catch { start = -1; end = -1; story = WdStoryType.wdMainTextStory; }
             try
             {
                 var doc = _word.ActiveDocument;
+                var matches = new List<Tuple<string, int, int>>();
                 foreach (Bookmark bookmark in doc.Bookmarks)
                 {
                     string name;
                     try { name = bookmark.Name; }
                     catch { continue; }
                     if (string.IsNullOrEmpty(name) || !name.StartsWith(prefix, StringComparison.Ordinal)) continue;
-                    int bStart, bEnd, shapes;
-                    try { bStart = bookmark.Range.Start; bEnd = bookmark.Range.End; shapes = bookmark.Range.InlineShapes.Count; }
+                    Range shapeRange;
+                    int bStart, bEnd;
+                    try
+                    {
+                        var bRange = bookmark.Range;
+                        // Exactly one inline shape: zero means the picture is
+                        // gone (orphaned bookmark), several means ambiguous.
+                        // Both are rejected, never guessed.
+                        if (bRange.InlineShapes.Count != 1) continue;
+                        bStart = bRange.Start; bEnd = bRange.End;
+                        shapeRange = bRange.InlineShapes[1].Range;
+                    }
                     catch { continue; }
-                    // The bookmark must still sit on a live inline picture;
-                    // an orphaned bookmark (picture deleted) is not reused.
-                    if (shapes > 0 && bStart == start && bEnd == end)
-                        return "wdi:guid-" + name.Substring(prefix.Length);
+                    int sStart, sEnd;
+                    WdStoryType sStory;
+                    try { sStart = shapeRange.Start; sEnd = shapeRange.End; sStory = shapeRange.StoryType; }
+                    catch { continue; }
+                    // The single contained inline shape must be exactly this
+                    // image: same range in the same story. Range offsets alone
+                    // are not enough because different stories can share them,
+                    // and two identical pictures at different positions have
+                    // different ranges, so they never merge.
+                    if (sStart == start && sEnd == end && sStory == story)
+                        matches.Add(Tuple.Create(name, bStart, bEnd));
+                }
+                // Deterministic canonical choice: bookmark start, then end,
+                // then name. Bookmark enumeration order is not specified, so
+                // it must not decide. The pure selection lives in Core so it
+                // is unit-testable without COM.
+                if (matches.Count >= 1)
+                {
+                    var chosen = ImageOverlayIdentity.ChooseCanonicalBookmark(matches);
+                    result.CanonicalBookmark = chosen.Item1;
+                    result.OwnerId = "wdi:guid-" + chosen.Item1.Substring(prefix.Length);
+                    foreach (var duplicate in chosen.Item2)
+                    {
+                        result.DuplicateBookmarks.Add(duplicate);
+                        result.AbsorbedOwnerIds.Add("wdi:guid-" + duplicate.Substring(prefix.Length));
+                    }
+                    return result;
                 }
                 var guid = Guid.NewGuid().ToString("N");
                 object rangeObject = imageRange;
                 doc.Bookmarks.Add(prefix + guid, ref rangeObject);
-                return "wdi:guid-" + guid;
+                result.CanonicalBookmark = prefix + guid;
+                result.OwnerId = "wdi:guid-" + guid;
+                return result;
             }
             catch
             {
-                return "wdi:img-" + ImageOverlayIdentity.ContentHash(pngBytes) + "-pos" + start;
+                // Identity unprovable: refuse to guess. A fresh GUID never
+                // merges two images; worst case it orphans this run's boxes,
+                // exactly like the pre-M1 behavior, but only on this
+                // exceptional path. No content-hash fallback: two identical
+                // pictures must never share an owner.
+                result.OwnerId = "wdi:guid-" + Guid.NewGuid().ToString("N");
+                result.CanonicalBookmark = string.Empty;
+                return result;
+            }
+        }
+
+        private void CommitInlineOwnerResolution(Range imageRange, InlineOwnerResolution resolution)
+        {
+            if (string.IsNullOrEmpty(resolution.CanonicalBookmark)) return;
+            Document doc;
+            try { doc = _word.ActiveDocument; }
+            catch { return; }
+            // Re-tighten first: if this fails, the duplicates are still
+            // reported and absorbed on the next run.
+            TightenBookmark(doc, resolution.CanonicalBookmark, imageRange);
+            foreach (var duplicate in resolution.DuplicateBookmarks)
+                try { doc.Bookmarks[duplicate].Delete(); } catch { }
+        }
+
+        // Re-tightens an expanded bookmark to the image range without ever
+        // losing the only bookmark: the tight range is added under a
+        // temporary name FIRST; the original is deleted only after the tight
+        // bookmark exists. Every step is best-effort -- identity does not
+        // depend on tightening, the next run simply retries.
+        private static void TightenBookmark(Document doc, string name, Range imageRange)
+        {
+            int start, end;
+            try { start = imageRange.Start; end = imageRange.End; }
+            catch { return; }
+            Bookmark canonical;
+            try { canonical = doc.Bookmarks[name]; }
+            catch { return; }
+            int bStart, bEnd;
+            try { bStart = canonical.Range.Start; bEnd = canonical.Range.End; }
+            catch { return; }
+            if (bStart == start && bEnd == end) return;
+            var tmp = name + "_tighten";
+            try { doc.Bookmarks[tmp].Delete(); } catch { }
+            try
+            {
+                object tightRange = imageRange;
+                doc.Bookmarks.Add(tmp, ref tightRange);
+            }
+            catch { return; } // original untouched
+            Range newRange;
+            try { newRange = doc.Bookmarks[tmp].Range; }
+            catch { return; } // original untouched; tmp is absorbed next run
+            try { doc.Bookmarks[name].Delete(); }
+            catch { try { doc.Bookmarks[tmp].Delete(); } catch { } return; }
+            try
+            {
+                object r = newRange;
+                doc.Bookmarks.Add(name, ref r);
+                try { doc.Bookmarks[tmp].Delete(); } catch { }
+            }
+            catch
+            {
+                // Original lost but tmp still proves identity; retry the
+                // restore once, otherwise the next run absorbs tmp.
+                try
+                {
+                    object r2 = newRange;
+                    doc.Bookmarks.Add(name, ref r2);
+                    try { doc.Bookmarks[tmp].Delete(); } catch { }
+                }
+                catch { }
             }
         }
 

@@ -76,13 +76,26 @@ namespace OfficeTranslate.PowerPointAddIn
         private async Task RunAsync(bool whole)
         {
             if (_host == null || _cancellation != null) return; _cancellation = new CancellationTokenSource();
-            try { var settings = LoadForTranslation(); settings.Validate(); _progressForm = new TranslationProgressForm(settings.UiLanguage, () => _cancellation?.Cancel()); _progressForm.ShowFor(GetHostWindow()); var service = new HostService(_host); SetStatus("OfficeTranslate：正在准备翻译…"); var summary = await service.TranslateAsync(whole, settings, _cancellation.Token, SetStatus); var owner = GetHostWindow(); _progressForm.CloseAndShowResult(summary, owner); _progressForm = null; }
+            // M2: capture the Office UI (STA) thread at the ribbon entry
+            // point, before the first await. All COM, clipboard, and
+            // writeback operations are dispatched back to this thread by
+            // the translation service.
+            var ui = OfficeUiDispatcher.Capture(
+#if EXCEL
+                "Excel"
+#else
+                "PowerPoint"
+#endif
+                );
+            // The host window handle is a COM property; read it here on the
+            // UI thread instead of after the network awaits.
+            var hostWindow = GetHostWindow();
+            try { var settings = LoadForTranslation(); settings.Validate(); _progressForm = new TranslationProgressForm(settings.UiLanguage, () => _cancellation?.Cancel()); _progressForm.ShowFor(hostWindow); var service = new HostService(_host); SetStatus("OfficeTranslate：正在准备翻译…"); var summary = await service.TranslateAsync(whole, settings, _cancellation.Token, SetStatus, ui); _progressForm.CloseAndShowResult(summary, hostWindow); _progressForm = null; }
             catch (OperationCanceledException) { SetStatus("OfficeTranslate：已取消"); }
             catch (Exception ex)
             {
                 CloseProgress();
-                var owner = GetHostWindow();
-                if (owner != IntPtr.Zero) MessageBox.Show(new HostWindow(owner), ex.Message, "OfficeTranslate", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                if (hostWindow != IntPtr.Zero) MessageBox.Show(new HostWindow(hostWindow), ex.Message, "OfficeTranslate", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 else MessageBox.Show(ex.Message, "OfficeTranslate", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
             finally { CloseProgress(); _cancellation.Dispose(); _cancellation = null; }

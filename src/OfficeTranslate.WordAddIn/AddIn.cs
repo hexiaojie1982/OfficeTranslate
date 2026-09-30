@@ -106,6 +106,11 @@ namespace OfficeTranslate.WordAddIn
         {
             if (_word == null || _cancellation != null) return;
             _cancellation = new CancellationTokenSource();
+            // M2: capture the Office UI (STA) thread at the ribbon entry
+            // point, before the first await. All COM, clipboard, and
+            // writeback operations are dispatched back to this thread by
+            // the translation service.
+            var ui = OfficeUiDispatcher.Capture("Word");
             try
             {
                 var settings = LoadForTranslation();
@@ -115,7 +120,7 @@ namespace OfficeTranslate.WordAddIn
                 var bilingual = settings.BilingualMode;
                 var service = new WordTranslationService(_word);
                 _progressForm.SetStatus("OfficeTranslate：正在读取文档…");
-                var summary = await service.TranslateAsync(wholeDocument, bilingual, settings, _cancellation.Token, _progressForm.SetStatus);
+                var summary = await service.TranslateAsync(wholeDocument, bilingual, settings, _cancellation.Token, _progressForm.SetStatus, ui);
                 var owner = System.Diagnostics.Process.GetCurrentProcess().MainWindowHandle;
                 _progressForm.CloseAndShowResult(summary, owner);
                 _progressForm = null;

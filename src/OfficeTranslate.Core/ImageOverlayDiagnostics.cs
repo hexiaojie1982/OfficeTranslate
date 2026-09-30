@@ -78,6 +78,35 @@ namespace OfficeTranslate.Core
             }
         }
 
+        // M2: thread/apartment diagnostics. Records which thread served each
+        // stage (menu entry, around awaits, around each capture): managed
+        // thread id, COM apartment state, the ambient sync-context type and
+        // whether it is the captured Office UI thread. No document content.
+        public static void LogThreadProbe(string host, string stage, int threadId, string apartment, string syncContext, bool isUiThread)
+        {
+            if (string.IsNullOrEmpty(host)) return;
+            var line = string.Format(CultureInfo.InvariantCulture,
+                "{0:O} host={1} event=thread_probe stage={2} thread={3} apartment={4} syncctx={5} is_ui={6}",
+                DateTime.UtcNow, host, stage, threadId,
+                string.IsNullOrEmpty(apartment) ? "unknown" : apartment,
+                string.IsNullOrEmpty(syncContext) ? "null" : syncContext,
+                isUiThread);
+            Trace.WriteLine("OfficeTranslate: " + line);
+            try
+            {
+                var directory = Path.Combine(Path.GetTempPath(), "OfficeTranslate");
+                lock (Gate)
+                {
+                    Directory.CreateDirectory(directory);
+                    File.AppendAllText(Path.Combine(directory, LogFileName), line + Environment.NewLine, Encoding.UTF8);
+                }
+            }
+            catch (Exception)
+            {
+                // Diagnostics must never break translation.
+            }
+        }
+
         public static void Log(ImageOverlayDiagnosticEntry entry)
         {
             if (entry == null) return;

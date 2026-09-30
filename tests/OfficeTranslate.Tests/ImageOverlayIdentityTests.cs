@@ -109,4 +109,96 @@ namespace OfficeTranslate.Tests
             Assert.IsFalse(ImageOverlayGeometry.IsUsablePageCoordinate(float.NegativeInfinity));
         }
     }
+
+    // M1: canonical bookmark choice among bookmarks that provably name the
+    // same inline-image instance. Pure logic (no COM): order is by bookmark
+    // start, then end, then name. Bookmark enumeration order is unspecified
+    // and must not decide.
+    [TestClass]
+    public class ChooseCanonicalBookmarkTests
+    {
+        private static System.Tuple<string, int, int> B(string name, int start, int end)
+            => System.Tuple.Create(name, start, end);
+
+        [TestMethod]
+        public void SingleCandidate_IsCanonical_NoDuplicates()
+        {
+            var chosen = ImageOverlayIdentity.ChooseCanonicalBookmark(
+                new System.Collections.Generic.List<System.Tuple<string, int, int>>
+                {
+                    B("OTImg_aaa", 10, 12),
+                });
+            Assert.AreEqual("OTImg_aaa", chosen.Item1);
+            Assert.AreEqual(0, chosen.Item2.Count);
+        }
+
+        [TestMethod]
+        public void EarliestStart_Wins()
+        {
+            var chosen = ImageOverlayIdentity.ChooseCanonicalBookmark(
+                new System.Collections.Generic.List<System.Tuple<string, int, int>>
+                {
+                    B("OTImg_bbb", 12, 14),
+                    B("OTImg_aaa", 9, 12),
+                });
+            Assert.AreEqual("OTImg_aaa", chosen.Item1);
+            CollectionAssert.AreEqual(
+                new System.Collections.Generic.List<string> { "OTImg_bbb" }, chosen.Item2);
+        }
+
+        [TestMethod]
+        public void SameStart_EarliestEnd_Wins()
+        {
+            var chosen = ImageOverlayIdentity.ChooseCanonicalBookmark(
+                new System.Collections.Generic.List<System.Tuple<string, int, int>>
+                {
+                    B("OTImg_bbb", 10, 15),
+                    B("OTImg_aaa", 10, 12),
+                });
+            Assert.AreEqual("OTImg_aaa", chosen.Item1);
+            CollectionAssert.AreEqual(
+                new System.Collections.Generic.List<string> { "OTImg_bbb" }, chosen.Item2);
+        }
+
+        [TestMethod]
+        public void SameRange_NameOrdinal_Wins_RegardlessOfInputOrder()
+        {
+            // The M1 menu repro: an expanded bookmark (9-12) and a fresh one
+            // (10-12) both containing the same inline shape (11-12).
+            var first = new System.Collections.Generic.List<System.Tuple<string, int, int>>
+            {
+                B("OTImg_zzz", 9, 12),
+                B("OTImg_aaa", 10, 12),
+            };
+            var second = new System.Collections.Generic.List<System.Tuple<string, int, int>>
+            {
+                B("OTImg_aaa", 10, 12),
+                B("OTImg_zzz", 9, 12),
+            };
+            var c1 = ImageOverlayIdentity.ChooseCanonicalBookmark(first);
+            var c2 = ImageOverlayIdentity.ChooseCanonicalBookmark(second);
+            // 9 < 10, so the expanded bookmark is canonical in both orders.
+            Assert.AreEqual("OTImg_zzz", c1.Item1);
+            Assert.AreEqual("OTImg_zzz", c2.Item1);
+            CollectionAssert.AreEqual(
+                new System.Collections.Generic.List<string> { "OTImg_aaa" }, c1.Item2);
+            CollectionAssert.AreEqual(
+                new System.Collections.Generic.List<string> { "OTImg_aaa" }, c2.Item2);
+        }
+
+        [TestMethod]
+        public void IdenticalRanges_NameOrdinal_BreaksTie()
+        {
+            var chosen = ImageOverlayIdentity.ChooseCanonicalBookmark(
+                new System.Collections.Generic.List<System.Tuple<string, int, int>>
+                {
+                    B("OTImg_zzz", 10, 12),
+                    B("OTImg_aaa", 10, 12),
+                    B("OTImg_mmm", 10, 12),
+                });
+            Assert.AreEqual("OTImg_aaa", chosen.Item1);
+            CollectionAssert.AreEqual(
+                new System.Collections.Generic.List<string> { "OTImg_mmm", "OTImg_zzz" }, chosen.Item2);
+        }
+    }
 }

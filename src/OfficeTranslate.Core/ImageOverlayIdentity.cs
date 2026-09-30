@@ -43,6 +43,27 @@ namespace OfficeTranslate.Core
                 return builder.ToString();
             }
         }
+
+        // M1: deterministic canonical choice among owner bookmarks that
+        // provably name the same image instance. Pure logic, no COM: each
+        // candidate is (bookmark name, bookmark start, bookmark end). Order
+        // is by start, then end, then name -- bookmark enumeration order is
+        // unspecified and must not decide. Returns the canonical name plus
+        // the duplicate names in the same deterministic order.
+        public static Tuple<string, List<string>> ChooseCanonicalBookmark(List<Tuple<string, int, int>> matches)
+        {
+            var ordered = new List<Tuple<string, int, int>>(matches);
+            ordered.Sort((a, b) =>
+            {
+                var c = a.Item2.CompareTo(b.Item2);
+                if (c != 0) return c;
+                c = a.Item3.CompareTo(b.Item3);
+                return c != 0 ? c : string.CompareOrdinal(a.Item1, b.Item1);
+            });
+            var duplicates = new List<string>();
+            for (var i = 1; i < ordered.Count; i++) duplicates.Add(ordered[i].Item1);
+            return Tuple.Create(ordered[0].Item1, duplicates);
+        }
     }
 
     // Marker scheme for the shapes this add-in creates. Word/Excel store the

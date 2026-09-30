@@ -16,7 +16,7 @@ namespace OfficeTranslate.PowerPointAddIn
         private readonly PowerPoint.Application _powerPoint;
         public PowerPointTranslationService(PowerPoint.Application powerPoint) => _powerPoint = powerPoint;
 
-        public async Task<TranslationTaskSummary> TranslateAsync(bool wholePresentation, TranslationSettings settings, CancellationToken token, Action<string> progress)
+        public async Task<TranslationTaskSummary> TranslateAsync(bool wholePresentation, TranslationSettings settings, CancellationToken token, Action<string> progress, OfficeUiDispatcher ui)
         {
             // Menu acceptance must prove which DLL served the request: record
             // this add-in's assembly version so the reviewer can verify it in
@@ -26,6 +26,9 @@ namespace OfficeTranslate.PowerPointAddIn
             ImageOverlayDiagnostics.LogVersion("PowerPoint",
                 typeof(PowerPointTranslationService).Assembly.GetName().Version?.ToString() ?? "unknown",
                 typeof(PowerPointTranslationService).Module.ModuleVersionId.ToString());
+            // M2: prove which thread the synchronous prefix runs on; every
+            // COM/clipboard section below is dispatched explicitly.
+            ui.LogProbe("translate_start");
             if (_powerPoint.Presentations.Count == 0) throw new InvalidOperationException("请先打开演示文稿。");
             var targets = wholePresentation ? ReadPresentation() : ReadSelection();
             var images = settings.ImageOcrEnabled ? (wholePresentation ? ReadPresentationImages() : ReadSelectionImages()) : new List<PowerPoint.Shape>();
@@ -34,6 +37,7 @@ namespace OfficeTranslate.PowerPointAddIn
             {
                 var total = targets.Count + images.Count;
                 var summary = new TranslationTaskSummary(total);
+                ui.LogProbe("text_loop_before");
                 for (var i = 0; i < targets.Count; i++)
                 {
                     token.ThrowIfCancellationRequested();
@@ -44,51 +48,83 @@ namespace OfficeTranslate.PowerPointAddIn
                     if (result.Changed)
                     {
                         var translated = result.Text.TrimEnd('\r', '\n');
-                        targets[i].Write(settings.BilingualMode ? targets[i].Text + "\r" + translated : translated);
+                        // M2: the writeback touches the PowerPoint object
+                        // model, so it runs on the Office UI (STA) thread
+                        // explicitly instead of on whatever thread the network
+                        // await resumed on.
+                        var target = targets[i];
+                        await ui.InvokeAsync(() => target.Write(settings.BilingualMode ? target.Text + "\r" + translated : translated));
                     }
                     progress($"OfficeTranslate：已完成 {i + 1}/{total}");
                 }
+                ui.LogProbe("text_loop_after");
+                ui.LogProbe("image_loop_before");
                 for (var i = 0; i < images.Count; i++)
                 {
                     token.ThrowIfCancellationRequested();
                     var current = targets.Count + i + 1;
                     progress($"OfficeTranslate：正在识别图片 {current}/{total}");
-                    await TranslateImageAsync(images[i], client, settings, summary, token);
+                    await TranslateImageAsync(images[i], client, settings, summary, token, ui);
                     progress($"OfficeTranslate：已完成 {current}/{total}");
                 }
+                ui.LogProbe("image_loop_after");
                 return summary;
             }
         }
 
-        private async Task TranslateImageAsync(PowerPoint.Shape image, TranslationClient client, TranslationSettings settings, TranslationTaskSummary summary, CancellationToken token)
+        private async Task TranslateImageAsync(PowerPoint.Shape image, TranslationClient client, TranslationSettings settings, TranslationTaskSummary summary, CancellationToken token, OfficeUiDispatcher ui)
         {
             var path = Path.Combine(Path.GetTempPath(), "OfficeTranslate-" + Guid.NewGuid().ToString("N") + ".png");
             try
             {
-                image.Export(path, PowerPoint.PpShapeFormat.ppShapeFormatPNG);
-                var imageBytes = File.ReadAllBytes(path);
+                // M2: the export and every shape read below run on the Office
+                // UI (STA) thread explicitly.
+                var preNetwork = await ui.InvokeAsync(() =>
+                {
+                    ui.LogProbe("capture_before");
+                    image.Export(path, PowerPoint.PpShapeFormat.ppShapeFormatPNG);
+                    ui.LogProbe("capture_after");
+                    var bytes = File.ReadAllBytes(path);
+                    // R5: owner identity is the slide-unique shape Name (persisted,
+                    // stable across move/resize/reopen), falling back to a content
+                    // hash when the name is unavailable.
+                    var owner = ImageOverlayIdentity.ForNamedShape(
+                        "pp", SafeString(() => image.Name), bytes);
+                    var slide = image.Parent as PowerPoint.Slide
+                        ?? throw new InvalidOperationException("无法确定图片所在的幻灯片。");
+                    // Slide shapes live in a single slide-points frame.
+                    // R3: flip state is recorded for diagnostics only. The exported
+                    // PNG already shows the flipped rendering, so the model's bbox
+                    // is in final display coordinates and must NOT be mirrored
+                    // again by the planner.
+                    return new
+                    {
+                        Bytes = bytes,
+                        Owner = owner,
+                        Slide = slide,
+                        Left = image.Left,
+                        Top = image.Top,
+                        Width = image.Width,
+                        Height = image.Height,
+                        Rotation = SafeFloat(() => image.Rotation),
+                        FlipH = SafeTriState(() => image.HorizontalFlip),
+                        FlipV = SafeTriState(() => image.VerticalFlip),
+                    };
+                });
+                var imageBytes = preNetwork.Bytes;
+                var ownerId = preNetwork.Owner;
                 var hasPixels = PngDimensions.TryRead(imageBytes, out var pixelWidth, out var pixelHeight);
-                // R5: owner identity is the slide-unique shape Name (persisted,
-                // stable across move/resize/reopen), falling back to a content
-                // hash when the name is unavailable.
-                var ownerId = ImageOverlayIdentity.ForNamedShape(
-                    "pp", SafeString(() => image.Name), imageBytes);
                 var regions = await client.TranslateImageAsync(imageBytes, settings, token);
                 // R8: an empty OCR result is still an image outcome and must be
                 // counted, exactly like the Word/Excel paths do.
                 if (regions.Count == 0) { summary.RecordImage(false); return; }
                 summary.RecordImage(true);
-                var slide = image.Parent as PowerPoint.Slide ?? throw new InvalidOperationException("无法确定图片所在的幻灯片。");
-                // Slide shapes live in a single slide-points frame.
-                var imageLeft = image.Left; var imageTop = image.Top;
-                var imageWidth = image.Width; var imageHeight = image.Height;
-                var rotation = SafeFloat(() => image.Rotation);
-                // R3: flip state is recorded for diagnostics only. The exported
-                // PNG already shows the flipped rendering, so the model's bbox
-                // is in final display coordinates and must NOT be mirrored
-                // again by the planner.
-                var flipH = SafeTriState(() => image.HorizontalFlip);
-                var flipV = SafeTriState(() => image.VerticalFlip);
+                var slide = preNetwork.Slide;
+                var imageLeft = preNetwork.Left; var imageTop = preNetwork.Top;
+                var imageWidth = preNetwork.Width; var imageHeight = preNetwork.Height;
+                var rotation = preNetwork.Rotation;
+                var flipH = preNetwork.FlipH;
+                var flipV = preNetwork.FlipV;
 
                 // Plan every region first; old results are replaced only after
                 // planning succeeds, so a failure/cancel keeps the previous content.
@@ -113,65 +149,69 @@ namespace OfficeTranslate.PowerPointAddIn
                 // R5: replace this image's previous results (overlays and notes).
                 // Matching is by owner id only, never by region center, so an
                 // overlapping image's cleanup cannot delete this image's boxes.
-                RemovePreviousResults(slide, ownerId);
+                // M2: all shape surgery below runs on the Office UI (STA) thread.
+                await ui.InvokeAsync(() =>
+                {
+                    RemovePreviousResults(slide, ownerId);
 
-                var noteEntries = new List<string>();
-                foreach (var item in plans)
-                {
-                    var plan = item.Item2;
-                    var overlayText = item.Item3;
-                    if (plan.Verdict == ImageOverlayVerdict.SideNote)
+                    var noteEntries = new List<string>();
+                    foreach (var item in plans)
                     {
-                        noteEntries.Add(plan.Reason + "\r" + overlayText);
-                        continue;
+                        var plan = item.Item2;
+                        var overlayText = item.Item3;
+                        if (plan.Verdict == ImageOverlayVerdict.SideNote)
+                        {
+                            noteEntries.Add(plan.Reason + "\r" + overlayText);
+                            continue;
+                        }
+                        // Exact region rect with an opaque cover: in non-bilingual
+                        // mode the source text must not show through (the old 8%
+                        // transparency did), and the box no longer grows downward.
+                        var overlay = slide.Shapes.AddTextbox(Office.MsoTextOrientation.msoTextOrientationHorizontal,
+                            imageLeft + plan.Left, imageTop + plan.Top, plan.Width, plan.Height);
+                        overlay.Tags.Add("OfficeTranslateOCR", ownerId);
+                        // D2: the host must never resize the cover by itself. New
+                        // textboxes default to auto-size-to-fit-text on some
+                        // builds, which would let the box grow beyond the validated
+                        // region and make the fit check measure the grown box. The
+                        // box keeps the planner's fixed geometry; only the font
+                        // size adapts.
+                        overlay.TextFrame2.AutoSize = Office.MsoAutoSize.msoAutoSizeNone;
+                        overlay.Fill.Visible = Office.MsoTriState.msoTrue; overlay.Fill.ForeColor.RGB = 0xFFFFFF; overlay.Fill.Transparency = 0F;
+                        overlay.Line.Visible = Office.MsoTriState.msoFalse;
+                        overlay.TextFrame2.MarginLeft = 2; overlay.TextFrame2.MarginRight = 2; overlay.TextFrame2.MarginTop = 1; overlay.TextFrame2.MarginBottom = 1;
+                        overlay.TextFrame2.WordWrap = Office.MsoTriState.msoTrue;
+                        overlay.TextFrame2.TextRange.Text = overlayText;
+                        overlay.TextFrame2.TextRange.Font.Size = plan.FontSize;
+                        // W1: shrink the font (never the box) until the real
+                        // laid-out text height fits the fixed box; a box that still
+                        // overflows at the floor is deleted and the region degrades
+                        // to a side-note instead of showing clipped text.
+                        if (!TextFitsBox(overlay, plan.FontSize))
+                        {
+                            try { overlay.Delete(); } catch { }
+                            noteEntries.Add("覆盖框内译文按真实排版在最小字号下仍溢出，已降级为旁注。\r" + overlayText);
+                            continue;
+                        }
+                        // D2: re-read the geometry and confirm the host did not
+                        // move or resize the cover behind our back; it must still
+                        // match the planner's fixed rect.
+                        if (!MatchesPlan(overlay, imageLeft + plan.Left, imageTop + plan.Top, plan.Width, plan.Height))
+                        {
+                            try { overlay.Delete(); } catch { }
+                            noteEntries.Add("覆盖框几何被宿主改动，已删除并降级为旁注。\r" + overlayText);
+                            continue;
+                        }
                     }
-                    // Exact region rect with an opaque cover: in non-bilingual
-                    // mode the source text must not show through (the old 8%
-                    // transparency did), and the box no longer grows downward.
-                    var overlay = slide.Shapes.AddTextbox(Office.MsoTextOrientation.msoTextOrientationHorizontal,
-                        imageLeft + plan.Left, imageTop + plan.Top, plan.Width, plan.Height);
-                    overlay.Tags.Add("OfficeTranslateOCR", ownerId);
-                    // D2: the host must never resize the cover by itself. New
-                    // textboxes default to auto-size-to-fit-text on some
-                    // builds, which would let the box grow beyond the validated
-                    // region and make the fit check measure the grown box. The
-                    // box keeps the planner's fixed geometry; only the font
-                    // size adapts.
-                    overlay.TextFrame2.AutoSize = Office.MsoAutoSize.msoAutoSizeNone;
-                    overlay.Fill.Visible = Office.MsoTriState.msoTrue; overlay.Fill.ForeColor.RGB = 0xFFFFFF; overlay.Fill.Transparency = 0F;
-                    overlay.Line.Visible = Office.MsoTriState.msoFalse;
-                    overlay.TextFrame2.MarginLeft = 2; overlay.TextFrame2.MarginRight = 2; overlay.TextFrame2.MarginTop = 1; overlay.TextFrame2.MarginBottom = 1;
-                    overlay.TextFrame2.WordWrap = Office.MsoTriState.msoTrue;
-                    overlay.TextFrame2.TextRange.Text = overlayText;
-                    overlay.TextFrame2.TextRange.Font.Size = plan.FontSize;
-                    // W1: shrink the font (never the box) until the real
-                    // laid-out text height fits the fixed box; a box that still
-                    // overflows at the floor is deleted and the region degrades
-                    // to a side-note instead of showing clipped text.
-                    if (!TextFitsBox(overlay, plan.FontSize))
+                    // R2: one image gets ONE combined side-note, so no region's
+                    // translation is lost when several regions degrade.
+                    if (noteEntries.Count > 0)
                     {
-                        try { overlay.Delete(); } catch { }
-                        noteEntries.Add("覆盖框内译文按真实排版在最小字号下仍溢出，已降级为旁注。\r" + overlayText);
-                        continue;
+                        PlaceCombinedNote(slide, ownerId, ImageOverlayNotes.Combine(noteEntries),
+                            imageLeft, imageTop + imageHeight + 6F, imageWidth);
+                        summary.RecordImageNeedsReview();
                     }
-                    // D2: re-read the geometry and confirm the host did not
-                    // move or resize the cover behind our back; it must still
-                    // match the planner's fixed rect.
-                    if (!MatchesPlan(overlay, imageLeft + plan.Left, imageTop + plan.Top, plan.Width, plan.Height))
-                    {
-                        try { overlay.Delete(); } catch { }
-                        noteEntries.Add("覆盖框几何被宿主改动，已删除并降级为旁注。\r" + overlayText);
-                        continue;
-                    }
-                }
-                // R2: one image gets ONE combined side-note, so no region's
-                // translation is lost when several regions degrade.
-                if (noteEntries.Count > 0)
-                {
-                    PlaceCombinedNote(slide, ownerId, ImageOverlayNotes.Combine(noteEntries),
-                        imageLeft, imageTop + imageHeight + 6F, imageWidth);
-                    summary.RecordImageNeedsReview();
-                }
+                });
             }
             finally { try { if (File.Exists(path)) File.Delete(path); } catch { } }
         }
