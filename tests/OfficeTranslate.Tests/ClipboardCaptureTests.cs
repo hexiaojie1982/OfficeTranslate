@@ -65,4 +65,34 @@ namespace OfficeTranslate.Tests
             Assert.IsFalse(ClipboardImageCapture.IsTransientClipboardFailure(null));
         }
     }
+
+    // S2: the no-image failure is its own category. It must never be
+    // classified as transient-busy (it has no HResult and no underlying
+    // exception to report), and it must stay an InvalidOperationException
+    // so existing catch blocks keep catching it.
+    [TestClass]
+    public class ClipboardNoImageFailureTests
+    {
+        [TestMethod]
+        public void NoImage_IsNotTransientBusy()
+        {
+            var ex = new ClipboardImageCapture.NoImageCaptureException("no image");
+            Assert.IsFalse(ClipboardImageCapture.IsTransientClipboardFailure(ex));
+        }
+
+        [TestMethod]
+        public void NoImage_WrappedAsInner_IsNotTransientBusy()
+        {
+            var inner = new ClipboardImageCapture.NoImageCaptureException("no image");
+            var outer = new InvalidOperationException("phase wrapper", inner);
+            Assert.IsFalse(ClipboardImageCapture.IsTransientClipboardFailure(outer));
+        }
+
+        [TestMethod]
+        public void NoImage_IsInvalidOperationException()
+        {
+            var ex = new ClipboardImageCapture.NoImageCaptureException("no image");
+            Assert.IsInstanceOfType(ex, typeof(InvalidOperationException));
+        }
+    }
 }

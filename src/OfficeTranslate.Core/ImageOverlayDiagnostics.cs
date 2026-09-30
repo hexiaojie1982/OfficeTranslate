@@ -111,6 +111,27 @@ namespace OfficeTranslate.Core
         {
             if (entry == null) return;
             var line = Format(entry);
+            AppendLine(line);
+        }
+
+        // S2/D1: capture failures must reach the diagnostics log file, not
+        // just the popup. detail carries the phase/NoImage result, attempt,
+        // thread, HResult (when there is one), clipboard sequence numbers,
+        // poll observations and format names -- never image bytes, clipboard
+        // text, prompts, or keys. Newlines are flattened so the log stays
+        // one line per event.
+        public static void LogCaptureFailure(string host, string detail)
+        {
+            if (string.IsNullOrEmpty(host)) return;
+            var safe = (detail ?? "unknown").Replace("\r", " ").Replace("\n", " ");
+            var line = string.Format(CultureInfo.InvariantCulture,
+                "{0:O} host={1} event=capture_failed detail={2}",
+                DateTime.UtcNow, host, safe);
+            AppendLine(line);
+        }
+
+        private static void AppendLine(string line)
+        {
             Trace.WriteLine("OfficeTranslate: " + line);
             try
             {

@@ -134,6 +134,22 @@ namespace OfficeTranslate.WordAddIn
                 }
                 catch (Exception ex) when (!(ex is OperationCanceledException))
                 {
+                    // S2/D1: capture failures must reach the diagnostics log
+                    // file, not just the popup. Metadata only: image index,
+                    // kind, range start/end, story type, live inline-shape
+                    // count. No document content, clipboard text, or keys.
+                    try
+                    {
+                        var detail = "image=" + imageNumber
+                            + " kind=" + image.Kind
+                            + " range=" + SafeGet(() => image.Anchor.Start, -1)
+                            + "-" + SafeGet(() => image.Anchor.End, -1)
+                            + " story=" + SafeGet(() => (int)image.Anchor.StoryType, -1)
+                            + " inlineShapes=" + SafeGet(() => _word.ActiveDocument.InlineShapes.Count, -1)
+                            + " error=" + ex.Message;
+                        ImageOverlayDiagnostics.LogCaptureFailure("Word", detail);
+                    }
+                    catch { }
                     throw new InvalidOperationException(
                         "第 " + imageNumber + " 张图片捕获失败：" + ex.Message, ex);
                 }
@@ -1054,11 +1070,19 @@ namespace OfficeTranslate.WordAddIn
             return result;
         }
 
-        private static void AddInlineImage(InlineShape shape, List<ImageTarget> result)
+        private void AddInlineImage(InlineShape shape, List<ImageTarget> result)
         {
             if (shape.Type != WdInlineShapeType.wdInlineShapePicture && shape.Type != WdInlineShapeType.wdInlineShapeLinkedPicture) return;
             var range = shape.Range.Duplicate; var left = Convert.ToSingle(range.Information[WdInformation.wdHorizontalPositionRelativeToPage]); var top = Convert.ToSingle(range.Information[WdInformation.wdVerticalPositionRelativeToPage]);
-            var target = new ImageTarget(range, left, top, shape.Width, shape.Height, () => range.CopyAsPicture());
+            // S2: select the image explicitly, then copy via the Selection
+            // (the same select-then-copy the floating path already uses). A
+            // menu run showed the second inline picture capturing fine only
+            // when it was the current selection, while Range.CopyAsPicture()
+            // on the cached range silently left no image on the clipboard in
+            // the multi-image flow. The user's selection is saved and
+            // restored best-effort; a stale range now fails visibly at
+            // Select() instead of silently copying nothing.
+            var target = new ImageTarget(range, left, top, shape.Width, shape.Height, () => SelectAndCopyAsPicture(range));
             target.Kind = "Inline";
             // Inline pictures cannot be rotated in Word, and InlineShape does
             // not expose crop; the planner's aspect-ratio check remains the guard.
@@ -1091,6 +1115,43 @@ namespace OfficeTranslate.WordAddIn
             target.RelativeVerticalPosition = SafeGet(() => shape.RelativeVerticalPosition, WdRelativeVerticalPosition.wdRelativeVerticalPositionPage);
             target.ShapeName = SafeGet(() => shape.Name, string.Empty);
             result.Add(target);
+        }
+
+        // S2: select-then-copy for inline pictures. Saves the user's current
+        // selection, selects the image range, copies via Selection, then
+        // restores the selection best-effort. Runs synchronously on the UI
+        // thread inside the capture's copy phase (before the read poll), so
+        // message-pump reentrancy during the later poll cannot disturb the
+        // copy that already happened. Cancellation is honored by the
+        // capture loop around this call; the select/copy itself is fast.
+        private void SelectAndCopyAsPicture(Range range)
+        {
+            int selStart = 0, selEnd = 0;
+            bool haveSelection = false;
+            try
+            {
+                var selection = _word.Selection;
+                if (selection != null)
+                {
+                    selStart = selection.Start;
+                    selEnd = selection.End;
+                    haveSelection = true;
+                }
+            }
+            catch { }
+            try
+            {
+                range.Select();
+                _word.Selection.CopyAsPicture();
+            }
+            finally
+            {
+                if (haveSelection)
+                {
+                    try { _word.ActiveDocument.Range(selStart, selEnd).Select(); }
+                    catch { }
+                }
+            }
         }
 
         private static float SafeFloat(Func<float> read)
