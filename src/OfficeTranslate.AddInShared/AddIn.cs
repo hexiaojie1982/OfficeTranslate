@@ -95,8 +95,14 @@ namespace OfficeTranslate.PowerPointAddIn
             catch (Exception ex)
             {
                 CloseProgress();
-                if (hostWindow != IntPtr.Zero) MessageBox.Show(new HostWindow(hostWindow), ex.Message, "OfficeTranslate", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                else MessageBox.Show(ex.Message, "OfficeTranslate", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                var window = hostWindow;
+                // N1: error presentation must run inside the UI dispatch
+                // boundary, not on whatever thread the await resumed on.
+                ui.Invoke(() =>
+                {
+                    if (window != IntPtr.Zero) MessageBox.Show(new HostWindow(window), ex.Message, "OfficeTranslate", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    else MessageBox.Show(ex.Message, "OfficeTranslate", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                });
             }
             finally { CloseProgress(); _cancellation.Dispose(); _cancellation = null; }
         }

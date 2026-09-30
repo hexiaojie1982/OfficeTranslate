@@ -79,6 +79,13 @@ namespace OfficeTranslate.WordAddIn
                     // on whatever thread the network await resumed on.
                     await ui.InvokeAsync(() =>
                     {
+                        // N3: re-check inside the queued UI callback. The
+                        // token may have been cancelled after the pre-queue
+                        // check above but before this callback ran; a
+                        // cancelled run must not write back. The cancel
+                        // boundary is "the item whose commit has started":
+                        // once mutations begin they run to completion.
+                        token.ThrowIfCancellationRequested();
                         var undo = _word.UndoRecord;
                         undo.StartCustomRecord(bilingual ? $"OfficeTranslate 双语排版 {i + 1}/{targets.Count}" : $"OfficeTranslate 翻译 {i + 1}/{targets.Count}");
                         try
@@ -189,6 +196,10 @@ namespace OfficeTranslate.WordAddIn
             token.ThrowIfCancellationRequested();
             await ui.InvokeAsync(() =>
             {
+                // N3: re-check inside the queued UI callback -- see the text
+                // writeback above. Once this callback starts, its bookmark
+                // and shape mutations run to completion for this image.
+                token.ThrowIfCancellationRequested();
                 if (inlineResolution != null)
                     CommitInlineOwnerResolution(image.Anchor, inlineResolution);
                 RemovePreviousResults(image, ownerId);
@@ -393,13 +404,29 @@ namespace OfficeTranslate.WordAddIn
 
         private void CommitInlineOwnerResolution(Range imageRange, InlineOwnerResolution resolution)
         {
-            if (string.IsNullOrEmpty(resolution.CanonicalBookmark)) return;
             Document doc;
             try { doc = _word.ActiveDocument; }
             catch { return; }
-            // F4: a first sighting creates its owner bookmark only here,
+            // N2: recover interrupted tightens FIRST. A staging bookmark
+            // "OTTmp_" + 32 hex maps deterministically to its canonical
+            // "OTImg_" + 32 hex. If the canonical is missing, the previous
+            // run died between deleting the canonical and re-adding it:
+            // restore the canonical at the staged (tight) range, then drop
+            // the staging. If the canonical exists, the staging is a
+            // post-success leftover: drop it. A staging whose restore fails
+            // is kept for the next run; only bookmarks with a verifiable
+            // 38-char hex shape are touched, never a blind prefix sweep.
+            // This is independent of this image's resolution, so it runs
+            // before the empty-canonical early return.
+            RecoverInterruptedTightens(doc);
+            if (string.IsNullOrEmpty(resolution.CanonicalBookmark)) return;
+            // N2: a first sighting creates its owner bookmark only here,
             // after the plan succeeded. Cancelled/empty/failed runs return
-            // before this point and never touch the document.
+            // before this point and never touch the document. Creation
+            // failure is NOT swallowed: without a persisted bookmark this
+            // run would report success while the next run mints a new owner
+            // and orphans these shapes, so the image aborts with an
+            // explicit error before any shape is created or removed.
             if (!string.IsNullOrEmpty(resolution.PendingBookmark))
             {
                 try
@@ -407,30 +434,13 @@ namespace OfficeTranslate.WordAddIn
                     object rangeObject = imageRange;
                     doc.Bookmarks.Add(resolution.PendingBookmark, ref rangeObject);
                 }
-                catch
-                {
-                    // Best effort: the shapes still carry the owner id, so
-                    // this run's cleanup works; the next run re-resolves.
-                }
+                catch { /* verified below */ }
+                bool exists = false;
+                try { exists = doc.Bookmarks[resolution.PendingBookmark] != null; }
+                catch { exists = false; }
+                if (!exists)
+                    throw new InvalidOperationException("图片身份书签创建失败：无法持久保存图片身份，本图片的译文未写入，文档未被修改。");
             }
-            // Remove staging bookmarks left behind by a crashed tighten.
-            // "OTTmp_" never parses as an OTImg_ owner, but do not litter
-            // the document.
-            try
-            {
-                var stale = new List<string>();
-                foreach (Bookmark bookmark in doc.Bookmarks)
-                {
-                    string name;
-                    try { name = bookmark.Name; }
-                    catch { continue; }
-                    if (!string.IsNullOrEmpty(name) && name.StartsWith("OTTmp_", StringComparison.Ordinal))
-                        stale.Add(name);
-                }
-                foreach (var temp in stale)
-                    try { doc.Bookmarks[temp].Delete(); } catch { }
-            }
-            catch { }
             // Re-tighten first: if this throws, the failure is visible to
             // the caller instead of being swallowed as a success, and the
             // canonical bookmark is never lost (see TightenBookmark).
@@ -439,16 +449,103 @@ namespace OfficeTranslate.WordAddIn
                 try { doc.Bookmarks[duplicate].Delete(); } catch { }
         }
 
-        // F3: re-tightens an expanded bookmark to the image range without
+        // N2: repairs tightens interrupted by a crash between staging and
+        // canonical restore. The staging name carries the full identity
+        // ("OTTmp_" + 32 hex -> "OTImg_" + 32 hex), so the mapping is
+        // verifiable from the name alone. Bookmarks that do not have the
+        // exact 38-char hex shape are left alone, including user bookmarks
+        // that merely share the prefix.
+        private static void RecoverInterruptedTightens(Document doc)
+        {
+            List<Tuple<string, string>> stagings = null;
+            try
+            {
+                foreach (Bookmark bookmark in doc.Bookmarks)
+                {
+                    string name;
+                    try { name = bookmark.Name; }
+                    catch { continue; }
+                    if (string.IsNullOrEmpty(name)) continue;
+                    if (!name.StartsWith("OTTmp_", StringComparison.Ordinal)) continue;
+                    if (name.Length != 38) continue;
+                    var hex = name.Substring("OTTmp_".Length);
+                    if (!IsHex(hex)) continue;
+                    if (stagings == null) stagings = new List<Tuple<string, string>>();
+                    stagings.Add(Tuple.Create(name, "OTImg_" + hex));
+                }
+            }
+            catch { return; }
+            if (stagings == null) return;
+            foreach (var pair in stagings)
+            {
+                bool canonicalExists = false;
+                try { canonicalExists = doc.Bookmarks[pair.Item2] != null; }
+                catch { canonicalExists = false; }
+                if (!canonicalExists)
+                {
+                    // The previous run died mid-migration: restore the
+                    // canonical name at the staged (tight) range. If this
+                    // fails too, the staging bookmark is the ONLY identity
+                    // record left -- keep it; the next run retries.
+                    bool restored = false;
+                    try
+                    {
+                        Range stagedRange = doc.Bookmarks[pair.Item1].Range;
+                        object r = stagedRange;
+                        doc.Bookmarks.Add(pair.Item2, ref r);
+                        restored = true;
+                    }
+                    catch { /* staging kept; retry next run */ }
+                    if (!restored) continue;
+                }
+                try { doc.Bookmarks[pair.Item1].Delete(); } catch { }
+            }
+        }
+
+        private static bool IsHex(string value)
+        {
+            foreach (var c in value)
+            {
+                bool digit = c >= '0' && c <= '9';
+                bool lower = c >= 'a' && c <= 'f';
+                bool upper = c >= 'A' && c <= 'F';
+                if (!digit && !lower && !upper) return false;
+            }
+            return true;
+        }
+
+        // N2: derives the staging name for a canonical bookmark. For names
+        // we minted ("OTImg_" + 32 hex) the staging is "OTTmp_" + the same
+        // 32 hex = 38 chars: deterministic and self-describing, so an
+        // interrupted tighten can be recovered without any side channel
+        // (see RecoverInterruptedTightens), and it can never parse as an
+        // OTImg_ owner. For foreign bookmark shapes inside our prefix no
+        // verifiable mapping is possible; keep the old short random
+        // staging (14 chars, never an OTImg_ owner).
+        private static string StagingNameFor(string canonicalName)
+        {
+            const string prefix = "OTImg_";
+            if (!string.IsNullOrEmpty(canonicalName) &&
+                canonicalName.StartsWith(prefix, StringComparison.Ordinal))
+            {
+                var hex = canonicalName.Substring(prefix.Length);
+                if (hex.Length == 32 && IsHex(hex))
+                    return "OTTmp_" + hex;
+            }
+            return "OTTmp_" + Guid.NewGuid().ToString("N").Substring(0, 8);
+        }
+
+        // F3/N2: re-tightens an expanded bookmark to the image range without
         // ever losing the only bookmark. Word limits bookmark names to 40
         // characters
-        // (https://learn.microsoft.com/en-us/office/vba/api/word.bookmarks.add),
-        // and "OTImg_" + 32 hex is already 38, so the staging bookmark uses
-        // an independent short name ("OTTmp_" + 8 hex = 14 chars) that can
-        // never parse as an OTImg_ owner. The tight range is staged FIRST;
-        // the canonical bookmark is deleted only after staging succeeded.
-        // A tightening failure is never swallowed: it throws a descriptive
-        // error so the caller cannot mistake it for success.
+        // (https://learn.microsoft.com/en-us/office/vba/api/word.bookmarks.add).
+        // The tight range is staged FIRST; the canonical bookmark is deleted
+        // only after staging succeeded. A tightening failure is never
+        // swallowed: it throws a descriptive error so the caller cannot
+        // mistake it for success. If the canonical re-add AND its restore
+        // both fail, the staging bookmark is KEPT as the only remaining
+        // identity record (the next run recovers it); it is never deleted
+        // on that path.
         private static void TightenBookmark(Document doc, string name, Range imageRange)
         {
             int start, end;
@@ -461,8 +558,7 @@ namespace OfficeTranslate.WordAddIn
             try { bStart = canonical.Range.Start; bEnd = canonical.Range.End; }
             catch { return; }
             if (bStart == start && bEnd == end) return; // already tight
-            // 14 chars, well under the 40-char limit; never an OTImg_ owner.
-            var tmp = "OTTmp_" + Guid.NewGuid().ToString("N").Substring(0, 8);
+            var tmp = StagingNameFor(name);
             try
             {
                 object tightRange = imageRange;
@@ -493,17 +589,25 @@ namespace OfficeTranslate.WordAddIn
             }
             catch
             {
-                // The old canonical is gone but the staged tight range still
-                // exists: restore the canonical name there before reporting,
-                // so the owner identity is never lost.
+                // The old canonical is gone and the re-add failed: attempt
+                // to restore the canonical name at the staged tight range.
+                // If the restore ALSO fails, the staging bookmark is the
+                // only identity record left and MUST be kept so the next
+                // run can recover it (RecoverInterruptedTightens).
+                // Deleting it here would lose the owner permanently.
+                bool restored = false;
                 try
                 {
                     object r2 = newRange;
                     doc.Bookmarks.Add(name, ref r2);
+                    restored = true;
                 }
-                catch { /* tmp still proves identity; the next run retries */ }
-                try { doc.Bookmarks[tmp].Delete(); } catch { }
-                throw new InvalidOperationException("图片书签收紧失败：已尝试恢复原书签名称，请重试翻译。");
+                catch { /* staging kept; the next run retries the recovery */ }
+                if (restored)
+                {
+                    try { doc.Bookmarks[tmp].Delete(); } catch { }
+                }
+                throw new InvalidOperationException("图片书签收紧失败：原书签未能恢复，请重试翻译。");
             }
             try { doc.Bookmarks[tmp].Delete(); } catch { }
         }

@@ -126,7 +126,10 @@ namespace OfficeTranslate.WordAddIn
                 _progressForm = null;
             }
             catch (OperationCanceledException) { }
-            catch (Exception ex) { MessageBox.Show(ex.Message, "OfficeTranslate", MessageBoxButtons.OK, MessageBoxIcon.Error); }
+            // N1: error presentation is UI work and must enter the same UI
+            // dispatch boundary; the ambient SynchronizationContext cannot
+            // be trusted to bring the post-await continuation back to STA.
+            catch (Exception ex) { ui.Invoke(() => MessageBox.Show(ex.Message, "OfficeTranslate", MessageBoxButtons.OK, MessageBoxIcon.Error)); }
             finally { _progressForm?.CloseSafely(); _progressForm = null; _cancellation.Dispose(); _cancellation = null; }
         }
 

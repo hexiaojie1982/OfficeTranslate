@@ -55,7 +55,14 @@ namespace OfficeTranslate.ExcelAddIn
                         // it runs on the Office UI (STA) thread explicitly
                         // instead of on whatever thread the network await
                         // resumed on.
-                        await ui.InvokeAsync(() => targets[i].Write(settings.BilingualMode ? targets[i].Text + Environment.NewLine + translated : translated, settings.BilingualMode));
+                        await ui.InvokeAsync(() =>
+                        {
+                            // N3: re-check inside the queued UI callback. The
+                            // token may have been cancelled after the
+                            // pre-queue check but before this callback ran.
+                            token.ThrowIfCancellationRequested();
+                            targets[i].Write(settings.BilingualMode ? targets[i].Text + Environment.NewLine + translated : translated, settings.BilingualMode);
+                        });
                     }
                     progress($"OfficeTranslate：已完成 {i + 1}/{total}");
                 }
@@ -122,6 +129,10 @@ namespace OfficeTranslate.ExcelAddIn
             token.ThrowIfCancellationRequested();
             await ui.InvokeAsync(() =>
             {
+                // N3: re-check inside the queued UI callback -- see above.
+                // Once this callback starts, its shape mutations run to
+                // completion for this image.
+                token.ThrowIfCancellationRequested();
                 var sheet = _excel.ActiveSheet as Excel.Worksheet
                     ?? throw new InvalidOperationException("无法确定图片所在的工作表。");
                 // Excel shapes live in a single sheet-points frame, so the overlay

@@ -53,7 +53,14 @@ namespace OfficeTranslate.PowerPointAddIn
                         // explicitly instead of on whatever thread the network
                         // await resumed on.
                         var target = targets[i];
-                        await ui.InvokeAsync(() => target.Write(settings.BilingualMode ? target.Text + "\r" + translated : translated));
+                        await ui.InvokeAsync(() =>
+                        {
+                            // N3: re-check inside the queued UI callback. The
+                            // token may have been cancelled after the
+                            // pre-queue check but before this callback ran.
+                            token.ThrowIfCancellationRequested();
+                            target.Write(settings.BilingualMode ? target.Text + "\r" + translated : translated);
+                        });
                     }
                     progress($"OfficeTranslate：已完成 {i + 1}/{total}");
                 }
@@ -155,6 +162,10 @@ namespace OfficeTranslate.PowerPointAddIn
                 token.ThrowIfCancellationRequested();
                 await ui.InvokeAsync(() =>
                 {
+                    // N3: re-check inside the queued UI callback -- see
+                    // above. Once this callback starts, its shape mutations
+                    // run to completion for this image.
+                    token.ThrowIfCancellationRequested();
                     RemovePreviousResults(slide, ownerId);
 
                     var noteEntries = new List<string>();

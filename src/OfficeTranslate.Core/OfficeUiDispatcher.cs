@@ -13,12 +13,20 @@ namespace OfficeTranslate.Core
     // Office STA thread. Observed in review: the first menu translation in an
     // Excel session works, the second fails inside clipboard capture with
     // "Current thread must be set to single thread apartment (STA) mode
-    // before OLE calls can be made". The ambient SynchronizationContext on
-    // the Office thread is fragile (it depends on which WinForms controls
-    // happened to be created on it and when), so every operation that touches
-    // COM or the clipboard goes through this dispatcher explicitly instead
-    // of relying on await context capture. Network I/O stays off the UI
-    // thread; only the COM/clipboard/writeback sections are dispatched.
+    // before OLE calls can be made". Every operation that touches COM or the
+    // clipboard goes through this dispatcher explicitly instead of relying
+    // on await context capture. Network I/O stays off the UI thread; only
+    // the COM/clipboard/writeback sections are dispatched.
+    //
+    // N1: the ambient SynchronizationContext is NEVER trusted. The real
+    // Word ribbon entry carries the base System.Threading.
+    // SynchronizationContext, whose Send/Post run inline on the CALLING
+    // thread -- keeping it made cross-thread Invoke/InvokeAsync silently
+    // run on MTA pool threads (measured on the release DLL). The dispatcher
+    // therefore owns a private WindowsFormsSynchronizationContext created
+    // on the captured STA thread, which pins that thread and its message
+    // pump as the only dispatch target. The ambient context is left
+    // untouched (never read, never replaced).
     public sealed class OfficeUiDispatcher
     {
         private readonly Thread _uiThread;
@@ -34,19 +42,21 @@ namespace OfficeTranslate.Core
 
         // Captures the calling thread as the Office UI thread. Must be called
         // on the Office main (STA) thread -- in practice, at the top of the
-        // ribbon button handler, before the first await. Office does not
-        // install a SynchronizationContext on its main thread, so when none
-        // is present one is installed explicitly; Post/Send then have a
-        // deterministic pump target on this thread.
+        // ribbon button handler, before the first await. Fails fast when the
+        // calling thread is not STA: silently dispatching to a thread-pool
+        // thread is worse than an explicit error.
         public static OfficeUiDispatcher Capture(string host)
         {
             var thread = Thread.CurrentThread;
-            var context = SynchronizationContext.Current;
-            if (context == null)
-            {
-                context = new WindowsFormsSynchronizationContext();
-                SynchronizationContext.SetSynchronizationContext(context);
-            }
+            if (thread.GetApartmentState() != ApartmentState.STA)
+                throw new InvalidOperationException(
+                    "OfficeTranslate 必须在 Office UI (STA) 线程上启动；当前线程不是 STA，无法安全调度 COM 操作。");
+            // Created on this thread: per the .NET reference source the
+            // constructor captures Thread.CurrentThread as the destination
+            // thread together with the thread's WinForms marshaling
+            // control, so Post/Send pump back here. Private to this
+            // dispatcher; the ambient SynchronizationContext is ignored.
+            var context = new WindowsFormsSynchronizationContext();
             var dispatcher = new OfficeUiDispatcher(thread, context, host);
             dispatcher.LogProbe("menu_entry");
             return dispatcher;
@@ -103,18 +113,19 @@ namespace OfficeTranslate.Core
             return InvokeAsync(() => { action(); return 0; });
         }
 
-        // M2 diagnostics: thread id, apartment state and sync-context type at
-        // each stage, written to the diagnostics log so a lost STA context
-        // can be located (menu entry, around awaits, around each capture).
-        // Records no document content, only thread facts.
+        // M2 diagnostics: thread id, apartment state and dispatch-target
+        // context type at each stage, written to the diagnostics log so a
+        // lost STA context can be located (menu entry, around awaits, around
+        // each capture). Records no document content, only thread facts.
+        // N1: reports the dispatcher's own context (the actual Post/Send
+        // target), not the ambient one, which this dispatcher ignores.
         public void LogProbe(string stage)
         {
             var thread = Thread.CurrentThread;
-            var context = SynchronizationContext.Current;
             ImageOverlayDiagnostics.LogThreadProbe(_host, stage,
                 thread.ManagedThreadId,
                 thread.GetApartmentState().ToString(),
-                context == null ? "null" : (context.GetType().FullName ?? "unknown"),
+                _context.GetType().FullName ?? "unknown",
                 IsUiThread);
         }
 
