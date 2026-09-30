@@ -120,10 +120,10 @@ namespace OfficeTranslate.WordAddIn
                 // reopen). Inline shapes have no Name: each instance gets its own
                 // persistent GUID in a document bookmark, so two identical
                 // pictures never share an owner.
-                // M1: ResolveInlineOwnerId only PROVES identity here; bookmark
-                // deletion and re-tightening are committed after the OCR plan
-                // succeeds, so a cancelled/failed/empty run never mutates the
-                // document.
+                // M1/F4: ResolveInlineOwnerId only PROVES identity here; the
+                // first bookmark creation, duplicate deletion and
+                // re-tightening are committed after the OCR plan succeeds,
+                // so a cancelled/failed/empty run never mutates the document.
                 InlineOwnerResolution? inlineResolution = null;
                 string owner;
                 if (image.Kind == "Inline")
@@ -184,6 +184,9 @@ namespace OfficeTranslate.WordAddIn
             // re-tightened here; their stale boxes are removed below by the
             // absorbed owner ids.
             // M2: all shape surgery below runs on the Office UI (STA) thread.
+            // F4: one last cancellation check before the commit phase, so a
+            // cancelled run never reaches the bookmark/shape mutations below.
+            token.ThrowIfCancellationRequested();
             await ui.InvokeAsync(() =>
             {
                 if (inlineResolution != null)
@@ -283,12 +286,14 @@ namespace OfficeTranslate.WordAddIn
         //   - ResolveInlineOwnerId (pre-network) only READS: it proves which
         //     bookmarks name this exact instance, picks the canonical one by
         //     a deterministic order (bookmark start, end, name), and reports
-        //     the rest as duplicates. It changes nothing except creating the
-        //     first bookmark when none exists.
-        //   - CommitInlineOwnerResolution (post-plan, UI thread) deletes the
-        //     duplicate bookmarks and re-tightens the canonical bookmark to
-        //     the image range. A cancelled/failed/empty OCR run therefore
-        //     never mutates the document.
+        //     the rest as duplicates. For a first sighting it records the
+        //     pending bookmark name but creates nothing: the document is not
+        //     modified.
+        //   - CommitInlineOwnerResolution (post-plan, UI thread) creates the
+        //     pending first-sighting bookmark, deletes the duplicate
+        //     bookmarks and re-tightens the canonical bookmark to the image
+        //     range. A cancelled/failed/empty OCR run returns before commit
+        //     and therefore never mutates the document.
         // Re-tightening matters because an expanded bookmark range could pick
         // up an unrelated nearby picture later and turn ambiguous.
         private sealed class InlineOwnerResolution
@@ -297,6 +302,11 @@ namespace OfficeTranslate.WordAddIn
             public string CanonicalBookmark = string.Empty;
             public readonly List<string> DuplicateBookmarks = new List<string>();
             public readonly List<string> AbsorbedOwnerIds = new List<string>();
+            // F4: first sighting. The bookmark does NOT exist yet; Resolve
+            // only records the name. Commit creates it after the OCR plan
+            // succeeds, so a cancelled/empty/failed run never mutates the
+            // document. Empty when the canonical bookmark already existed.
+            public string PendingBookmark = string.Empty;
         }
 
         private InlineOwnerResolution ResolveInlineOwnerId(Range imageRange)
@@ -358,9 +368,12 @@ namespace OfficeTranslate.WordAddIn
                     }
                     return result;
                 }
+                // F4: first sighting. Do NOT create the bookmark here: record
+                // the pending name only. CommitInlineOwnerResolution creates
+                // it after the OCR plan succeeds, so a cancelled/empty/
+                // failed run never mutates the document.
                 var guid = Guid.NewGuid().ToString("N");
-                object rangeObject = imageRange;
-                doc.Bookmarks.Add(prefix + guid, ref rangeObject);
+                result.PendingBookmark = prefix + guid;
                 result.CanonicalBookmark = prefix + guid;
                 result.OwnerId = "wdi:guid-" + guid;
                 return result;
@@ -384,18 +397,58 @@ namespace OfficeTranslate.WordAddIn
             Document doc;
             try { doc = _word.ActiveDocument; }
             catch { return; }
-            // Re-tighten first: if this fails, the duplicates are still
-            // reported and absorbed on the next run.
+            // F4: a first sighting creates its owner bookmark only here,
+            // after the plan succeeded. Cancelled/empty/failed runs return
+            // before this point and never touch the document.
+            if (!string.IsNullOrEmpty(resolution.PendingBookmark))
+            {
+                try
+                {
+                    object rangeObject = imageRange;
+                    doc.Bookmarks.Add(resolution.PendingBookmark, ref rangeObject);
+                }
+                catch
+                {
+                    // Best effort: the shapes still carry the owner id, so
+                    // this run's cleanup works; the next run re-resolves.
+                }
+            }
+            // Remove staging bookmarks left behind by a crashed tighten.
+            // "OTTmp_" never parses as an OTImg_ owner, but do not litter
+            // the document.
+            try
+            {
+                var stale = new List<string>();
+                foreach (Bookmark bookmark in doc.Bookmarks)
+                {
+                    string name;
+                    try { name = bookmark.Name; }
+                    catch { continue; }
+                    if (!string.IsNullOrEmpty(name) && name.StartsWith("OTTmp_", StringComparison.Ordinal))
+                        stale.Add(name);
+                }
+                foreach (var temp in stale)
+                    try { doc.Bookmarks[temp].Delete(); } catch { }
+            }
+            catch { }
+            // Re-tighten first: if this throws, the failure is visible to
+            // the caller instead of being swallowed as a success, and the
+            // canonical bookmark is never lost (see TightenBookmark).
             TightenBookmark(doc, resolution.CanonicalBookmark, imageRange);
             foreach (var duplicate in resolution.DuplicateBookmarks)
                 try { doc.Bookmarks[duplicate].Delete(); } catch { }
         }
 
-        // Re-tightens an expanded bookmark to the image range without ever
-        // losing the only bookmark: the tight range is added under a
-        // temporary name FIRST; the original is deleted only after the tight
-        // bookmark exists. Every step is best-effort -- identity does not
-        // depend on tightening, the next run simply retries.
+        // F3: re-tightens an expanded bookmark to the image range without
+        // ever losing the only bookmark. Word limits bookmark names to 40
+        // characters
+        // (https://learn.microsoft.com/en-us/office/vba/api/word.bookmarks.add),
+        // and "OTImg_" + 32 hex is already 38, so the staging bookmark uses
+        // an independent short name ("OTTmp_" + 8 hex = 14 chars) that can
+        // never parse as an OTImg_ owner. The tight range is staged FIRST;
+        // the canonical bookmark is deleted only after staging succeeded.
+        // A tightening failure is never swallowed: it throws a descriptive
+        // error so the caller cannot mistake it for success.
         private static void TightenBookmark(Document doc, string name, Range imageRange)
         {
             int start, end;
@@ -407,38 +460,52 @@ namespace OfficeTranslate.WordAddIn
             int bStart, bEnd;
             try { bStart = canonical.Range.Start; bEnd = canonical.Range.End; }
             catch { return; }
-            if (bStart == start && bEnd == end) return;
-            var tmp = name + "_tighten";
-            try { doc.Bookmarks[tmp].Delete(); } catch { }
+            if (bStart == start && bEnd == end) return; // already tight
+            // 14 chars, well under the 40-char limit; never an OTImg_ owner.
+            var tmp = "OTTmp_" + Guid.NewGuid().ToString("N").Substring(0, 8);
             try
             {
                 object tightRange = imageRange;
                 doc.Bookmarks.Add(tmp, ref tightRange);
             }
-            catch { return; } // original untouched
+            catch
+            {
+                // Staging failed: the canonical bookmark is untouched.
+                throw new InvalidOperationException("图片书签收紧失败：无法创建临时书签，原书签保持不变。");
+            }
             Range newRange;
             try { newRange = doc.Bookmarks[tmp].Range; }
-            catch { return; } // original untouched; tmp is absorbed next run
+            catch
+            {
+                try { doc.Bookmarks[tmp].Delete(); } catch { }
+                throw new InvalidOperationException("图片书签收紧失败：无法读取临时书签范围，原书签保持不变。");
+            }
             try { doc.Bookmarks[name].Delete(); }
-            catch { try { doc.Bookmarks[tmp].Delete(); } catch { } return; }
+            catch
+            {
+                try { doc.Bookmarks[tmp].Delete(); } catch { }
+                throw new InvalidOperationException("图片书签收紧失败：无法删除原书签，原书签保持不变。");
+            }
             try
             {
                 object r = newRange;
                 doc.Bookmarks.Add(name, ref r);
-                try { doc.Bookmarks[tmp].Delete(); } catch { }
             }
             catch
             {
-                // Original lost but tmp still proves identity; retry the
-                // restore once, otherwise the next run absorbs tmp.
+                // The old canonical is gone but the staged tight range still
+                // exists: restore the canonical name there before reporting,
+                // so the owner identity is never lost.
                 try
                 {
                     object r2 = newRange;
                     doc.Bookmarks.Add(name, ref r2);
-                    try { doc.Bookmarks[tmp].Delete(); } catch { }
                 }
-                catch { }
+                catch { /* tmp still proves identity; the next run retries */ }
+                try { doc.Bookmarks[tmp].Delete(); } catch { }
+                throw new InvalidOperationException("图片书签收紧失败：已尝试恢复原书签名称，请重试翻译。");
             }
+            try { doc.Bookmarks[tmp].Delete(); } catch { }
         }
 
         // C3: returns false when the anchor position is unavailable. Word's

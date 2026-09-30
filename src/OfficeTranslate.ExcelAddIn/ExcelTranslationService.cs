@@ -117,6 +117,9 @@ namespace OfficeTranslate.ExcelAddIn
             // M2: every shape access below runs on the Office UI (STA) thread.
             // The sheet is resolved here (not earlier) so the "no sheet"
             // error is raised on the same thread that performs the surgery.
+            // F4: one last cancellation check before the surgery phase, so
+            // a cancelled run never reaches the shape mutations below.
+            token.ThrowIfCancellationRequested();
             await ui.InvokeAsync(() =>
             {
                 var sheet = _excel.ActiveSheet as Excel.Worksheet

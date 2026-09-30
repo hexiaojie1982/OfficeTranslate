@@ -150,6 +150,9 @@ namespace OfficeTranslate.PowerPointAddIn
                 // Matching is by owner id only, never by region center, so an
                 // overlapping image's cleanup cannot delete this image's boxes.
                 // M2: all shape surgery below runs on the Office UI (STA) thread.
+                // F4: one last cancellation check before the surgery phase, so
+                // a cancelled run never reaches the shape mutations below.
+                token.ThrowIfCancellationRequested();
                 await ui.InvokeAsync(() =>
                 {
                     RemovePreviousResults(slide, ownerId);
