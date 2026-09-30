@@ -74,7 +74,7 @@ namespace OfficeTranslate.ExcelAddIn
                     token.ThrowIfCancellationRequested();
                     var current = targets.Count + i + 1;
                     progress($"OfficeTranslate：正在识别图片 {current}/{total}");
-                    await TranslateImageAsync(images[i], current, client, settings, summary, token, ui);
+                    await TranslateImageAsync(images[i], i + 1, current, client, settings, summary, token, ui);
                     progress($"OfficeTranslate：已完成 {current}/{total}");
                 }
                 ui.LogProbe("image_loop_after");
@@ -82,7 +82,7 @@ namespace OfficeTranslate.ExcelAddIn
             }
         }
 
-        private async Task TranslateImageAsync(Excel.Shape image, int imageNumber, TranslationClient client, TranslationSettings settings, TranslationTaskSummary summary, CancellationToken token, OfficeUiDispatcher ui)
+        private async Task TranslateImageAsync(Excel.Shape image, int imageOrdinal, int taskIndex, TranslationClient client, TranslationSettings settings, TranslationTaskSummary summary, CancellationToken token, OfficeUiDispatcher ui)
         {
             // M2: clipboard capture runs on the Office UI (STA) thread
             // explicitly -- later menu runs failed here with "Current thread
@@ -120,7 +120,7 @@ namespace OfficeTranslate.ExcelAddIn
                         catch (COMException ex)
                         {
                             throw new InvalidOperationException(
-                                "Excel 无法复制图片" + ShapeId(image, imageNumber) + "（" + ShapeState(image) + "）：" +
+                                "Excel 无法复制图片" + ShapeId(image, imageOrdinal) + "（" + ShapeState(image) + "）：" +
                                 "Copy 失败[" + copyError + "]；CopyPicture 失败[" + DescribeComError("CopyPicture", ex) + "]。" +
                                 "请选择该图片后重试。", ex);
                         }
@@ -131,7 +131,7 @@ namespace OfficeTranslate.ExcelAddIn
                     try
                     {
                         ImageOverlayDiagnostics.LogCaptureFailure("Excel",
-                            "image=" + imageNumber + " shape=" + ShapeId(image, imageNumber) +
+                            "image=" + imageOrdinal + " task=" + taskIndex + " shape=" + ShapeId(image, imageOrdinal) +
                             " " + ShapeState(image) +
                             " error=" + ex.GetType().Name +
                             " msg=" + Flatten(ex.Message));
@@ -451,24 +451,43 @@ namespace OfficeTranslate.ExcelAddIn
                 Flatten(ex.Message);
         }
 
-        private static string ShapeId(Excel.Shape image, int imageNumber)
+        private static string ShapeId(Excel.Shape image, int imageOrdinal)
         {
             var name = SafeString(() => image.Name);
-            return "#" + imageNumber + (string.IsNullOrEmpty(name) ? string.Empty : " " + name);
+            return "#" + imageOrdinal + (string.IsNullOrEmpty(name) ? string.Empty : " " + name);
         }
 
+        // R2: the sheet identity combines workbook + sheet names. Comparing
+        // sheet names alone misreports "active" when two open workbooks
+        // have a sheet with the same name. When a name cannot be read, the
+        // state is "unknown" -- two unreadable names must not be treated
+        // as equal.
         private string ShapeState(Excel.Shape image)
         {
             try
             {
                 var sheet = image.Parent as Excel.Worksheet;
-                var sheetName = sheet != null ? SafeString(() => sheet.Name) : "?";
+                var id = SheetId(sheet);
                 var active = _excel.ActiveSheet as Excel.Worksheet;
-                var activeName = active != null ? SafeString(() => active.Name) : string.Empty;
-                return "sheet=" + sheetName +
-                    (string.Equals(activeName, sheetName, StringComparison.Ordinal) ? ",active" : ",inactive");
+                var activeId = SheetId(active);
+                if (id == "?" || activeId == "?") return "sheet=" + id + ",unknown";
+                return "sheet=" + id +
+                    (string.Equals(activeId, id, StringComparison.Ordinal) ? ",active" : ",inactive");
             }
             catch { return "sheet=?"; }
+        }
+
+        private static string SheetId(Excel.Worksheet? sheet)
+        {
+            if (sheet == null) return "?";
+            var book = SafeString(() =>
+            {
+                var b = sheet.Parent as Excel.Workbook;
+                return b != null ? b.Name : "?";
+            });
+            var name = SafeString(() => sheet.Name);
+            if (string.IsNullOrEmpty(book) || book == "?" || string.IsNullOrEmpty(name)) return "?";
+            return book + "!" + name;
         }
 
         private static string Flatten(string? value)

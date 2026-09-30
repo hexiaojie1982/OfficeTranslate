@@ -29,6 +29,18 @@ namespace OfficeTranslate.WordAddIn
             // M2: prove which thread the synchronous prefix runs on; every
             // COM/clipboard section below is dispatched explicitly.
             ui.LogProbe("translate_start");
+            // R1/P2: save the user's selection once at task entry, before
+            // the first selection-changing COM op. The per-image restore in
+            // SelectAndCopyAsPicture only covers the copy phase; overlay
+            // box/bookmark creation moves the selection again afterwards,
+            // so the authoritative restore runs in the finally below, at
+            // the end of the whole task. The duplicate carries the original
+            // Document/Story identity (header/footer/footnote safe).
+            Range? taskSelection = null;
+            try { taskSelection = ui.Invoke(() => SaveSelectionDuplicate()); }
+            catch { taskSelection = null; }
+            try
+            {
             var targets = wholeDocument ? ReadDocumentParagraphs() : ReadSelection();
             var images = settings.ImageOcrEnabled ? (wholeDocument ? ReadDocumentImages() : ReadSelectionImages()) : new List<ImageTarget>();
             if (targets.Count == 0 && images.Count == 0) throw new InvalidOperationException(wholeDocument ? "文档中没有可翻译的正文或图片。" : "请先选择需要翻译的文字或图片。");
@@ -105,6 +117,25 @@ namespace OfficeTranslate.WordAddIn
                 }
                 ui.LogProbe("text_loop_after");
                 return summary;
+            }
+            }
+            finally
+            {
+                // R1/P2: authoritative restore at the end of the whole task:
+                // success, cancellation, and exception paths all land here,
+                // after every overlay/box/bookmark mutation. Best-effort and
+                // never throwing, so it cannot mask cancellation or the
+                // original exception. Bounded wait: task completion must not
+                // hang if the UI thread is going away.
+                if (taskSelection != null)
+                {
+                    try
+                    {
+                        var restore = ui.InvokeAsync(() => TryRestoreSelection(taskSelection));
+                        await Task.WhenAny(restore, Task.Delay(2000));
+                    }
+                    catch { }
+                }
             }
         }
 
@@ -1146,23 +1177,37 @@ namespace OfficeTranslate.WordAddIn
             }
             finally
             {
-                if (savedSelection != null)
+                // Immediate restore after the copy only; the authoritative
+                // restore happens at the end of the whole task (see
+                // TranslateAsync), because overlay/box/bookmark work moves
+                // the selection again afterwards.
+                TryRestoreSelection(savedSelection);
+            }
+        }
+
+        private Range? SaveSelectionDuplicate()
+        {
+            try { return _word.Selection?.Range.Duplicate; }
+            catch { return null; }
+        }
+
+        // R1/P2: best-effort selection restore. The duplicate carries the
+        // original Document/Story identity; never rebuild from
+        // ActiveDocument by numbers (main-story only). On failure, log a
+        // content-free diagnosis instead of guessing across
+        // stories/documents.
+        private void TryRestoreSelection(Range? savedSelection)
+        {
+            if (savedSelection == null) return;
+            try { savedSelection.Select(); }
+            catch (Exception ex)
+            {
+                try
                 {
-                    try { savedSelection.Select(); }
-                    catch (Exception ex)
-                    {
-                        // Best-effort restore only: never guess across
-                        // stories/documents. A diagnosis line (no document
-                        // content) goes to the capture log instead of a
-                        // silent swallow.
-                        try
-                        {
-                            ImageOverlayDiagnostics.LogCaptureFailure("Word",
-                                "selection_restore_failed error=" + ex.GetType().Name);
-                        }
-                        catch { }
-                    }
+                    ImageOverlayDiagnostics.LogCaptureFailure("Word",
+                        "selection_restore_failed error=" + ex.GetType().Name);
                 }
+                catch { }
             }
         }
 
