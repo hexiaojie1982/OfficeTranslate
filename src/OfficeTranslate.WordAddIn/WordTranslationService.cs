@@ -320,7 +320,9 @@ namespace OfficeTranslate.WordAddIn
             // default a new textbox to auto-size-to-fit-text, which would let
             // the box grow beyond the validated region. The box keeps the
             // planner's fixed geometry; only the font size adapts.
-            overlay.TextFrame.AutoSize = Office.MsoAutoSize.msoAutoSizeNone;
+            // Word.TextFrame.AutoSize is int in the interop assembly, not
+            // MsoAutoSize (same quirk as WordWrap, see R1).
+            overlay.TextFrame.AutoSize = (int)Office.MsoAutoSize.msoAutoSizeNone;
             overlay.TextFrame.TextRange.Text = text;
             // Word does not consistently support msoAutoSizeTextToFitShape. Some
             // desktop builds reject it with "value out of range", so the font
@@ -417,7 +419,8 @@ namespace OfficeTranslate.WordAddIn
             note.AlternativeText = ImageOverlayTags.NoteFor(ownerId);
             // D2/D3: no host auto-growth for notes either; W2 grows the note
             // manually under the cap so the limit cannot be bypassed.
-            note.TextFrame.AutoSize = Office.MsoAutoSize.msoAutoSizeNone;
+            // Word.TextFrame.AutoSize is int in the interop assembly (see R1).
+            note.TextFrame.AutoSize = (int)Office.MsoAutoSize.msoAutoSizeNone;
             // The frame is assigned BEFORE Left/Top so Office interprets the
             // numbers in the intended system. C3: a note whose frame cannot be
             // set is deleted and reported instead of being kept in an unknown
