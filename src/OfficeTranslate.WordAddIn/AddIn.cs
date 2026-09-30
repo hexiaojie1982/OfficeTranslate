@@ -141,17 +141,23 @@ namespace OfficeTranslate.WordAddIn
             // lets Windows reactivate a different document window on dismiss.
             catch (Exception ex)
             {
+                // S1: boundary probe BEFORE the progress close. The service
+                // finally already logged selection_restore_diag (matched=1);
+                // this shows whether the selection is still on the target
+                // when the AddIn teardown starts.
+                WordSelectionProbe.Log(_word, "before_progress_close", taskWindow);
                 _progressForm?.CloseSafely(); _progressForm = null;
+                WordSelectionProbe.Log(_word, "after_progress_close", taskWindow);
                 var window = taskWindow;
                 ui.Invoke(() =>
                 {
-                    // S1: dialog lifecycle markers so the review can
-                    // correlate the selection state sampled before/after
-                    // the user dismisses the error prompt.
-                    try { ImageOverlayDiagnostics.LogCaptureFailure("Word", "error_dialog_shown"); } catch { }
+                    // S1: the old bare markers could not answer what the
+                    // selection was when the dialog appeared or was
+                    // dismissed; the probe snapshots it at both points.
+                    WordSelectionProbe.Log(_word, "error_dialog_shown", window);
                     if (window != IntPtr.Zero) MessageBox.Show(new TranslationProgressForm.WindowHandle(window), ex.Message, "OfficeTranslate", MessageBoxButtons.OK, MessageBoxIcon.Error);
                     else MessageBox.Show(ex.Message, "OfficeTranslate", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                    try { ImageOverlayDiagnostics.LogCaptureFailure("Word", "error_dialog_dismissed"); } catch { }
+                    WordSelectionProbe.Log(_word, "error_dialog_dismissed", window);
                 });
             }
             finally { _progressForm?.CloseSafely(); _progressForm = null; _cancellation.Dispose(); _cancellation = null; }
