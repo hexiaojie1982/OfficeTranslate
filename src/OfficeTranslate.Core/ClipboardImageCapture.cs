@@ -180,13 +180,21 @@ namespace OfficeTranslate.Core
         // 4ca3b46 review P2: aggregates per-attempt NoImage evidence with a
         // length cap, so a hard failure after several NoImages keeps the
         // early attempts instead of only the most recent one.
+        // 3b2a252 review: the cap is applied AFTER building the full text --
+        // checking before each append still lets one long round push the
+        // total over the limit.
         private static string CombineAttemptEvidence(List<NoImageCaptureException> attempts)
         {
             var sb = new StringBuilder("此前各轮取图证据（共 " + attempts.Count + " 轮）：");
             for (var i = 0; i < attempts.Count; i++)
             {
-                if (sb.Length > 2000) { sb.Append("…（已截断）"); break; }
                 sb.Append("[第").Append(i + 1).Append("轮 ").Append(attempts[i].Message).Append("] ");
+            }
+            const int maxLength = 2000;
+            if (sb.Length > maxLength)
+            {
+                sb.Length = maxLength;
+                sb.Append("…（已截断）");
             }
             return sb.ToString();
         }
@@ -548,7 +556,10 @@ namespace OfficeTranslate.Core
             [DllImport("user32.dll", SetLastError = true)]
             public static extern bool CloseClipboard();
 
-            [DllImport("user32.dll")]
+            // 3b2a252 review: SetLastError is required -- a 0 return means
+            // "no more formats" OR failure, and only GetLastError() ==
+            // ERROR_SUCCESS proves a clean end of enumeration.
+            [DllImport("user32.dll", SetLastError = true)]
             public static extern uint EnumClipboardFormats(uint format);
 
             [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
@@ -580,12 +591,21 @@ namespace OfficeTranslate.Core
                 if (!NativeClipboard.OpenClipboard(IntPtr.Zero)) return null;
                 try
                 {
+                    // 3b2a252 review: per MS docs a 0 return means "no more
+                    // formats" OR failure. Only GetLastError() ==
+                    // ERROR_SUCCESS (0) proves a clean end of enumeration;
+                    // any other code means the list may be incomplete and
+                    // must be reported as read-failed, never as "none".
+                    // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-enumclipboardformats
+                    bool reachedEnd = false;
                     uint f = 0;
-                    while ((f = NativeClipboard.EnumClipboardFormats(f)) != 0)
+                    while (formats.Count < 64) // sanity cap
                     {
+                        f = NativeClipboard.EnumClipboardFormats(f);
+                        if (f == 0) { reachedEnd = true; break; }
                         formats.Add(NativeFormatLabel(f));
-                        if (formats.Count >= 64) break; // sanity cap
                     }
+                    if (reachedEnd && Marshal.GetLastWin32Error() != 0) return null;
                 }
                 finally { NativeClipboard.CloseClipboard(); }
             }

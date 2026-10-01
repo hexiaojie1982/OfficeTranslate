@@ -159,6 +159,31 @@ namespace OfficeTranslate.Tests
         }
 
         [TestMethod]
+        public void Capture_LongEvidence_IsTruncatedAfterBuild()
+        {
+            // 3b2a252 review: one very long round must not push the combined
+            // evidence over the cap -- truncation is checked after building.
+            var manyFormats = new List<string>();
+            for (int i = 0; i < 64; i++)
+                manyFormats.Add("49" + i.ToString("000") + "=SomeVeryLongCustomClipboardFormatName_" + i);
+            var fake = new FakeClipboard
+            {
+                EnhMetafile = () => ((Metafile?)null, "absent"),
+                NativeFormats = manyFormats
+            };
+            try
+            {
+                ClipboardImageCapture.CapturePng(_ => { }, null, CancellationToken.None, fake);
+                Assert.Fail("expected NoImage failure");
+            }
+            catch (InvalidOperationException ex)
+            {
+                Assert.IsTrue(ex.Message.Length <= 2100, "evidence not capped: " + ex.Message.Length);
+                StringAssert.Contains(ex.Message, "已截断");
+            }
+        }
+
+        [TestMethod]
         public void Capture_NativeFormatReadFailure_ReportedDistinctFromEmpty()
         {
             var fake = new FakeClipboard

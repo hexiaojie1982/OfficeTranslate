@@ -90,12 +90,36 @@ namespace OfficeTranslate.WordAddIn
                 // Word represents a selected inline picture with a non-printing object
                 // character. Image-only selections are filtered below, and images are
                 // handled before ordinary text so OCR is always the first real request.
-                ui.LogProbe("image_loop_before");
+                ui.LogProbe("image_capture_before");
+                // P1 (3b2a252 review): pre-capture ALL images' PNGs before
+                // any network request or document mutation. The review
+                // proved that with no write-back every capture succeeds,
+                // while image 1's bookmark/overlay commit breaks image 2's
+                // CopyAsPicture (0x800A11FD; the clipboard then offers no
+                // bitmap and no EMF). Capturing everything up front
+                // restores the known-good condition structurally instead of
+                // guessing which write-back step poisons the copy, and no
+                // blanket retry on 0x800A11FD is added. Write-back
+                // presentation stays per-image below, so overlays still
+                // appear one by one. If a capture fails the task stops
+                // before anything is written (no partial overlays).
+                var capturedImages = new List<Tuple<ImageTarget, byte[]>>();
                 for (var i = 0; i < images.Count; i++)
                 {
-                    token.ThrowIfCancellationRequested(); var current = i + 1;
+                    token.ThrowIfCancellationRequested();
+                    var current = i + 1;
+                    progress($"OfficeTranslate：正在捕获图片 {current}/{total}");
+                    var bytes = await CaptureImageAsync(images[i], current, token, ui);
+                    capturedImages.Add(Tuple.Create(images[i], bytes));
+                    progress($"OfficeTranslate：已捕获 {current}/{total}");
+                }
+                ui.LogProbe("image_capture_after");
+                for (var i = 0; i < capturedImages.Count; i++)
+                {
+                    token.ThrowIfCancellationRequested();
+                    var current = i + 1;
                     progress($"OfficeTranslate：正在识别图片 {current}/{total}");
-                    await TranslateImageAsync(images[i], current, client, settings, summary, token, ui);
+                    await ProcessImageAsync(capturedImages[i].Item1, current, capturedImages[i].Item2, client, settings, summary, token, ui);
                     progress($"OfficeTranslate：已完成 {current}/{total}");
                 }
                 ui.LogProbe("image_loop_after");
@@ -206,13 +230,18 @@ namespace OfficeTranslate.WordAddIn
             catch { }
         }
 
-        private async Task TranslateImageAsync(ImageTarget image, int imageNumber, TranslationClient client, TranslationSettings settings, TranslationTaskSummary summary, CancellationToken token, OfficeUiDispatcher ui)
+        // P1 (3b2a252 review): capture phase. Runs on the Office UI (STA)
+        // thread; touches COM and the clipboard, but performs no network
+        // I/O and no document mutation (no bookmarks, no overlays, no
+        // cleanup), so every image is captured under the same pristine
+        // conditions as the review's no-write-back control run.
+        private async Task<byte[]> CaptureImageAsync(ImageTarget image, int imageNumber, CancellationToken token, OfficeUiDispatcher ui)
         {
-            // M2: clipboard capture and owner-identity bookkeeping touch COM
-            // and the clipboard, so they run on the Office UI (STA) thread
-            // explicitly. Async continuations are not guaranteed to resume
-            // there (a later menu run used to fail here with an STA/OLE error).
-            var preNetwork = await ui.InvokeAsync(() =>
+            // M2: clipboard capture touches COM and the clipboard, so it
+            // runs on the Office UI (STA) thread explicitly. Async
+            // continuations are not guaranteed to resume there (a later
+            // menu run used to fail here with an STA/OLE error).
+            return await ui.InvokeAsync(() =>
             {
                 ui.LogProbe("capture_before");
                 // Clipboard round-trip is the only way to rasterize a Word shape.
@@ -252,6 +281,19 @@ namespace OfficeTranslate.WordAddIn
                         "第 " + imageNumber + " 张图片捕获失败：" + ex.Message, ex);
                 }
                 ui.LogProbe("capture_after");
+                return captured;
+            });
+        }
+
+        // P1 (3b2a252 review): process phase. Owner identity is still
+        // resolved pre-network (read-only; creates nothing), then OCR,
+        // planning and the document-mutating commit run per image exactly
+        // as before -- only the capture moved earlier, so no write-back
+        // can poison a later capture.
+        private async Task ProcessImageAsync(ImageTarget image, int imageNumber, byte[] bytes, TranslationClient client, TranslationSettings settings, TranslationTaskSummary summary, CancellationToken token, OfficeUiDispatcher ui)
+        {
+            var resolved = await ui.InvokeAsync(() =>
+            {
                 // R5/C2: owner identity for cleanup. Floating shapes use their Name
                 // (unique per document, persisted, stable across move/resize/
                 // reopen). Inline shapes have no Name: each instance gets its own
@@ -270,13 +312,12 @@ namespace OfficeTranslate.WordAddIn
                 }
                 else
                 {
-                    owner = ImageOverlayIdentity.ForNamedShape("wd", image.ShapeName, captured);
+                    owner = ImageOverlayIdentity.ForNamedShape("wd", image.ShapeName, bytes);
                 }
-                return Tuple.Create(captured, owner, inlineResolution);
+                return Tuple.Create(owner, inlineResolution);
             });
-            var bytes = preNetwork.Item1;
-            var ownerId = preNetwork.Item2;
-            var inlineResolution = preNetwork.Item3;
+            var ownerId = resolved.Item1;
+            var inlineResolution = resolved.Item2;
             var hasPixels = PngDimensions.TryRead(bytes, out var pixelWidth, out var pixelHeight);
             var regions = await client.TranslateImageAsync(bytes, settings, token);
             if (regions.Count == 0) { summary.RecordImage(false); return; }
