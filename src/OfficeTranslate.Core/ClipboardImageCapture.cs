@@ -1,4 +1,5 @@
 using System;
+using System.Drawing;
 using System.Drawing.Imaging;
 using System.IO;
 using System.Runtime.InteropServices;
@@ -109,6 +110,23 @@ namespace OfficeTranslate.Core
                         if (attempt < MaxAttempts)
                             BackoffWithPump(pumpMessages, token);
                     }
+                    catch (Exception ex) when (!IsCancellation(ex))
+                    {
+                        // f2cb7de review item 2: a hard copy-phase failure
+                        // (e.g. Word 0x800A11FD "command invalid") must not
+                        // silently discard the earlier attempts' NoImage
+                        // evidence (clipboard sequence numbers, formats, poll
+                        // counts). Chain it so the final error -- and the
+                        // host's capture-failure log line -- keeps the
+                        // per-attempt evidence instead of only the last
+                        // exception. Cancellation still propagates unwrapped.
+                        if (lastNoImage != null)
+                            throw new InvalidOperationException(
+                                "Office 图片捕获失败：复制阶段出错（" + Describe(ex) + "）。"
+                                + "此前尝试的取图证据保留如下：" + lastNoImage.Message,
+                                ex);
+                        throw;
+                    }
                 }
                 if (lastNoImage != null) throw lastNoImage;
                 throw new InvalidOperationException(
@@ -182,6 +200,18 @@ namespace OfficeTranslate.Core
             catch (Exception ex) when (!IsCancellation(ex))
             { throw PhaseException("读取剪贴板图片", attempt, uiThread, ex); }
 
+            // f2cb7de review item 1: Word's CopyAsPicture sometimes places
+            // only an EnhancedMetafile (no bitmap/DIB) on the clipboard --
+            // Clipboard.ContainsImage() then never goes true and the attempt
+            // fails as NoImage even though a valid rendering exists. This
+            // fallback is purely additive: the bitmap path above is
+            // untouched, and when no metafile is present (or it cannot be
+            // rendered) the original NoImage failure is reported unchanged.
+            // A metafile that renders becomes PNG bytes; it can never turn
+            // a working capture into a failure.
+            if (image == null)
+                image = TryPollMetafileImage(pumpMessages, token);
+
             if (image == null)
             {
                 if (readError != null)
@@ -210,6 +240,69 @@ namespace OfficeTranslate.Core
                 catch { }
                 Thread.Sleep(100);
             }
+        }
+
+        // f2cb7de review item 1: polls briefly for an EnhancedMetafile
+        // clipboard offer, which Clipboard.ContainsImage() does not
+        // recognize. Returns the rasterized image, or null when no
+        // metafile appears / it cannot be rendered (the caller then keeps
+        // the original NoImage failure). Never throws: a corrupt metafile
+        // must not break the capture loop.
+        private static System.Drawing.Image? TryPollMetafileImage(Action? pumpMessages, CancellationToken token)
+        {
+            for (var i = 0; i < 5; i++)
+            {
+                token.ThrowIfCancellationRequested();
+                try
+                {
+                    pumpMessages?.Invoke();
+                    if (Clipboard.ContainsData(DataFormats.EnhancedMetafile))
+                        return RasterizeMetafileData(Clipboard.GetData(DataFormats.EnhancedMetafile));
+                }
+                catch (Exception ex) when (IsTransientClipboardFailure(ex)) { /* keep polling */ }
+                catch { return null; }
+                Thread.Sleep(50);
+            }
+            return null;
+        }
+
+        private static System.Drawing.Image? RasterizeMetafileData(object? data)
+        {
+            try
+            {
+                using (var mf = ToMetafile(data))
+                {
+                    if (mf == null) return null;
+                    int w = mf.Width, h = mf.Height;
+                    // Sanity bounds: a corrupt metafile must not allocate gigs.
+                    if (w <= 0 || h <= 0 || w > 12000 || h > 12000) return null;
+                    var bmp = new Bitmap(w, h);
+                    bmp.SetResolution(mf.HorizontalResolution, mf.VerticalResolution);
+                    using (var g = Graphics.FromImage(bmp))
+                    {
+                        g.Clear(Color.White);
+                        g.DrawImage(mf, 0, 0, w, h);
+                    }
+                    return bmp;
+                }
+            }
+            catch { return null; }
+        }
+
+        private static Metafile? ToMetafile(object? data)
+        {
+            try
+            {
+                if (data is Metafile mf) return (Metafile)mf.Clone();
+                if (data is MemoryStream ms)
+                {
+                    ms.Position = 0;
+                    return new Metafile(ms);
+                }
+                if (data is byte[] bytes) return new Metafile(new MemoryStream(bytes));
+            }
+            catch { }
+            return null;
         }
 
         // S2: the no-image failure is its own category. It carries the

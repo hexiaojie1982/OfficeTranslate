@@ -54,9 +54,16 @@ namespace OfficeTranslate.WordAddIn
                 {
                     _taskGeneration = Interlocked.Increment(ref _selectionGeneration);
                     _taskSelection = SaveSelectionDuplicate();
-                    // Capture the entry window view (Print/Normal/...). The
-                    // final restore puts the window back to this view before
-                    // selecting the entry range; see RestoreSelectionWithDiag.
+                    // Capture the entry window view (Print/Normal/...) and window
+                    // handle. The final restore best-effort writes the view
+                    // back before selecting the entry range; see
+                    // RestoreSelectionWithDiag.
+                    // f2cb7de review item 4: this setter is NOT proven to
+                    // restore the entry view -- observed: the setter re-reads
+                    // as Print but the view is Normal again after Select()
+                    // for header ranges. The VERIFIED outcome is selection
+                    // stability (header range held 10 s), never "entry view
+                    // restored". Do not claim otherwise from viewfix alone.
                     _taskViewType = SafeGet(() => (int)_word.ActiveWindow.View.Type, -1);
                     // ...and the entry window handle, so the view-fix never
                     // touches an unrelated window (b38abd3 review).
@@ -1342,14 +1349,21 @@ namespace OfficeTranslate.WordAddIn
         // view by the earlier teardown. Selecting a header-story range while
         // the window is Normal forces only a transient Print view, which
         // Word flips back. Capture the entry view type so the restore can
-        // put the window back to the entry view BEFORE selecting, making the
-        // restore's precondition match the entry state. -1 = unreadable.
+        // best-effort write the window back BEFORE selecting.
+        // f2cb7de review item 4: the setter is NOT proven to restore the
+        // entry view -- observed re-reading as Print after the setter but
+        // Normal again after Select() for header ranges. The VERIFIED
+        // outcome is selection stability (header range held 10 s), never
+        // "entry view restored". Do not claim otherwise from viewfix alone.
+        // -1 = unreadable.
         private int _taskViewType = -1;
         // b38abd3 review: the view-fix must only touch the task-entry
         // window. _word.ActiveWindow at restore time is not necessarily
         // the entry window (multi-doc/multi-window), so writing View.Type
-        // to "the current window" could modify an unrelated window. 0 =
-        // unreadable/unset -> the view-fix is skipped (viewfix=no-window).
+        // to "the current window" could modify an unrelated window.
+        // f2cb7de review item 3: 0 = unreadable/unset -> the view write is
+        // skipped outright (viewfix=no-entry-window), never applied blind
+        // to the restore-time active window.
         private int _taskWindowHwnd;
         private int _taskGeneration;
 
@@ -1411,8 +1425,13 @@ namespace OfficeTranslate.WordAddIn
                     int curView = win == null ? -2 : SafeGet(() => (int)win.View.Type, -2);
                     // b38abd3 review: bind the write to the entry window;
                     // never retarget an unrelated window's view.
+                    // f2cb7de review item 3: when the entry HWND could not be
+                    // read (0), the view write is skipped outright -- writing
+                    // to "whatever window is active now" is exactly the
+                    // unscoped write this binding exists to prevent.
                     if (win == null || curView == -2 || winHwnd == 0) viewFix = "no-window";
-                    else if (_taskWindowHwnd != 0 && winHwnd != _taskWindowHwnd) viewFix = "window-changed";
+                    else if (_taskWindowHwnd == 0) viewFix = "no-entry-window";
+                    else if (winHwnd != _taskWindowHwnd) viewFix = "window-changed";
                     else if (curView == _taskViewType) viewFix = "already";
                     else
                     {
