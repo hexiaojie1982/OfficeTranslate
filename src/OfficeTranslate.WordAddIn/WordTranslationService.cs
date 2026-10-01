@@ -43,6 +43,7 @@ namespace OfficeTranslate.WordAddIn
             _taskSelection = null;
             _taskGeneration = 0;
             _taskViewType = -1;
+            _taskWindowHwnd = 0;
             try
             {
                 // N1: every task takes a new selection generation, shared
@@ -57,6 +58,9 @@ namespace OfficeTranslate.WordAddIn
                     // final restore puts the window back to this view before
                     // selecting the entry range; see RestoreSelectionWithDiag.
                     _taskViewType = SafeGet(() => (int)_word.ActiveWindow.View.Type, -1);
+                    // ...and the entry window handle, so the view-fix never
+                    // touches an unrelated window (b38abd3 review).
+                    _taskWindowHwnd = SafeGet(() => _word.ActiveWindow.Hwnd, 0);
                 });
             }
             catch { _taskSelection = null; }
@@ -1246,12 +1250,23 @@ namespace OfficeTranslate.WordAddIn
                 try { range.Select(); }
                 catch (Exception ex) { LogCopyDiagnosis(range, "select", attempt, beforeState, null, ex); throw; }
                 string afterSelectState = SnapshotSelectionState(SafeGet<Selection?>(() => _word.Selection, null));
+                // b38abd3 review: locate the image-2 0x800A11FD. A stale
+                // cached range can Select() without throwing yet land on
+                // plain text (or nothing selectable); CopyAsPicture then
+                // fails with "command invalid" instead of a meaningful
+                // error. Record whether the cached target range still
+                // contains an inline shape (targetInline, in the diag) and
+                // whether the post-Select selection does (selInline): 0 on
+                // either side is the smoking gun for a stale/missed select,
+                // 1 on both sides eliminates the select and points at the
+                // copy/rasterize step (view/layout/clipboard).
+                int selInline = SafeGet(() => _word.Selection.Range.InlineShapes.Count, -1);
                 try { _word.Selection.CopyAsPicture(); }
-                catch (Exception ex) { LogCopyDiagnosis(range, "copy", attempt, beforeState, afterSelectState, ex); throw; }
+                catch (Exception ex) { LogCopyDiagnosis(range, "copy", attempt, beforeState, afterSelectState, ex, selInline); throw; }
                 // S1: also record the succeeding attempts' full
                 // before/after conditions; without them a failing attempt
                 // cannot be compared against anything.
-                LogCopyDiagnosis(range, "copied", attempt, beforeState, afterSelectState, null);
+                LogCopyDiagnosis(range, "copied", attempt, beforeState, afterSelectState, null, selInline);
             }
             finally
             {
@@ -1330,6 +1345,12 @@ namespace OfficeTranslate.WordAddIn
         // put the window back to the entry view BEFORE selecting, making the
         // restore's precondition match the entry state. -1 = unreadable.
         private int _taskViewType = -1;
+        // b38abd3 review: the view-fix must only touch the task-entry
+        // window. _word.ActiveWindow at restore time is not necessarily
+        // the entry window (multi-doc/multi-window), so writing View.Type
+        // to "the current window" could modify an unrelated window. 0 =
+        // unreadable/unset -> the view-fix is skipped (viewfix=no-window).
+        private int _taskWindowHwnd;
         private int _taskGeneration;
 
         // S1: metadata-only snapshot of a restore target range. Never throws.
@@ -1386,12 +1407,25 @@ namespace OfficeTranslate.WordAddIn
                 if (_taskViewType >= 0)
                 {
                     Window? win = SafeGet<Window?>(() => _word.ActiveWindow, null);
+                    int winHwnd = win == null ? 0 : SafeGet(() => win.Hwnd, 0);
                     int curView = win == null ? -2 : SafeGet(() => (int)win.View.Type, -2);
-                    if (curView == _taskViewType) viewFix = "already";
-                    else if (win != null && curView != -2)
+                    // b38abd3 review: bind the write to the entry window;
+                    // never retarget an unrelated window's view.
+                    if (win == null || curView == -2 || winHwnd == 0) viewFix = "no-window";
+                    else if (_taskWindowHwnd != 0 && winHwnd != _taskWindowHwnd) viewFix = "window-changed";
+                    else if (curView == _taskViewType) viewFix = "already";
+                    else
                     {
                         viewFix = curView + "->" + _taskViewType;
                         win.View.Type = (WdViewType)_taskViewType;
+                        // b38abd3 review: re-read AFTER the setter but BEFORE
+                        // Select(). viewfix=1->3:set=1 means the setter was
+                        // ignored; :set=3 with a later Normal after-read means
+                        // the Select() (or something after it) flipped back.
+                        // viewfix alone never proves the view was restored.
+                        int setView = SafeGet(() => (int)win.View.Type, -2);
+                        string targetDoc = SafeGet(() => (target?.Parent as Document)?.Name ?? "?", "?");
+                        viewFix += ":set=" + setView + ":hwnd=" + winHwnd + ":doc=" + targetDoc;
                     }
                 }
             }
@@ -1468,7 +1502,7 @@ namespace OfficeTranslate.WordAddIn
         // D1: attempt is the capture loop's real 1-based attempt number,
         // passed explicitly by the caller (same as the "attempt N/3"
         // message). It is not counted locally.
-        private void LogCopyDiagnosis(Range range, string stage, int attempt, string beforeState, string? afterSelectState, Exception? ex)
+        private void LogCopyDiagnosis(Range range, string stage, int attempt, string beforeState, string? afterSelectState, Exception? ex, int selInline = -1)
         {
             try
             {
@@ -1477,8 +1511,11 @@ namespace OfficeTranslate.WordAddIn
                     + " targetDoc=" + SafeGet(() => (range.Parent as Document)?.Name, "?")
                     + " targetStory=" + SafeGet(() => (int)range.StoryType, -1)
                     + " targetRange=" + SafeGet(() => range.Start, -1) + "-" + SafeGet(() => range.End, -1)
+                    // b38abd3 review: does the cached target range still
+                    // contain the inline shape? 0 here = stale cache.
+                    + " targetInline=" + SafeGet(() => range.InlineShapes.Count, -1)
                     + " before=[" + beforeState + "]"
-                    + (afterSelectState != null ? " afterSelect=[" + afterSelectState + "]" : "")
+                    + (afterSelectState != null ? " afterSelect=[" + afterSelectState + "] selInline=" + selInline : "")
                     + " inlineShapes=" + SafeGet(() => _word.ActiveDocument.InlineShapes.Count, -1)
                     + (ex != null
                         ? " error=" + ex.GetType().Name
