@@ -181,11 +181,14 @@ namespace OfficeTranslate.WordAddIn
                     }
                     finally
                     {
-                        // P1: the dismiss probe must be observable even when
-                        // Show throws, so the next review can tell "dialog
-                        // hung" apart from "dialog teardown threw"; the
-                        // outer finally (after_final_restore) then always
-                        // runs and Word is never left blocked by us.
+                        // P1: the dismiss probe is written once Show returns
+                        // or throws, so the next review can tell "dialog
+                        // hung" (dismissed missing) apart from "dialog
+                        // teardown threw" (dismissed without
+                        // after_final_restore). If Show itself hangs, this
+                        // finally never runs either -- the only real fix is
+                        // never giving it a bad owner in the first place
+                        // (see ResolveErrorDialogOwner above).
                         WordSelectionProbe.Log(_word, "error_dialog_dismissed", window);
                     }
                 });
