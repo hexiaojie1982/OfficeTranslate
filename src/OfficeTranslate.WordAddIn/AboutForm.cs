@@ -71,7 +71,12 @@ namespace OfficeTranslate.WordAddIn
             // version dynamically (CurrentVersion); every section below
             // carries its own version header so the entry text stays
             // consistent across the three hosts sharing this window.
-            return "OfficeTranslate " + CurrentVersion + "\r\n" + ChangelogVersion127Text();
+            return "OfficeTranslate " + CurrentVersion + "\r\n" + ChangelogVersion128Text();
+        }
+
+        private string ChangelogVersion128Text()
+        {
+            return "OfficeTranslate 2.1.28\r\n• 修复错误框 owner 校验逻辑：已关闭源文档的缓存窗口句柄可能被新窗口复用（IsWindow 仍返回真），现改为校验缓存 HWND 是否仍属于当前 Word 窗口集合；不属于则改用当前存活窗口或无 owner 显示，避免错误框关闭后留下阻塞 Word 退出的空白窗口。\r\n\r\n" + ChangelogVersion127Text();
         }
 
         private string ChangelogVersion127Text()

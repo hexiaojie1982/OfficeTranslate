@@ -157,16 +157,18 @@ namespace OfficeTranslate.WordAddIn
                 WordSelectionProbe.Log(_word, "after_progress_close", taskWindow);
                 ui.Invoke(() =>
                 {
-                    // P1 (afa3812 review): the cached task window may have
-                    // been destroyed while the task waited on the network
-                    // (user closed the source document). Owning the error
-                    // MessageBox with a dead HWND is the prime suspect for
-                    // the stuck blank modal that blocked Word's exit in
-                    // review (error_dialog_shown logged, but no
-                    // error_dialog_dismissed / after_final_restore), so the
-                    // owner is re-validated here on the UI thread: prefer
-                    // the cached window while alive, else the current live
-                    // ActiveWindow of this Word instance, else ownerless.
+                    // P1 (c77bf85 review): the cached task window may be gone
+                    // while the task waited on the network (user closed the
+                    // source document) -- and worse, its HWND value can be
+                    // recycled by a new window so IsWindow alone still
+                    // passes. The review proved that owning the error dialog
+                    // with such a handle reproduces the stuck blank modal
+                    // blocking Word's exit (error_dialog_shown without
+                    // error_dialog_dismissed / after_final_restore).
+                    // ResolveErrorDialogOwner therefore tests membership in
+                    // the current Word window set: cached window while it is
+                    // still one of this instance's windows, else the live
+                    // ActiveWindow, else ownerless.
                     var window = ResolveErrorDialogOwner(taskWindow);
                     // S1: the old bare markers could not answer what the
                     // selection was when the dialog appeared or was
@@ -245,31 +247,54 @@ namespace OfficeTranslate.WordAddIn
             catch { return IntPtr.Zero; }
         }
 
-        // P1 (afa3812 review): re-validate the cached task window right
+        // P1 (c77bf85 review): re-validate the cached task window right
         // before it is used as the error dialog's owner. Must be called on
-        // the UI thread (reads _word.ActiveWindow via COM). Never throws;
-        // the resolution is logged metadata-only so the next review can see
-        // whether the cached HWND was dead and which window was chosen.
+        // the UI thread (reads _word.Windows / ActiveWindow via COM).
+        // Never throws; the resolution is logged metadata-only so the next
+        // review can see whether the cached HWND was still one of this
+        // instance's windows and which window was chosen.
+        //
+        // IsWindow alone is NOT sufficient: the review proved the cached
+        // HWND of the closed document A can still pass IsWindow (the handle
+        // value gets recycled by a new window) while no longer belonging to
+        // this Word instance's window set -- owning the error dialog with it
+        // reproduced the stuck blank modal that blocked Word's exit (no
+        // error_dialog_dismissed / after_final_restore). Membership in the
+        // CURRENT _word.Windows collection is the validity test.
         private IntPtr ResolveErrorDialogOwner(IntPtr cachedTaskWindow)
         {
-            bool cachedValid = false;
-            try { cachedValid = cachedTaskWindow != IntPtr.Zero && IsWindow(cachedTaskWindow); }
-            catch { cachedValid = false; }
-            IntPtr activeHwnd = IntPtr.Zero;
+            var wordHwnds = new System.Collections.Generic.HashSet<long>();
             int windowCount = -1;
+            try
+            {
+                var windows = _word?.Windows;
+                if (windows != null)
+                {
+                    windowCount = windows.Count;
+                    foreach (Microsoft.Office.Interop.Word.Window w in windows)
+                    {
+                        try { wordHwnds.Add(new IntPtr(w.Hwnd).ToInt64()); }
+                        catch { }
+                    }
+                }
+            }
+            catch { }
+            bool cachedValid = cachedTaskWindow != IntPtr.Zero && wordHwnds.Contains(cachedTaskWindow.ToInt64());
+            IntPtr activeHwnd = IntPtr.Zero;
             try
             {
                 var active = _word?.ActiveWindow;
                 if (active != null) activeHwnd = new IntPtr(active.Hwnd);
+                // Fresh from the live instance, but still require a live
+                // handle: never own a dialog with a dead HWND.
                 if (activeHwnd != IntPtr.Zero && !IsWindow(activeHwnd)) activeHwnd = IntPtr.Zero;
             }
             catch { activeHwnd = IntPtr.Zero; }
-            try { windowCount = _word?.Windows.Count ?? -1; } catch { windowCount = -1; }
             var chosen = cachedValid ? cachedTaskWindow : activeHwnd;
             ImageOverlayDiagnostics.LogCaptureFailure("Word",
                 "error_dialog_owner stage=resolve"
                 + " cachedHwnd=" + cachedTaskWindow.ToInt64().ToString("X")
-                + " cachedValid=" + (cachedValid ? "1" : "0")
+                + " cachedInWordWindows=" + (cachedValid ? "1" : "0")
                 + " activeHwnd=" + activeHwnd.ToInt64().ToString("X")
                 + " wordWindows=" + windowCount
                 + " chosenHwnd=" + chosen.ToInt64().ToString("X"));
