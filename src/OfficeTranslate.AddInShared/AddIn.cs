@@ -76,17 +76,59 @@ namespace OfficeTranslate.PowerPointAddIn
         private async Task RunAsync(bool whole)
         {
             if (_host == null || _cancellation != null) return; _cancellation = new CancellationTokenSource();
-            try { var settings = LoadForTranslation(); settings.Validate(); _progressForm = new TranslationProgressForm(settings.UiLanguage, () => _cancellation?.Cancel()); _progressForm.ShowFor(GetHostWindow()); var service = new HostService(_host); SetStatus("OfficeTranslate：正在准备翻译…"); var summary = await service.TranslateAsync(whole, settings, _cancellation.Token, SetStatus); var owner = GetHostWindow(); _progressForm.CloseAndShowResult(summary, owner); _progressForm = null; }
+            // M2: capture the Office UI (STA) thread at the ribbon entry
+            // point, before the first await. All COM, clipboard, and
+            // writeback operations are dispatched back to this thread by
+            // the translation service.
+            var ui = OfficeUiDispatcher.Capture(
+#if EXCEL
+                "Excel"
+#else
+                "PowerPoint"
+#endif
+                );
+            // The host window handle is a COM property; read it here on the
+            // UI thread instead of after the network awaits.
+            var hostWindow = GetHostWindow();
+            try { var settings = LoadForTranslation(); settings.Validate(); _progressForm = new TranslationProgressForm(settings.UiLanguage, () => _cancellation?.Cancel()); _progressForm.ShowFor(hostWindow); var service = new HostService(_host); SetStatus("OfficeTranslate：正在准备翻译…"); var summary = await service.TranslateAsync(whole, settings, _cancellation.Token, SetStatus, ui); _progressForm.CloseAndShowResult(summary, hostWindow); _progressForm = null; }
             catch (OperationCanceledException) { SetStatus("OfficeTranslate：已取消"); }
             catch (Exception ex)
             {
                 CloseProgress();
-                var owner = GetHostWindow();
-                if (owner != IntPtr.Zero) MessageBox.Show(new HostWindow(owner), ex.Message, "OfficeTranslate", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                else MessageBox.Show(ex.Message, "OfficeTranslate", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                // P1 (afa3812 review, Word parity): the entry-cached host
+                // window is re-validated before owning the error dialog; a
+                // dead owner HWND left a stuck modal blocking the host in
+                // the Word review. Resolved on the UI thread: cached while
+                // alive, else a fresh read of the host window, else
+                // ownerless. Never throws.
+                // N1: error presentation must run inside the UI dispatch
+                // boundary, not on whatever thread the await resumed on.
+                ui.Invoke(() =>
+                {
+                    var window = ResolveErrorDialogOwner(hostWindow);
+                    if (window != IntPtr.Zero) MessageBox.Show(new HostWindow(window), ex.Message, "OfficeTranslate", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    else MessageBox.Show(ex.Message, "OfficeTranslate", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                });
             }
             finally { CloseProgress(); _cancellation.Dispose(); _cancellation = null; }
         }
+        // P1 (afa3812 review, Word parity): re-validate the cached host
+        // window before it owns the error dialog. Called on the UI thread
+        // (GetHostWindow reads a COM property). Never throws: cached while
+        // alive, else a fresh read of the host window, else ownerless.
+        private IntPtr ResolveErrorDialogOwner(IntPtr cachedHostWindow)
+        {
+            try { if (cachedHostWindow != IntPtr.Zero && IsWindow(cachedHostWindow)) return cachedHostWindow; } catch { }
+            try
+            {
+                var fresh = GetHostWindow();
+                if (fresh != IntPtr.Zero && IsWindow(fresh)) return fresh;
+            }
+            catch { }
+            return IntPtr.Zero;
+        }
+        [DllImport("user32.dll")]
+        private static extern bool IsWindow(IntPtr hWnd);
         private IntPtr GetHostWindow() {
 #if EXCEL
             return _host == null ? IntPtr.Zero : new IntPtr(_host.Hwnd);

@@ -184,21 +184,35 @@ namespace OfficeTranslate.Core
             foreach (var item in items.OfType<Dictionary<string, object>>())
             {
                 if (!item.TryGetValue("bbox", out var boxValue) || !(boxValue is object[] box) || box.Length != 4) continue;
+                // Keep the model's raw coordinates (no 0-1000 clamping): range and
+                // sanity validation is the overlay planner's job, so abnormal
+                // values stay visible in diagnostics instead of being masked.
                 var region = new ImageTranslationRegion {
-                    X1 = Clamp(Convert.ToSingle(box[0])), Y1 = Clamp(Convert.ToSingle(box[1])),
-                    X2 = Clamp(Convert.ToSingle(box[2])), Y2 = Clamp(Convert.ToSingle(box[3])),
+                    X1 = ToCoordinate(box[0]), Y1 = ToCoordinate(box[1]),
+                    X2 = ToCoordinate(box[2]), Y2 = ToCoordinate(box[3]),
                     Source = item.TryGetValue("source", out var source) ? Convert.ToString(source) ?? "" : "",
                     Translation = item.TryGetValue("translation", out var translation) ? Convert.ToString(translation) ?? "" : ""
                 };
-                if (region.X2 > region.X1 && region.Y2 > region.Y1 && !string.IsNullOrWhiteSpace(region.Translation)) result.Add(region);
+                // A region without translated text has nothing to overlay; a
+                // geometrically invalid bbox is passed through so the planner
+                // can downgrade it to an explicit side-note instead of being
+                // silently dropped here.
+                if (!string.IsNullOrWhiteSpace(region.Translation)) result.Add(region);
             }
             return result;
         }
 
-        private static float Clamp(float value)
+        private static float ToCoordinate(object value)
         {
-            if (float.IsNaN(value) || float.IsInfinity(value)) return 0;
-            return Math.Max(0, Math.Min(1000, value));
+            // Non-finite or unparsable coordinates become NaN, which the
+            // planner's range check rejects with a side-note. One corrupt
+            // region no longer aborts the whole image.
+            try
+            {
+                var parsed = Convert.ToSingle(value);
+                return float.IsNaN(parsed) || float.IsInfinity(parsed) ? float.NaN : parsed;
+            }
+            catch { return float.NaN; }
         }
 
         private void Configure(TranslationSettings settings)

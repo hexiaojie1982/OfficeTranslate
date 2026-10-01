@@ -6,6 +6,8 @@
     <IsPackable>false</IsPackable>
   </PropertyGroup>
   <ItemGroup>
+    <Reference Include="System.Windows.Forms" />
+    <Reference Include="System.Drawing" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.0" />
     <PackageReference Include="MSTest.TestFramework" Version="3.6.0" />
     <PackageReference Include="MSTest.TestAdapter" Version="3.6.0" />

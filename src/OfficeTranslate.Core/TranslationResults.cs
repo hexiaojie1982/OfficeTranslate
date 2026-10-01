@@ -62,6 +62,8 @@ namespace OfficeTranslate.Core
             if (recognized) Translated++;
             else OcrNoText++;
         }
+
+        public void RecordImageNeedsReview() => NeedsReview++;
     }
 
     internal static class TranslationSessionCache

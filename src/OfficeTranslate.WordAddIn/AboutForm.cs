@@ -67,7 +67,46 @@ namespace OfficeTranslate.WordAddIn
 
         private string ChangelogText()
         {
-            return "OfficeTranslate " + CurrentVersion + "\r\n• 增强翻译请求的超时与重试处理，并对异常或截断的模型结果停止写回。\r\n• Excel 按区域批量读取单元格，提高大范围翻译时的读取效率并修复数组边界问题。\r\n• 图片 OCR 增加兼容服务结构化输出回退，并改进剪贴板捕获失败时的处理。\r\n• 修复 MSI 安装目录及版本一致性检查，补充回归测试。\r\n\r\n" + ChangelogVersion222Text();
+            // 3b2a252 review: the title already shows the current candidate
+            // version dynamically (CurrentVersion); every section below
+            // carries its own version header so the entry text stays
+            // consistent across the three hosts sharing this window.
+            return "OfficeTranslate " + CurrentVersion + "\r\n" + ChangelogVersion128Text();
+        }
+
+        private string ChangelogVersion128Text()
+        {
+            return "OfficeTranslate 2.1.28\r\n• 修复错误框 owner 校验逻辑：已关闭源文档的缓存窗口句柄可能被新窗口复用（IsWindow 仍返回真），现改为校验缓存 HWND 是否仍属于当前 Word 窗口集合；不属于则改用当前存活窗口或无 owner 显示，避免错误框关闭后留下阻塞 Word 退出的空白窗口。\r\n\r\n" + ChangelogVersion127Text();
+        }
+
+        private string ChangelogVersion127Text()
+        {
+            return "OfficeTranslate 2.1.27\r\n• 修复等待网络时关闭源文档后错误提示的收尾问题：错误框不再使用已销毁的源文档窗口作为 owner，关闭前校验窗口存活，失效时改用当前 Word 实例的存活窗口或无 owner 显示；错误框关闭与最终恢复均有日志，不再留下阻塞 Word 操作与退出的空白窗口。Excel/PowerPoint 错误框做同类 owner 校验。\r\n• 多轮取图证据截断严格限定 2000 字符（含截断标记长度），截断不拆散代理对。\r\n• Word 图片预捕获增加 512MB 总量上限：超限时在写回任何内容前明确停止并提示分批翻译。\r\n• 原生剪贴板格式枚举达到 64 项上限时标注“仅列出前64项”，不再把部分列表当作完整枚举。\r\n\r\n" + ChangelogVersion126Text();
+        }
+
+        private string ChangelogVersion126Text()
+        {
+            return "OfficeTranslate 2.1.26\r\n• Word 图片任务改为先捕获全部图片、再逐图识别与写回：多图全文翻译时，前一张图的书签与覆盖框写回不再干扰后一张图的剪贴板捕获，修复第二张图报 0x800A11FD 的失败；捕获失败则在写回任何内容之前停止。\r\n• 原生剪贴板格式枚举读取错误码，区分“枚举结束”与“枚举失败”，避免把枚举失败误报为“无格式”。\r\n• 多轮取图证据的长度截断改为拼接完成后校验，避免超长单轮证据突破上限。\r\n\r\n" + ChangelogVersion125Text();
+        }
+
+        private string ChangelogVersion125Text()
+        {
+            return "OfficeTranslate 2.1.25\r\n• Word 翻译任务绑定入口文档：网络等待期间切换到其他文档，结果仍写回原文档；源文档关闭则明确停止，不再回退到活动文档。\r\n• 剪贴板诊断改用 Win32 原生格式枚举（仅记录格式 ID 与名称，不读内容），区分“剪贴板无数据”与“数据不可读”。\r\n• EMF 获取改走 Win32 句柄复制，不再依赖托管 DataObject 对 metafile 的识别；取消正常穿透，暂不可用数据有界重试并记录阶段。\r\n• 光栅化失败路径释放位图并设像素上限；多轮取图证据聚合保留最早轮次；格式读取失败与空格式区分记录。\r\n\r\n" + ChangelogVersion124Text();
+        }
+
+        private string ChangelogVersion124Text()
+        {
+            return "OfficeTranslate 2.1.24\r\n• 图片复制诊断记录目标选区与实际选区的行内图状态，定位复制与剪贴板环节。\r\n• 视图修复绑定任务入口窗口，不再误改无关窗口；入口窗口未知时直接跳过。\r\n• 位图轮询失败后尝试读取剪贴板 metafile 并按原生分辨率光栅化为 PNG 兜底。\r\n• 复制硬失败时链入此前各轮取图的剪贴板序号、格式与轮询证据。\r\n\r\n" + ChangelogImageOverlayText();
+        }
+
+        private string ChangelogImageOverlayText()
+        {
+            return "图片 OCR 译文框定位\r\n• 图片 OCR 译文框定位重构：统一 bbox 校验与坐标换算，Word 浮动图片继承自身相对定位基准，修复译文框错位。\r\n• 遮盖层改为不透明并严格限定在原文区域内；译文在区域内换行并自动缩小字号，不再向下扩高；放不下或坐标不可信时生成“图片译文待检查”旁注。\r\n• 重复翻译同一图片时更新已有译文框，不再叠加。\r\n• 新增图片几何诊断日志：记录捕获像素尺寸、模型原始 bbox、Office 图片矩形与最终文本框矩形，便于区分模型定位误差与坐标换算误差（不记录图片内容与密钥）。\r\n• 模型返回的原始 bbox 不再预先截断，异常坐标交由校验器判定并降级为旁注。\r\n\r\n" + ChangelogVersion223Text();
+        }
+
+        private string ChangelogVersion223Text()
+        {
+            return "OfficeTranslate 2.1.23\r\n• 增强翻译请求的超时与重试处理，并对异常或截断的模型结果停止写回。\r\n• Excel 按区域批量读取单元格，提高大范围翻译时的读取效率并修复数组边界问题。\r\n• 图片 OCR 增加兼容服务结构化输出回退，并改进剪贴板捕获失败时的处理。\r\n• 修复 MSI 安装目录及版本一致性检查，补充回归测试。\r\n\r\n" + ChangelogVersion222Text();
         }
 
         private string ChangelogVersion222Text()

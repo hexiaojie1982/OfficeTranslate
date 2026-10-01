@@ -89,6 +89,6 @@ namespace OfficeTranslate.WordAddIn
 
         [DllImport("user32.dll")] private static extern bool GetWindowRect(IntPtr hWnd, out NativeRect rect);
         [StructLayout(LayoutKind.Sequential)] private struct NativeRect { public int Left, Top, Right, Bottom; }
-        private sealed class WindowHandle : IWin32Window { public WindowHandle(IntPtr handle) { Handle = handle; } public IntPtr Handle { get; } }
+        internal sealed class WindowHandle : IWin32Window { public WindowHandle(IntPtr handle) { Handle = handle; } public IntPtr Handle { get; } }
     }
 }
