@@ -1,8 +1,10 @@
 using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Imaging;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Threading;
 using System.Windows.Forms;
 
@@ -53,6 +55,16 @@ namespace OfficeTranslate.Core
     // once" rule applies to the outer clear -> copy -> read cycle and to the
     // copy/read phases, not to Clear's own internal retries.
     //
+    // 4ca3b46 review P1/P2: when the bitmap poll finds nothing, a native
+    // CF_ENHMETAFILE offer is tried via Win32 handle duplication (the
+    // managed DataObject does not reliably recognize clipboard metafiles).
+    // The NoImage diagnostic now carries the native format enumeration
+    // (IDs/names only, never content) and the per-stage EMF diagnostic, so
+    // "clipboard truly empty" can be told apart from "EMF offered but
+    // unreadable". Cancellation is never swallowed by the EMF path;
+    // temporarily unavailable data gets bounded retries; rasterization has
+    // hard pixel caps and releases the Bitmap on every failure path.
+    //
     // Residual risk (documented, not fixable via clipboard APIs): the clipboard is
     // a shared global. If the user or another program writes an image to the
     // clipboard after our Clear() and before we read the shape's image back
@@ -78,10 +90,24 @@ namespace OfficeTranslate.Core
         public static byte[] CapturePng(Action<int> copyToClipboard, Action? pumpMessages, CancellationToken token)
         {
             if (copyToClipboard == null) throw new ArgumentNullException(nameof(copyToClipboard));
+            return CapturePng(copyToClipboard, pumpMessages, token, new Win32ClipboardReader());
+        }
+
+        // 4ca3b46 review P2: internal test seam -- the clipboard is injected
+        // so unit tests can drive the capture loop without a real clipboard.
+        internal static byte[] CapturePng(Action<int> copyToClipboard, Action? pumpMessages, CancellationToken token, IClipboardReader clipboard)
+        {
+            if (copyToClipboard == null) throw new ArgumentNullException(nameof(copyToClipboard));
+            if (clipboard == null) throw new ArgumentNullException(nameof(clipboard));
             int uiThread = Thread.CurrentThread.ManagedThreadId;
-            var saved = SafeGetDataObject();
+            IDataObject? saved = null;
+            try { saved = clipboard.GetDataObject(); }
+            catch { saved = null; }
             Exception? lastTransient = null;
-            Exception? lastNoImage = null;
+            // 4ca3b46 review P2: keep EVERY attempt's NoImage evidence, not
+            // just the most recent -- a hard failure after several NoImages
+            // used to drop the early attempts.
+            var noImageAttempts = new List<NoImageCaptureException>();
             try
             {
                 for (var attempt = 1; attempt <= MaxAttempts; attempt++)
@@ -89,46 +115,51 @@ namespace OfficeTranslate.Core
                     token.ThrowIfCancellationRequested();
                     try
                     {
-                        return TryCaptureOnce(copyToClipboard, pumpMessages, token, attempt, uiThread);
+                        return TryCaptureOnce(copyToClipboard, pumpMessages, token, attempt, uiThread, clipboard);
                     }
                     catch (Exception ex) when (IsTransientClipboardFailure(ex))
                     {
                         lastTransient = ex;
-                        lastNoImage = null;
+                        noImageAttempts.Clear();
                         if (attempt < MaxAttempts)
                             BackoffWithPump(pumpMessages, token);
                     }
-                    catch (Exception ex) when (ex is NoImageCaptureException)
+                    catch (Exception ex) when (ex is NoImageCaptureException noImage)
                     {
                         // S2: bounded re-capture for the no-image category.
                         // Each attempt re-clears then re-copies, so a delayed
                         // render gets another chance but a stale image can
                         // never be read. Kept separate from transient-busy:
                         // the two have different causes and different fixes.
-                        lastNoImage = ex;
+                        noImageAttempts.Add(noImage);
                         lastTransient = null;
                         if (attempt < MaxAttempts)
                             BackoffWithPump(pumpMessages, token);
                     }
                     catch (Exception ex) when (!IsCancellation(ex))
                     {
-                        // f2cb7de review item 2: a hard copy-phase failure
-                        // (e.g. Word 0x800A11FD "command invalid") must not
-                        // silently discard the earlier attempts' NoImage
-                        // evidence (clipboard sequence numbers, formats, poll
-                        // counts). Chain it so the final error -- and the
-                        // host's capture-failure log line -- keeps the
-                        // per-attempt evidence instead of only the last
-                        // exception. Cancellation still propagates unwrapped.
-                        if (lastNoImage != null)
+                        // f2cb7de review item 2 + 4ca3b46 review P2: a hard
+                        // copy-phase failure (e.g. Word 0x800A11FD "command
+                        // invalid") must not silently discard the earlier
+                        // attempts' NoImage evidence (clipboard sequence
+                        // numbers, formats, poll counts). Chain ALL attempts
+                        // so the final error -- and the host's capture-failure
+                        // log line -- keeps the per-attempt evidence instead
+                        // of only the last exception. Cancellation still
+                        // propagates unwrapped.
+                        if (noImageAttempts.Count > 0)
                             throw new InvalidOperationException(
                                 "Office 图片捕获失败：复制阶段出错（" + Describe(ex) + "）。"
-                                + "此前尝试的取图证据保留如下：" + lastNoImage.Message,
+                                + CombineAttemptEvidence(noImageAttempts),
                                 ex);
                         throw;
                     }
                 }
-                if (lastNoImage != null) throw lastNoImage;
+                if (noImageAttempts.Count > 0)
+                    throw new InvalidOperationException(
+                        "Office 图片捕获失败：各轮尝试均未取得图片。"
+                        + CombineAttemptEvidence(noImageAttempts),
+                        noImageAttempts[noImageAttempts.Count - 1]);
                 throw new InvalidOperationException(
                     "Office 图片捕获失败：剪贴板被占用，重试 " + MaxAttempts + " 次后仍未成功" +
                     "（线程 " + uiThread + "）。最后一次：" + Describe(lastTransient) + "。",
@@ -139,30 +170,44 @@ namespace OfficeTranslate.Core
                 // Best-effort: a clipboard failure here must never break the task.
                 try
                 {
-                    if (saved != null) Clipboard.SetDataObject(saved, true);
-                    else SafeClear();
+                    if (saved != null) clipboard.SetDataObject(saved);
+                    else clipboard.Clear();
                 }
                 catch { }
             }
         }
 
-        private static byte[] TryCaptureOnce(Action<int> copyToClipboard, Action? pumpMessages, CancellationToken token, int attempt, int uiThread)
+        // 4ca3b46 review P2: aggregates per-attempt NoImage evidence with a
+        // length cap, so a hard failure after several NoImages keeps the
+        // early attempts instead of only the most recent one.
+        private static string CombineAttemptEvidence(List<NoImageCaptureException> attempts)
+        {
+            var sb = new StringBuilder("此前各轮取图证据（共 " + attempts.Count + " 轮）：");
+            for (var i = 0; i < attempts.Count; i++)
+            {
+                if (sb.Length > 2000) { sb.Append("…（已截断）"); break; }
+                sb.Append("[第").Append(i + 1).Append("轮 ").Append(attempts[i].Message).Append("] ");
+            }
+            return sb.ToString();
+        }
+
+        private static byte[] TryCaptureOnce(Action<int> copyToClipboard, Action? pumpMessages, CancellationToken token, int attempt, int uiThread, IClipboardReader clipboard)
         {
             // Must actually clear: if a stale image survives here it would be
             // captured as the shape. ClearWithRetry aborts (never silently
             // continues) when the clipboard stays unavailable.
-            try { ClearWithRetry(); }
+            try { ClearWithRetry(clipboard); }
             catch (Exception ex) when (!IsCancellation(ex))
             { throw PhaseException("清空剪贴板", attempt, uiThread, ex); }
 
             uint seqBeforeCopy, seqAfterCopy;
-            string[] formatsAfterCopy;
+            string[]? formatsAfterCopy;
             try
             {
-                seqBeforeCopy = ClipboardSequenceNumber();
+                seqBeforeCopy = clipboard.GetSequenceNumber();
                 copyToClipboard(attempt);
-                seqAfterCopy = ClipboardSequenceNumber();
-                formatsAfterCopy = SafeGetFormats();
+                seqAfterCopy = clipboard.GetSequenceNumber();
+                formatsAfterCopy = clipboard.GetFormats();
             }
             catch (Exception ex) when (!IsCancellation(ex))
             { throw PhaseException("复制图片到剪贴板", attempt, uiThread, ex); }
@@ -180,10 +225,10 @@ namespace OfficeTranslate.Core
                     try
                     {
                         pumpMessages?.Invoke();
-                        if (Clipboard.ContainsImage())
+                        if (clipboard.ContainsImage())
                         {
                             containsImageSeen = true;
-                            image = Clipboard.GetImage();
+                            image = clipboard.GetImage();
                         }
                     }
                     catch (Exception ex) when (IsTransientClipboardFailure(ex))
@@ -200,24 +245,30 @@ namespace OfficeTranslate.Core
             catch (Exception ex) when (!IsCancellation(ex))
             { throw PhaseException("读取剪贴板图片", attempt, uiThread, ex); }
 
-            // f2cb7de review item 1: Word's CopyAsPicture sometimes places
-            // only an EnhancedMetafile (no bitmap/DIB) on the clipboard --
-            // Clipboard.ContainsImage() then never goes true and the attempt
-            // fails as NoImage even though a valid rendering exists. This
-            // fallback is purely additive: the bitmap path above is
+            // 4ca3b46 review P1: when the bitmap path finds nothing, try the
+            // NATIVE CF_ENHMETAFILE offer. The managed DataObject does not
+            // reliably recognize clipboard metafiles (documented
+            // limitation), so the authoritative check duplicates the Win32
+            // handle directly. Purely additive: the bitmap path above is
             // untouched, and when no metafile is present (or it cannot be
-            // rendered) the original NoImage failure is reported unchanged.
-            // A metafile that renders becomes PNG bytes; it can never turn
-            // a working capture into a failure.
+            // rendered) the original NoImage failure is reported unchanged
+            // -- now with the native format enumeration and the per-stage
+            // EMF diagnostic, so the next round can tell "clipboard truly
+            // empty" apart from "EMF offered but unreadable".
+            string emfDiag = "absent";
             if (image == null)
-                image = TryPollMetafileImage(pumpMessages, token);
+                image = TryPollMetafileImage(clipboard, pumpMessages, token, out emfDiag);
+
+            List<string>? nativeFormats = null;
+            if (image == null)
+                nativeFormats = clipboard.GetNativeFormats();
 
             if (image == null)
             {
                 if (readError != null)
                     throw PhaseException("读取剪贴板图片", attempt, uiThread, readError);
                 throw NoImageException(attempt, uiThread, seqBeforeCopy, seqAfterCopy,
-                    polls, containsImageSeen, formatsAfterCopy);
+                    polls, containsImageSeen, formatsAfterCopy, nativeFormats, emfDiag);
             }
 
             using (image)
@@ -242,67 +293,119 @@ namespace OfficeTranslate.Core
             }
         }
 
-        // f2cb7de review item 1: polls briefly for an EnhancedMetafile
-        // clipboard offer, which Clipboard.ContainsImage() does not
-        // recognize. Returns the rasterized image, or null when no
-        // metafile appears / it cannot be rendered (the caller then keeps
-        // the original NoImage failure). Never throws: a corrupt metafile
-        // must not break the capture loop.
-        private static System.Drawing.Image? TryPollMetafileImage(Action? pumpMessages, CancellationToken token)
+        // 4ca3b46 review P1: polls for a native CF_ENHMETAFILE offer and
+        // rasterizes it. Cancellation propagates (never swallowed, even from
+        // the pump callback); temporarily unavailable data is retried
+        // boundedly with the final stage recorded; unexpected errors are
+        // recorded as "error:<type>", never disguised as "no EMF".
+        // emfDiag is the final stage: "ok", "absent", "open-failed",
+        // "dup-failed", "unreadable", "unavailable", "over-limit:WxH",
+        // "bad-size", "error:<type>", "pump-error:<type>", "transient-busy".
+        private static System.Drawing.Image? TryPollMetafileImage(
+            IClipboardReader clipboard, Action? pumpMessages, CancellationToken token, out string emfDiag)
         {
+            emfDiag = "absent";
+            string lastStage = "absent";
             for (var i = 0; i < 5; i++)
             {
+                // Cancellation must propagate, never be swallowed.
                 token.ThrowIfCancellationRequested();
-                try
-                {
-                    pumpMessages?.Invoke();
-                    if (Clipboard.ContainsData(DataFormats.EnhancedMetafile))
-                        return RasterizeMetafileData(Clipboard.GetData(DataFormats.EnhancedMetafile));
-                }
-                catch (Exception ex) when (IsTransientClipboardFailure(ex)) { /* keep polling */ }
-                catch { return null; }
-                Thread.Sleep(50);
-            }
-            return null;
-        }
+                try { pumpMessages?.Invoke(); }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception ex) when (IsTransientClipboardFailure(ex))
+                { lastStage = "transient-busy"; Thread.Sleep(50); continue; }
+                catch (Exception ex)
+                { lastStage = "pump-error:" + ex.GetType().Name; Thread.Sleep(50); continue; }
 
-        private static System.Drawing.Image? RasterizeMetafileData(object? data)
-        {
-            try
-            {
-                using (var mf = ToMetafile(data))
+                Metafile? mf;
+                string stage;
+                try { mf = clipboard.GetNativeEnhMetafile(out stage); }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception ex) when (IsTransientClipboardFailure(ex))
+                { lastStage = "transient-busy"; Thread.Sleep(50); continue; }
+                catch (Exception ex)
+                { lastStage = "error:" + ex.GetType().Name; Thread.Sleep(50); continue; }
+
+                if (mf == null)
                 {
-                    if (mf == null) return null;
-                    int w = mf.Width, h = mf.Height;
-                    // Sanity bounds: a corrupt metafile must not allocate gigs.
-                    if (w <= 0 || h <= 0 || w > 12000 || h > 12000) return null;
-                    var bmp = new Bitmap(w, h);
-                    bmp.SetResolution(mf.HorizontalResolution, mf.VerticalResolution);
-                    using (var g = Graphics.FromImage(bmp))
+                    // Offered-but-not-ready (delayed rendering) and absent
+                    // are told apart by the stage; both get bounded retries.
+                    lastStage = stage;
+                    Thread.Sleep(50);
+                    continue;
+                }
+
+                using (mf)
+                {
+                    var img = RasterizeMetafile(mf, out var renderDiag);
+                    if (img != null) { emfDiag = "ok"; return img; }
+                    lastStage = renderDiag;
+                    // A definitive render verdict (oversize, bad size,
+                    // corrupt) cannot become readable by polling more;
+                    // stop early with the reason kept.
+                    if (renderDiag.StartsWith("over-limit", StringComparison.Ordinal)
+                        || renderDiag.StartsWith("error", StringComparison.Ordinal)
+                        || renderDiag.StartsWith("bad-size", StringComparison.Ordinal))
                     {
-                        g.Clear(Color.White);
-                        g.DrawImage(mf, 0, 0, w, h);
+                        emfDiag = lastStage;
+                        return null;
                     }
-                    return bmp;
+                    Thread.Sleep(50);
                 }
             }
-            catch { return null; }
+            emfDiag = lastStage;
+            return null;
         }
 
-        private static Metafile? ToMetafile(object? data)
+        // 4ca3b46 review P2: hard caps for EMF rasterization. 8000px per
+        // side and 32M pixels total (~128MB at 32bpp) -- far above any Word
+        // inline image at print resolution, far below the ~576MB a
+        // 12000x12000 bitmap would allocate.
+        private const int MaxMetafileDimensionPx = 8000;
+        private const long MaxMetafilePixels = 32_000_000;
+
+        // 4ca3b46 review P2: rasterizes with guaranteed resource release.
+        // The Bitmap is disposed on every failure path; ownership transfers
+        // to the caller only on success. diag: "ok", "bad-size",
+        // "over-limit:WxH", "error:<type>".
+        internal static System.Drawing.Image? RasterizeMetafile(Metafile? mf, out string diag)
         {
+            diag = "error:Unknown";
+            Bitmap? bmp = null;
             try
             {
-                if (data is Metafile mf) return (Metafile)mf.Clone();
-                if (data is MemoryStream ms)
+                if (mf == null) { diag = "bad-size"; return null; }
+                int w = mf.Width, h = mf.Height;
+                if (w <= 0 || h <= 0) { diag = "bad-size"; return null; }
+                if (w > MaxMetafileDimensionPx || h > MaxMetafileDimensionPx
+                    || (long)w * h > MaxMetafilePixels)
                 {
-                    ms.Position = 0;
-                    return new Metafile(ms);
+                    diag = "over-limit:" + w + "x" + h;
+                    return null;
                 }
-                if (data is byte[] bytes) return new Metafile(new MemoryStream(bytes));
+                bmp = new Bitmap(w, h);
+                bmp.SetResolution(mf.HorizontalResolution, mf.VerticalResolution);
+                using (var g = Graphics.FromImage(bmp))
+                {
+                    g.Clear(Color.White);
+                    g.DrawImage(mf, 0, 0, w, h);
+                }
+                diag = "ok";
+                var result = bmp;
+                bmp = null; // ownership transfers to the caller
+                return result;
             }
-            catch { }
-            return null;
+            catch (Exception ex)
+            {
+                diag = "error:" + ex.GetType().Name;
+                return null;
+            }
+            finally
+            {
+                // Non-null only when we did NOT hand the bitmap to the
+                // caller: a SetResolution/DrawImage failure used to leak it.
+                bmp?.Dispose();
+            }
         }
 
         // S2: the no-image failure is its own category. It carries the
@@ -318,7 +421,8 @@ namespace OfficeTranslate.Core
         private static NoImageCaptureException NoImageException(
             int attempt, int uiThread,
             uint seqBeforeCopy, uint seqAfterCopy,
-            int polls, bool containsImageSeen, string[] formatsAfterCopy)
+            int polls, bool containsImageSeen, string[]? formatsAfterCopy,
+            List<string>? nativeFormats, string emfDiag)
         {
             // The clipboard sequence number is process-global: it can also
             // change because of another process, and the observation window
@@ -331,9 +435,18 @@ namespace OfficeTranslate.Core
                 seqPart = "复制返回后剪贴板序号未变化（未观察到剪贴板写入；全局序号也可能被其他进程改变）";
             else
                 seqPart = "复制返回后剪贴板序号变化（观察到剪贴板写入，但不是可识别图像；全局序号也可能被其他进程改变）";
-            string formatPart = formatsAfterCopy == null || formatsAfterCopy.Length == 0
-                ? "无"
-                : string.Join(",", formatsAfterCopy);
+            // 4ca3b46 review P2: a failed format READ is reported as
+            // read-failed, never as "none" -- "none" now strictly means the
+            // enumeration succeeded and the clipboard offered no formats.
+            // The managed enumeration can miss native metafile offers
+            // (documented DataObject limitation), so the native list is the
+            // authoritative one for the EMF question.
+            string formatPart = formatsAfterCopy == null
+                ? "读取失败"
+                : formatsAfterCopy.Length == 0 ? "无" : string.Join(",", formatsAfterCopy);
+            string nativePart = nativeFormats == null
+                ? "读取失败"
+                : nativeFormats.Count == 0 ? "无" : string.Join(",", nativeFormats);
             string getImagePart = containsImageSeen
                 ? "ContainsImage 曾为真但 GetImage 返回 null"
                 : "ContainsImage 从未为真";
@@ -342,7 +455,8 @@ namespace OfficeTranslate.Core
                 " 次轮询内没有可识别图像（实际尝试 " + attempt + "/" + MaxAttempts +
                 "，线程 " + uiThread + "）。结果=NoImage，无底层异常。" +
                 seqPart + "（序号 " + seqBeforeCopy + "→" + seqAfterCopy + "）。" +
-                getImagePart + "。复制后剪贴板格式：" + formatPart + "。");
+                getImagePart + "。复制后剪贴板格式（托管）：" + formatPart +
+                "；原生格式：" + nativePart + "；EMF：" + emfDiag + "。");
         }
 
         // S1 diagnostics: every capture failure names the phase, the
@@ -386,36 +500,160 @@ namespace OfficeTranslate.Core
             return false;
         }
 
-        private static IDataObject? SafeGetDataObject()
-        {
-            try { return Clipboard.GetDataObject(); }
-            catch { return null; }
-        }
-
-        private static void SafeClear()
-        {
-            try { Clipboard.Clear(); }
-            catch { }
-        }
-
-        private static string[] SafeGetFormats()
+        // 4ca3b46 review P2: null = the read itself failed (distinct from
+        // "no formats"). A failed read must never be reported as "none".
+        private static string[]? SafeGetFormats()
         {
             try
             {
                 var data = Clipboard.GetDataObject();
                 return data != null ? data.GetFormats() : Array.Empty<string>();
             }
-            catch { return Array.Empty<string>(); }
+            catch { return null; }
+        }
+
+        // The real clipboard behind IClipboardReader. Runs on the Office UI
+        // (STA) thread like all clipboard access in this class.
+        private sealed class Win32ClipboardReader : IClipboardReader
+        {
+            public void Clear() => Clipboard.Clear();
+            public IDataObject? GetDataObject()
+            {
+                try { return Clipboard.GetDataObject(); }
+                catch { return null; }
+            }
+            public void SetDataObject(IDataObject data) => Clipboard.SetDataObject(data, true);
+            public uint GetSequenceNumber() => ClipboardSequenceNumber();
+            public bool ContainsImage() => Clipboard.ContainsImage();
+            public System.Drawing.Image? GetImage() => Clipboard.GetImage();
+            public string[]? GetFormats() => SafeGetFormats();
+            public List<string>? GetNativeFormats() => EnumNativeClipboardFormats();
+            public Metafile? GetNativeEnhMetafile(out string diag) => ReadNativeEnhMetafile(out diag);
         }
 
         // S2: the OS clipboard sequence number. It changes every time the
         // clipboard content is replaced, so comparing before/after the copy
         // tells whether the copy wrote anything at all. Windows-only; 0
         // means unavailable (never fabricated into a diagnosis).
+        private const uint CF_ENHMETAFILE = 14;
+
         private static class NativeClipboard
         {
             [DllImport("user32.dll")]
             public static extern uint GetClipboardSequenceNumber();
+
+            [DllImport("user32.dll", SetLastError = true)]
+            public static extern bool OpenClipboard(IntPtr hWndNewOwner);
+
+            [DllImport("user32.dll", SetLastError = true)]
+            public static extern bool CloseClipboard();
+
+            [DllImport("user32.dll")]
+            public static extern uint EnumClipboardFormats(uint format);
+
+            [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+            public static extern int GetClipboardFormatName(uint format, StringBuilder lpszFormatName, int cchMaxCount);
+
+            [DllImport("user32.dll")]
+            public static extern IntPtr GetClipboardData(uint uFormat);
+
+            [DllImport("gdi32.dll", SetLastError = true)]
+            public static extern IntPtr CopyEnhMetaFile(IntPtr hemfSrc, string? lpszFile);
+
+            [DllImport("gdi32.dll", SetLastError = true)]
+            public static extern bool DeleteEnhMetaFile(IntPtr hemf);
+        }
+
+        // 4ca3b46 review P1: native clipboard format enumeration for
+        // diagnostics ONLY -- format IDs/names, never content. Returns null
+        // when the clipboard cannot be opened (open-failed is distinct from
+        // empty). This is the authoritative answer to "is EMF actually on
+        // the clipboard?" -- the managed GetFormats() can miss native
+        // metafile offers (documented DataObject limitation), which is why
+        // the previous round's "formats: none" proved nothing.
+        private static List<string>? EnumNativeClipboardFormats()
+        {
+            var formats = new List<string>();
+            try
+            {
+                if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return null;
+                if (!NativeClipboard.OpenClipboard(IntPtr.Zero)) return null;
+                try
+                {
+                    uint f = 0;
+                    while ((f = NativeClipboard.EnumClipboardFormats(f)) != 0)
+                    {
+                        formats.Add(NativeFormatLabel(f));
+                        if (formats.Count >= 64) break; // sanity cap
+                    }
+                }
+                finally { NativeClipboard.CloseClipboard(); }
+            }
+            catch { return null; }
+            return formats;
+        }
+
+        private static string NativeFormatLabel(uint f)
+        {
+            switch (f)
+            {
+                case 1: return "1=CF_TEXT";
+                case 2: return "2=CF_BITMAP";
+                case 3: return "3=CF_METAFILEPICT";
+                case 8: return "8=CF_DIB";
+                case 13: return "13=CF_UNICODETEXT";
+                case 14: return "14=CF_ENHMETAFILE";
+                case 16: return "16=CF_LOCALE";
+                case 17: return "17=CF_DIBV5";
+                default: break;
+            }
+            try
+            {
+                var sb = new StringBuilder(128);
+                if (NativeClipboard.GetClipboardFormatName(f, sb, sb.Capacity) > 0)
+                    return f + "=" + sb.ToString();
+            }
+            catch { }
+            return f.ToString();
+        }
+
+        // 4ca3b46 review P1: Win32 CF_ENHMETAFILE retrieval. Duplicates the
+        // native handle -- the clipboard owns the original and it must never
+        // be deleted. The returned Metafile takes ownership of the duplicate
+        // and deletes it on dispose. diag stages: "absent" (no EMF offered),
+        // "open-failed", "dup-failed", "unreadable", "error:<type>".
+        private static Metafile? ReadNativeEnhMetafile(out string diag)
+        {
+            diag = "absent";
+            if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return null;
+            IntPtr copy = IntPtr.Zero;
+            try
+            {
+                if (!NativeClipboard.OpenClipboard(IntPtr.Zero)) { diag = "open-failed"; return null; }
+                try
+                {
+                    IntPtr hEmf = NativeClipboard.GetClipboardData(CF_ENHMETAFILE);
+                    if (hEmf == IntPtr.Zero) { diag = "absent"; return null; }
+                    copy = NativeClipboard.CopyEnhMetaFile(hEmf, null);
+                    if (copy == IntPtr.Zero) { diag = "dup-failed"; return null; }
+                }
+                finally { NativeClipboard.CloseClipboard(); }
+            }
+            catch (Exception ex)
+            {
+                diag = "error:" + ex.GetType().Name;
+                return null;
+            }
+            try
+            {
+                return new Metafile(copy, true);
+            }
+            catch
+            {
+                NativeClipboard.DeleteEnhMetaFile(copy);
+                diag = "unreadable";
+                return null;
+            }
         }
 
         private static uint ClipboardSequenceNumber()
@@ -435,13 +673,40 @@ namespace OfficeTranslate.Core
         // D1: this internal 5-attempt catch-all predates the outer cycle and
         // covers Clear() only; the outer "only transient-busy / no-image are
         // retried" rule is unchanged.
-        private static void ClearWithRetry()
+        private static void ClearWithRetry(IClipboardReader clipboard)
         {
             for (var attempt = 0; attempt < 5; attempt++)
             {
-                try { Clipboard.Clear(); return; }
+                try { clipboard.Clear(); return; }
                 catch when (attempt < 4) { Thread.Sleep(100); }
             }
         }
+    }
+
+    // 4ca3b46 review P1/P2: test seam. All clipboard access in the capture
+    // loop goes through this abstraction so unit tests can drive the loop
+    // (real EMF, temporarily unavailable, no data, exceptions, cancellation,
+    // oversize) without a real clipboard or Office.
+    internal interface IClipboardReader
+    {
+        // Clipboard lifecycle (save/clear/restore). May throw; the caller
+        // keeps the existing best-effort semantics around them.
+        void Clear();
+        IDataObject? GetDataObject();
+        void SetDataObject(IDataObject data);
+        uint GetSequenceNumber();
+        bool ContainsImage();
+        System.Drawing.Image? GetImage();
+        // Managed format names; null = the read itself failed (distinct from
+        // "no formats"). A failed read must never be reported as "none".
+        string[]? GetFormats();
+        // Native format IDs/names via Win32 enumeration; null = open/enum
+        // failed. Diagnostic only -- no clipboard content is ever read.
+        List<string>? GetNativeFormats();
+        // Win32 CF_ENHMETAFILE retrieval with handle duplication (the
+        // clipboard owns the original handle). Returns a caller-owned
+        // Metafile, or null; diag is the final stage: "absent",
+        // "open-failed", "dup-failed", "unreadable", "error:<type>".
+        Metafile? GetNativeEnhMetafile(out string diag);
     }
 }

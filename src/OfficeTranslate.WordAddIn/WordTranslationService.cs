@@ -44,6 +44,7 @@ namespace OfficeTranslate.WordAddIn
             _taskGeneration = 0;
             _taskViewType = -1;
             _taskWindowHwnd = 0;
+            _taskDocument = null;
             try
             {
                 // N1: every task takes a new selection generation, shared
@@ -68,6 +69,12 @@ namespace OfficeTranslate.WordAddIn
                     // ...and the entry window handle, so the view-fix never
                     // touches an unrelated window (b38abd3 review).
                     _taskWindowHwnd = SafeGet(() => _word.ActiveWindow.Hwnd, 0);
+                    // P0 (4ca3b46 review): bind the whole task to the entry
+                    // document. Every delayed write below (bookmarks, shapes,
+                    // cleanup, repaginate) must use TaskDocument(), never
+                    // _word.ActiveDocument: the user may switch documents
+                    // during the network wait.
+                    _taskDocument = SafeGet(() => _word.ActiveDocument, (Document)null);
                 });
             }
             catch { _taskSelection = null; }
@@ -236,7 +243,7 @@ namespace OfficeTranslate.WordAddIn
                             + " range=" + SafeGet(() => image.Anchor.Start, -1)
                             + "-" + SafeGet(() => image.Anchor.End, -1)
                             + " story=" + SafeGet(() => (int)image.Anchor.StoryType, -1)
-                            + " inlineShapes=" + SafeGet(() => _word.ActiveDocument.InlineShapes.Count, -1)
+                            + " inlineShapes=" + TaskDocInlineShapeCount()
                             + " error=" + ex.Message;
                         ImageOverlayDiagnostics.LogCaptureFailure("Word", detail);
                     }
@@ -482,7 +489,9 @@ namespace OfficeTranslate.WordAddIn
             catch { start = -1; end = -1; story = WdStoryType.wdMainTextStory; }
             try
             {
-                var doc = _word.ActiveDocument;
+                // P0 (4ca3b46 review): identity is proven against the ENTRY
+                // document, never the active one.
+                var doc = TaskDocument();
                 // R1: recognize verifiable staging bookmarks (OTTmp_<32hex>)
                 // in addition to canonical ones. A staging left by an
                 // interrupted tighten carries the full identity in its name;
@@ -607,9 +616,13 @@ namespace OfficeTranslate.WordAddIn
 
         private void CommitInlineOwnerResolution(Range imageRange, InlineOwnerResolution resolution)
         {
-            Document doc;
-            try { doc = _word.ActiveDocument; }
-            catch { return; }
+            // P0 (4ca3b46 review): bookmarks are committed to the ENTRY
+            // document. The old code read _word.ActiveDocument here -- after
+            // a network wait the user may have switched documents, and the
+            // bookmark would land in the wrong document. TaskDocument()
+            // stops explicitly when the entry document is gone instead of
+            // falling back to the active document.
+            Document doc = TaskDocument();
             // N2: recover interrupted tightens FIRST. A staging bookmark
             // "OTTmp_" + 32 hex maps deterministically to its canonical
             // "OTImg_" + 32 hex. If the canonical is missing, the previous
@@ -850,7 +863,8 @@ namespace OfficeTranslate.WordAddIn
         {
             failureReason = string.Empty;
             object anchor = image.Anchor.Duplicate;
-            var overlay = _word.ActiveDocument.Shapes.AddTextbox(
+            // P0 (4ca3b46 review): the overlay belongs to the entry document.
+            var overlay = TaskDocument().Shapes.AddTextbox(
                 Office.MsoTextOrientation.msoTextOrientationHorizontal,
                 image.Left, image.Top, plan.Width, plan.Height, ref anchor);
             // Inherit the source image's reference frame. A floating picture's
@@ -953,7 +967,8 @@ namespace OfficeTranslate.WordAddIn
                 bool overflowing;
                 try
                 {
-                    _word.ActiveDocument.Repaginate();
+                    // P0 (4ca3b46 review): repaginate the entry document.
+                    TaskDocument().Repaginate();
                     // D1: Word's TextFrame.Overflowing is bool in this interop
                     // assembly, not MsoTriState; read it directly.
                     overflowing = box.TextFrame.Overflowing;
@@ -983,7 +998,8 @@ namespace OfficeTranslate.WordAddIn
             var noteHeight = Math.Min(ImageOverlayLayout.MaxNoteHeightPt,
                 ImageOverlayLayout.EstimateNoteHeight(noteWidth, noteText, 9F));
             object anchor = image.Anchor.Duplicate;
-            var note = _word.ActiveDocument.Shapes.AddTextbox(
+            // P0 (4ca3b46 review): the side-note belongs to the entry document.
+            var note = TaskDocument().Shapes.AddTextbox(
                 Office.MsoTextOrientation.msoTextOrientationHorizontal,
                 noteLeft, noteTop, noteWidth, noteHeight, ref anchor);
             note.AlternativeText = ImageOverlayTags.NoteFor(ownerId);
@@ -1058,7 +1074,8 @@ namespace OfficeTranslate.WordAddIn
                 bool overflowing;
                 try
                 {
-                    _word.ActiveDocument.Repaginate();
+                    // P0 (4ca3b46 review): repaginate the entry document.
+                    TaskDocument().Repaginate();
                     // D1: bool, not MsoTriState (see ShrinkFontToFit).
                     overflowing = note.TextFrame.Overflowing;
                 }
@@ -1102,7 +1119,8 @@ namespace OfficeTranslate.WordAddIn
             // destroy other images' translations. Never touches other images'
             // results, even when their rects overlap.
             var doomed = new List<Shape>();
-            foreach (Shape shape in _word.ActiveDocument.Shapes)
+            // P0 (4ca3b46 review): cleanup scans the entry document's shapes.
+            foreach (Shape shape in TaskDocument().Shapes)
             {
                 string alt;
                 try { alt = shape.AlternativeText; } catch { continue; }
@@ -1148,8 +1166,9 @@ namespace OfficeTranslate.WordAddIn
         private List<ImageTarget> ReadDocumentImages()
         {
             var result = new List<ImageTarget>();
-            foreach (InlineShape shape in _word.ActiveDocument.InlineShapes) AddInlineImage(shape, result);
-            foreach (Shape shape in _word.ActiveDocument.Shapes) AddFloatingImage(shape, result);
+            // P0 (4ca3b46 review): enumerate the entry document's images.
+            foreach (InlineShape shape in TaskDocument().InlineShapes) AddInlineImage(shape, result);
+            foreach (Shape shape in TaskDocument().Shapes) AddFloatingImage(shape, result);
             return result;
         }
 
@@ -1365,7 +1384,57 @@ namespace OfficeTranslate.WordAddIn
         // skipped outright (viewfix=no-entry-window), never applied blind
         // to the restore-time active window.
         private int _taskWindowHwnd;
+        // P0 (4ca3b46 review): the entry document. The whole task is bound
+        // to it; see TaskDocument().
+        private Document? _taskDocument;
         private int _taskGeneration;
+
+        // P0 (4ca3b46 review): the entire task is bound to the entry
+        // document. Every delayed write (bookmarks, shapes, cleanup,
+        // repaginate) must go through this guard, never _word.ActiveDocument:
+        // the user may switch documents during the network wait, and writing
+        // to the newly-active document would corrupt it. When the entry
+        // document is gone (closed) or unreadable, the task stops explicitly
+        // with a clear error -- it never falls back to whatever document
+        // happens to be active.
+        private Document TaskDocument()
+        {
+            var doc = _taskDocument;
+            if (doc == null)
+                throw new InvalidOperationException("任务入口文档不可用，任务已停止，未写入任何文档。");
+            try
+            {
+                // Touch a cheap property: a closed document's RCW throws here
+                // (COMException / InvalidComObjectException), so a document
+                // closed mid-task is detected before any write is attempted.
+                var _ = doc.Name;
+            }
+            catch (Exception ex) when (!(ex is OperationCanceledException))
+            {
+                throw new InvalidOperationException("源文档已关闭或不可用，任务已停止，未写入其他文档。", ex);
+            }
+            return doc;
+        }
+
+        // Best-effort entry document for read-only diagnostics; null when
+        // unavailable. Never throws.
+        private Document? TryTaskDocument()
+        {
+            try { return TaskDocument(); }
+            catch { return null; }
+        }
+
+        // Best-effort inline-shape count of the entry document for
+        // diagnostics; -1 when unavailable. Never throws.
+        private int TaskDocInlineShapeCount()
+        {
+            try
+            {
+                var doc = TryTaskDocument();
+                return doc == null ? -1 : doc.InlineShapes.Count;
+            }
+            catch { return -1; }
+        }
 
         // S1: metadata-only snapshot of a restore target range. Never throws.
         private string SnapshotRangeState(Range? range)
@@ -1535,7 +1604,7 @@ namespace OfficeTranslate.WordAddIn
                     + " targetInline=" + SafeGet(() => range.InlineShapes.Count, -1)
                     + " before=[" + beforeState + "]"
                     + (afterSelectState != null ? " afterSelect=[" + afterSelectState + "] selInline=" + selInline : "")
-                    + " inlineShapes=" + SafeGet(() => _word.ActiveDocument.InlineShapes.Count, -1)
+                    + " inlineShapes=" + TaskDocInlineShapeCount()
                     + (ex != null
                         ? " error=" + ex.GetType().Name
                             + " hresult=0x" + SafeGet(() => Marshal.GetHRForException(ex).ToString("X8"), "?")
@@ -1597,7 +1666,8 @@ namespace OfficeTranslate.WordAddIn
         private List<Target> ReadDocumentParagraphs()
         {
             var result = new List<Target>();
-            foreach (Paragraph paragraph in _word.ActiveDocument.StoryRanges[WdStoryType.wdMainTextStory].Paragraphs)
+            // P0 (4ca3b46 review): read the entry document's paragraphs.
+            foreach (Paragraph paragraph in TaskDocument().StoryRanges[WdStoryType.wdMainTextStory].Paragraphs)
             {
                 var target = ToTarget(paragraph.Range);
                 if (HasTranslatableText(target.Text)) result.Add(target);
