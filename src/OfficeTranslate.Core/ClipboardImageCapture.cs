@@ -190,11 +190,17 @@ namespace OfficeTranslate.Core
             {
                 sb.Append("[第").Append(i + 1).Append("轮 ").Append(attempts[i].Message).Append("] ");
             }
+            // afa3812 review P2: the old code truncated to maxLength and THEN
+            // appended the marker, so the result could strictly exceed the
+            // cap. Reserve the marker's length up front, and never leave a
+            // dangling high surrogate at the cut point.
             const int maxLength = 2000;
+            const string truncMark = "…（已截断）";
             if (sb.Length > maxLength)
             {
-                sb.Length = maxLength;
-                sb.Append("…（已截断）");
+                sb.Length = maxLength - truncMark.Length;
+                if (sb.Length > 0 && char.IsHighSurrogate(sb[sb.Length - 1])) sb.Length--;
+                sb.Append(truncMark);
             }
             return sb.ToString();
         }
@@ -598,13 +604,20 @@ namespace OfficeTranslate.Core
                     // must be reported as read-failed, never as "none".
                     // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-enumclipboardformats
                     bool reachedEnd = false;
+                    bool hitCap = false;
                     uint f = 0;
-                    while (formats.Count < 64) // sanity cap
+                    while (true)
                     {
+                        // afa3812 review P2: the old silent 64-item cap could
+                        // be misread as a complete enumeration; mark the
+                        // truncation so a partial list is never presented as
+                        // the full native format set.
+                        if (formats.Count >= 64) { hitCap = true; break; }
                         f = NativeClipboard.EnumClipboardFormats(f);
                         if (f == 0) { reachedEnd = true; break; }
                         formats.Add(NativeFormatLabel(f));
                     }
+                    if (hitCap) formats.Add("…(仅列出前64项)");
                     if (reachedEnd && Marshal.GetLastWin32Error() != 0) return null;
                 }
                 finally { NativeClipboard.CloseClipboard(); }

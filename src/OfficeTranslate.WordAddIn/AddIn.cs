@@ -149,18 +149,43 @@ namespace OfficeTranslate.WordAddIn
                 // this shows whether the selection is still on the target
                 // when the AddIn teardown starts.
                 WordSelectionProbe.Log(_word, "before_progress_close", taskWindow);
-                _progressForm?.CloseSafely(); _progressForm = null;
+                // P1 (afa3812 review): the progress form was owned by the
+                // task window; if that window died mid-task, Close must not
+                // throw and mask the real error below.
+                try { _progressForm?.CloseSafely(); } catch { }
+                _progressForm = null;
                 WordSelectionProbe.Log(_word, "after_progress_close", taskWindow);
-                var window = taskWindow;
                 ui.Invoke(() =>
                 {
+                    // P1 (afa3812 review): the cached task window may have
+                    // been destroyed while the task waited on the network
+                    // (user closed the source document). Owning the error
+                    // MessageBox with a dead HWND is the prime suspect for
+                    // the stuck blank modal that blocked Word's exit in
+                    // review (error_dialog_shown logged, but no
+                    // error_dialog_dismissed / after_final_restore), so the
+                    // owner is re-validated here on the UI thread: prefer
+                    // the cached window while alive, else the current live
+                    // ActiveWindow of this Word instance, else ownerless.
+                    var window = ResolveErrorDialogOwner(taskWindow);
                     // S1: the old bare markers could not answer what the
                     // selection was when the dialog appeared or was
                     // dismissed; the probe snapshots it at both points.
                     WordSelectionProbe.Log(_word, "error_dialog_shown", window);
-                    if (window != IntPtr.Zero) MessageBox.Show(new TranslationProgressForm.WindowHandle(window), ex.Message, "OfficeTranslate", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                    else MessageBox.Show(ex.Message, "OfficeTranslate", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                    WordSelectionProbe.Log(_word, "error_dialog_dismissed", window);
+                    try
+                    {
+                        if (window != IntPtr.Zero) MessageBox.Show(new TranslationProgressForm.WindowHandle(window), ex.Message, "OfficeTranslate", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                        else MessageBox.Show(ex.Message, "OfficeTranslate", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    }
+                    finally
+                    {
+                        // P1: the dismiss probe must be observable even when
+                        // Show throws, so the next review can tell "dialog
+                        // hung" apart from "dialog teardown threw"; the
+                        // outer finally (after_final_restore) then always
+                        // runs and Word is never left blocked by us.
+                        WordSelectionProbe.Log(_word, "error_dialog_dismissed", window);
+                    }
                 });
             }
             finally
@@ -219,6 +244,40 @@ namespace OfficeTranslate.WordAddIn
             }
             catch { return IntPtr.Zero; }
         }
+
+        // P1 (afa3812 review): re-validate the cached task window right
+        // before it is used as the error dialog's owner. Must be called on
+        // the UI thread (reads _word.ActiveWindow via COM). Never throws;
+        // the resolution is logged metadata-only so the next review can see
+        // whether the cached HWND was dead and which window was chosen.
+        private IntPtr ResolveErrorDialogOwner(IntPtr cachedTaskWindow)
+        {
+            bool cachedValid = false;
+            try { cachedValid = cachedTaskWindow != IntPtr.Zero && IsWindow(cachedTaskWindow); }
+            catch { cachedValid = false; }
+            IntPtr activeHwnd = IntPtr.Zero;
+            int windowCount = -1;
+            try
+            {
+                var active = _word?.ActiveWindow;
+                if (active != null) activeHwnd = new IntPtr(active.Hwnd);
+                if (activeHwnd != IntPtr.Zero && !IsWindow(activeHwnd)) activeHwnd = IntPtr.Zero;
+            }
+            catch { activeHwnd = IntPtr.Zero; }
+            try { windowCount = _word?.Windows.Count ?? -1; } catch { windowCount = -1; }
+            var chosen = cachedValid ? cachedTaskWindow : activeHwnd;
+            ImageOverlayDiagnostics.LogCaptureFailure("Word",
+                "error_dialog_owner stage=resolve"
+                + " cachedHwnd=" + cachedTaskWindow.ToInt64().ToString("X")
+                + " cachedValid=" + (cachedValid ? "1" : "0")
+                + " activeHwnd=" + activeHwnd.ToInt64().ToString("X")
+                + " wordWindows=" + windowCount
+                + " chosenHwnd=" + chosen.ToInt64().ToString("X"));
+            return chosen;
+        }
+
+        [DllImport("user32.dll")]
+        private static extern bool IsWindow(IntPtr hWnd);
 
         public void OnConnection(object application, Extensibility.ext_ConnectMode connectMode, object addInInst, ref Array custom)
         {

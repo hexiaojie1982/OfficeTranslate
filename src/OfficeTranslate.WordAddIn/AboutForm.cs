@@ -71,7 +71,12 @@ namespace OfficeTranslate.WordAddIn
             // version dynamically (CurrentVersion); every section below
             // carries its own version header so the entry text stays
             // consistent across the three hosts sharing this window.
-            return "OfficeTranslate " + CurrentVersion + "\r\n" + ChangelogVersion126Text();
+            return "OfficeTranslate " + CurrentVersion + "\r\n" + ChangelogVersion127Text();
+        }
+
+        private string ChangelogVersion127Text()
+        {
+            return "OfficeTranslate 2.1.27\r\n• 修复等待网络时关闭源文档后错误提示的收尾问题：错误框不再使用已销毁的源文档窗口作为 owner，关闭前校验窗口存活，失效时改用当前 Word 实例的存活窗口或无 owner 显示；错误框关闭与最终恢复均有日志，不再留下阻塞 Word 操作与退出的空白窗口。Excel/PowerPoint 错误框做同类 owner 校验。\r\n• 多轮取图证据截断严格限定 2000 字符（含截断标记长度），截断不拆散代理对。\r\n• Word 图片预捕获增加 512MB 总量上限：超限时在写回任何内容前明确停止并提示分批翻译。\r\n• 原生剪贴板格式枚举达到 64 项上限时标注“仅列出前64项”，不再把部分列表当作完整枚举。\r\n\r\n" + ChangelogVersion126Text();
         }
 
         private string ChangelogVersion126Text()

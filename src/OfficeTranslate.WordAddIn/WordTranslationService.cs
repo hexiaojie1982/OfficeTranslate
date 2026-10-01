@@ -104,12 +104,26 @@ namespace OfficeTranslate.WordAddIn
                 // appear one by one. If a capture fails the task stops
                 // before anything is written (no partial overlays).
                 var capturedImages = new List<Tuple<ImageTarget, byte[]>>();
+                // afa3812 review P2: pre-capture holds every PNG in memory
+                // until processing finishes. A pathological document (many
+                // hi-res images) could exhaust memory, so enforce a total
+                // byte budget and fail fast with a clear message instead of
+                // OOMing mid-task. The budget never interleaves a commit
+                // before all captures are done (that would reintroduce the
+                // 0x800A11FD hazard this pre-capture was built to avoid):
+                // exceeding it stops the task before anything is written.
+                const long maxPreCaptureBytes = 512L * 1024 * 1024;
+                long capturedBytes = 0;
                 for (var i = 0; i < images.Count; i++)
                 {
                     token.ThrowIfCancellationRequested();
                     var current = i + 1;
                     progress($"OfficeTranslate：正在捕获图片 {current}/{total}");
                     var bytes = await CaptureImageAsync(images[i], current, token, ui);
+                    capturedBytes += bytes.LongLength;
+                    if (capturedBytes > maxPreCaptureBytes)
+                        throw new InvalidOperationException(
+                            "图片数据总量已超过 512MB 上限（已捕获 " + current + " 张），任务已停止，未写入任何内容。请分批翻译。");
                     capturedImages.Add(Tuple.Create(images[i], bytes));
                     progress($"OfficeTranslate：已捕获 {current}/{total}");
                 }

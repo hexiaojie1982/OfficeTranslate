@@ -163,6 +163,9 @@ namespace OfficeTranslate.Tests
         {
             // 3b2a252 review: one very long round must not push the combined
             // evidence over the cap -- truncation is checked after building.
+            // afa3812 review P2: the 2000 cap is strict now (the truncation
+            // marker's length is reserved), so assert on the evidence
+            // section itself, not just the whole message.
             var manyFormats = new List<string>();
             for (int i = 0; i < 64; i++)
                 manyFormats.Add("49" + i.ToString("000") + "=SomeVeryLongCustomClipboardFormatName_" + i);
@@ -178,7 +181,11 @@ namespace OfficeTranslate.Tests
             }
             catch (InvalidOperationException ex)
             {
-                Assert.IsTrue(ex.Message.Length <= 2100, "evidence not capped: " + ex.Message.Length);
+                var marker = "此前各轮取图证据";
+                var idx = ex.Message.IndexOf(marker, StringComparison.Ordinal);
+                Assert.IsTrue(idx >= 0, "evidence section missing");
+                var evidence = ex.Message.Substring(idx);
+                Assert.IsTrue(evidence.Length <= 2000, "evidence exceeds 2000: " + evidence.Length);
                 StringAssert.Contains(ex.Message, "已截断");
             }
         }
