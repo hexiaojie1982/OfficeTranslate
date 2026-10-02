@@ -88,17 +88,21 @@ namespace OfficeTranslate.Core
         // the attempt explicitly keeps per-attempt diagnostics (and the
         // "attempt N/3" message) on the loop's numbering by construction.
         public static byte[] CapturePng(Action<int> copyToClipboard, Action? pumpMessages, CancellationToken token)
+            => CapturePng(copyToClipboard, pumpMessages, token, ImageCaptureBudget.MaxSinglePngBytes);
+
+        public static byte[] CapturePng(Action<int> copyToClipboard, Action? pumpMessages, CancellationToken token, long maxPngBytes)
         {
             if (copyToClipboard == null) throw new ArgumentNullException(nameof(copyToClipboard));
-            return CapturePng(copyToClipboard, pumpMessages, token, new Win32ClipboardReader());
+            return CapturePng(copyToClipboard, pumpMessages, token, new Win32ClipboardReader(), maxPngBytes);
         }
 
         // 4ca3b46 review P2: internal test seam -- the clipboard is injected
         // so unit tests can drive the capture loop without a real clipboard.
-        internal static byte[] CapturePng(Action<int> copyToClipboard, Action? pumpMessages, CancellationToken token, IClipboardReader clipboard)
+        internal static byte[] CapturePng(Action<int> copyToClipboard, Action? pumpMessages, CancellationToken token, IClipboardReader clipboard, long maxPngBytes = ImageCaptureBudget.MaxSinglePngBytes)
         {
             if (copyToClipboard == null) throw new ArgumentNullException(nameof(copyToClipboard));
             if (clipboard == null) throw new ArgumentNullException(nameof(clipboard));
+            if (maxPngBytes <= 0) throw new ImageCaptureLimitException();
             int uiThread = Thread.CurrentThread.ManagedThreadId;
             IDataObject? saved = null;
             try { saved = clipboard.GetDataObject(); }
@@ -115,7 +119,7 @@ namespace OfficeTranslate.Core
                     token.ThrowIfCancellationRequested();
                     try
                     {
-                        return TryCaptureOnce(copyToClipboard, pumpMessages, token, attempt, uiThread, clipboard);
+                        return TryCaptureOnce(copyToClipboard, pumpMessages, token, attempt, uiThread, clipboard, maxPngBytes);
                     }
                     catch (Exception ex) when (IsTransientClipboardFailure(ex))
                     {
@@ -205,7 +209,7 @@ namespace OfficeTranslate.Core
             return sb.ToString();
         }
 
-        private static byte[] TryCaptureOnce(Action<int> copyToClipboard, Action? pumpMessages, CancellationToken token, int attempt, int uiThread, IClipboardReader clipboard)
+        private static byte[] TryCaptureOnce(Action<int> copyToClipboard, Action? pumpMessages, CancellationToken token, int attempt, int uiThread, IClipboardReader clipboard, long maxPngBytes)
         {
             // Must actually clear: if a stale image survives here it would be
             // captured as the shape. ClearWithRetry aborts (never silently
@@ -286,10 +290,9 @@ namespace OfficeTranslate.Core
             }
 
             using (image)
-            using (var stream = new MemoryStream())
             {
-                image.Save(stream, ImageFormat.Png);
-                return stream.ToArray();
+                token.ThrowIfCancellationRequested();
+                return ImageCaptureBudget.EncodePng(image, maxPngBytes);
             }
         }
 

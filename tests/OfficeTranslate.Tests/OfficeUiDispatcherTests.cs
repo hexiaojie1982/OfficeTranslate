@@ -145,6 +145,87 @@ namespace OfficeTranslate.Tests
             }
         }
 
+        [TestMethod]
+        public void RestoreGate_RealStaQueueHeldBeyondTwoSeconds_LateCallbackIsNoOp()
+        {
+            using (var pump = StartPumpingSta())
+            using (var entered = new ManualResetEventSlim())
+            using (var release = new ManualResetEventSlim())
+            {
+                var blocker = pump.Dispatcher.InvokeAsync(() => { entered.Set(); release.Wait(10000); });
+                Assert.IsTrue(entered.Wait(5000));
+                var calls = 0;
+                var reason = "";
+                try
+                {
+                    var restore = UiRestoreGate.RunAsync(pump.Dispatcher, () => true,
+                        () => Interlocked.Increment(ref calls), r => reason = r);
+                    Assert.IsTrue(restore.Wait(3000), "expiry must not need the blocked UI context");
+                    Assert.AreEqual("expired", reason);
+                }
+                finally { release.Set(); }
+                Assert.IsTrue(blocker.Wait(5000));
+                pump.Dispatcher.Invoke(() => { }); // drains queued restore
+                Assert.AreEqual(0, calls);
+            }
+        }
+
+        [TestMethod]
+        public void RestoreGate_SupersededGeneration_NoOpOnRealStaQueue()
+        {
+            using (var pump = StartPumpingSta())
+            using (var entered = new ManualResetEventSlim())
+            using (var release = new ManualResetEventSlim())
+            {
+                var blocker = pump.Dispatcher.InvokeAsync(() => { entered.Set(); release.Wait(10000); });
+                Assert.IsTrue(entered.Wait(5000));
+                var generation = 1;
+                var calls = 0;
+                var reason = "";
+                var restore = UiRestoreGate.RunAsync(pump.Dispatcher, () => Volatile.Read(ref generation) == 1,
+                    () => calls++, r => reason = r);
+                Interlocked.Increment(ref generation);
+                release.Set();
+                Assert.IsTrue(restore.Wait(5000));
+                Assert.AreEqual("superseded", reason);
+                Assert.AreEqual(0, calls);
+                Assert.IsTrue(blocker.Wait(5000));
+            }
+        }
+
+        [TestMethod]
+        public void RestoreGate_StartedCallbackCanFinish_AndNormalRestoreRunsOnce()
+        {
+            using (var pump = StartPumpingSta())
+            using (var entered = new ManualResetEventSlim())
+            using (var release = new ManualResetEventSlim())
+            {
+                var calls = 0;
+                var reason = "";
+                var restore = UiRestoreGate.RunAsync(pump.Dispatcher, () => true,
+                    () => { entered.Set(); release.Wait(10000); calls++; }, r => reason = r, waitMs: 100);
+                try
+                {
+                    Assert.IsTrue(entered.Wait(5000));
+                    Assert.IsTrue(restore.Wait(2000));
+                    Assert.AreEqual("", reason); // running callback is not expired
+                }
+                finally { release.Set(); }
+                pump.Dispatcher.Invoke(() => { });
+                Assert.AreEqual(1, calls);
+                UiRestoreGate.RunAsync(pump.Dispatcher, () => true, () => calls++).Wait(5000);
+                Assert.AreEqual(2, calls);
+            }
+        }
+
+        [TestMethod]
+        public void RestoreGate_CallbackFailureDoesNotMaskTaskOutcome()
+        {
+            using (var pump = StartPumpingSta())
+                Assert.IsTrue(UiRestoreGate.RunAsync(pump.Dispatcher, () => true,
+                    () => throw new InvalidOperationException("test")).Wait(5000));
+        }
+
         private sealed class StaPump : IDisposable
         {
             private readonly Thread _sta;
