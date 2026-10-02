@@ -103,7 +103,6 @@ namespace OfficeTranslate.WordAddIn
                 // presentation stays per-image below, so overlays still
                 // appear one by one. If a capture fails the task stops
                 // before anything is written (no partial overlays).
-                var capturedImages = new List<Tuple<ImageTarget, byte[]>>();
                 // afa3812 review P2: pre-capture holds every PNG in memory
                 // until processing finishes. A pathological document (many
                 // hi-res images) could exhaust memory, so enforce a total
@@ -112,21 +111,11 @@ namespace OfficeTranslate.WordAddIn
                 // before all captures are done (that would reintroduce the
                 // 0x800A11FD hazard this pre-capture was built to avoid):
                 // exceeding it stops the task before anything is written.
-                const long maxPreCaptureBytes = 512L * 1024 * 1024;
-                long capturedBytes = 0;
-                for (var i = 0; i < images.Count; i++)
-                {
-                    token.ThrowIfCancellationRequested();
-                    var current = i + 1;
-                    progress($"OfficeTranslate：正在捕获图片 {current}/{total}");
-                    var bytes = await CaptureImageAsync(images[i], current, token, ui);
-                    capturedBytes += bytes.LongLength;
-                    if (capturedBytes > maxPreCaptureBytes)
-                        throw new InvalidOperationException(
-                            "图片数据总量已超过 512MB 上限（已捕获 " + current + " 张），任务已停止，未写入任何内容。请分批翻译。");
-                    capturedImages.Add(Tuple.Create(images[i], bytes));
-                    progress($"OfficeTranslate：已捕获 {current}/{total}");
-                }
+                var capturedImages = await ImagePreCapture.CaptureAllAsync(images,
+                    (image, current, remaining) => CaptureImageAsync(image, current, token, ui, remaining),
+                    token, (current, done) => progress(done
+                        ? $"OfficeTranslate：已捕获 {current}/{total}"
+                        : $"OfficeTranslate：正在捕获图片 {current}/{total}"));
                 ui.LogProbe("image_capture_after");
                 for (var i = 0; i < capturedImages.Count; i++)
                 {
@@ -220,28 +209,10 @@ namespace OfficeTranslate.WordAddIn
         {
             var selection = _taskSelection;
             if (selection == null) return;
-            var ticket = new RestoreTicket(selection, _taskGeneration,
-                Stopwatch.GetTimestamp());
-            try
-            {
-                var restore = ui.InvokeAsync(() => ClaimAndRestore(ticket));
-                var finished = await Task.WhenAny(restore, Task.Delay(SelectionRestoreWaitMs));
-                if (!ReferenceEquals(finished, restore))
-                {
-                    // Wait gave up first: expire the ticket so the
-                    // still-queued callback becomes a no-op instead of
-                    // overwriting the user's newer selection. Atomic:
-                    // only pending -> expired. A callback that already
-                    // claimed running is untouched.
-                    if (Interlocked.CompareExchange(ref ticket.State,
-                            RestoreTicket.Expired, RestoreTicket.Pending) == RestoreTicket.Pending)
-                    {
-                        try { ImageOverlayDiagnostics.LogCaptureFailure("Word", "selection_restore_expired"); }
-                        catch { }
-                    }
-                }
-            }
-            catch { }
+            var generation = _taskGeneration;
+            await UiRestoreGate.RunAsync(ui,
+                () => generation == Volatile.Read(ref _selectionGeneration),
+                () => RestoreSelectionWithDiag(selection, "task"), LogRestoreSkipped);
         }
 
         // P1 (3b2a252 review): capture phase. Runs on the Office UI (STA)
@@ -249,7 +220,7 @@ namespace OfficeTranslate.WordAddIn
         // I/O and no document mutation (no bookmarks, no overlays, no
         // cleanup), so every image is captured under the same pristine
         // conditions as the review's no-write-back control run.
-        private async Task<byte[]> CaptureImageAsync(ImageTarget image, int imageNumber, CancellationToken token, OfficeUiDispatcher ui)
+        private async Task<byte[]> CaptureImageAsync(ImageTarget image, int imageNumber, CancellationToken token, OfficeUiDispatcher ui, long maxPngBytes)
         {
             // M2: clipboard capture touches COM and the clipboard, so it
             // runs on the Office UI (STA) thread explicitly. Async
@@ -271,7 +242,7 @@ namespace OfficeTranslate.WordAddIn
                     captured = ClipboardImageCapture.CapturePng(
                         image.CopyAsPicture,
                         () => System.Windows.Forms.Application.DoEvents(),
-                        token);
+                        token, maxPngBytes);
                 }
                 catch (Exception ex) when (!(ex is OperationCanceledException))
                 {
@@ -1385,29 +1356,6 @@ namespace OfficeTranslate.WordAddIn
             }
         }
 
-        // N1: one-shot restore ticket for the task-end restore. State is
-        // claimed with Interlocked so exactly one of "callback started" /
-        // "wait gave up" wins; an expired ticket makes a late callback a
-        // no-op instead of clobbering the user's newer selection.
-        private sealed class RestoreTicket
-        {
-            public const int Pending = 0;
-            public const int Running = 1;
-            public const int Expired = 2;
-            public int State = Pending;
-            public readonly Range? Selection;
-            public readonly int Generation;
-            public readonly long PostedTicks;
-            public RestoreTicket(Range? selection, int generation, long postedTicks)
-            {
-                Selection = selection;
-                Generation = generation;
-                PostedTicks = postedTicks;
-            }
-        }
-
-        private const int SelectionRestoreWaitMs = 2000;
-
         // N1: shared across task instances (a new service is created per
         // task). Bumped at every task entry on the UI thread; a restore
         // ticket from an older generation must never overwrite a newer
@@ -1538,7 +1486,7 @@ namespace OfficeTranslate.WordAddIn
             // Restore the entry view FIRST so the Select() precondition
             // matches the entry state. Best-effort, never throws; runs inside
             // the ticket claim so a stale/expired ticket never touches the
-            // view (ClaimAndRestore returns before reaching here).
+            // view (UiRestoreGate rejects it before reaching here).
             string viewFix = "skip";
             try
             {
@@ -1597,36 +1545,6 @@ namespace OfficeTranslate.WordAddIn
             catch { }
         }
 
-        private void ClaimAndRestore(RestoreTicket ticket)
-        {
-            // N1: runs on the UI thread. Atomically claims the ticket, then
-            // refuses a restore that is expired or superseded before
-            // touching COM.
-            if (Interlocked.CompareExchange(ref ticket.State,
-                    RestoreTicket.Running, RestoreTicket.Pending) != RestoreTicket.Pending)
-                return; // expired (wait already gave up) or double claim: no-op
-            if (ticket.Generation != _selectionGeneration)
-            {
-                LogRestoreSkipped("superseded");
-                return;
-            }
-            if (ElapsedMs(ticket.PostedTicks) > SelectionRestoreWaitMs)
-            {
-                // Backstop for the corner where the wait path itself never
-                // ran: a restore landing this late would clobber newer
-                // user intent, so it is dropped like an expired ticket.
-                LogRestoreSkipped("stale");
-                return;
-            }
-            // S1: instrumented restore (target vs actual before/after); see
-            // RestoreSelectionWithDiag. Still best-effort and never throws.
-            RestoreSelectionWithDiag(ticket.Selection, "task");
-        }
-
-        private static long ElapsedMs(long startTicks)
-        {
-            return (Stopwatch.GetTimestamp() - startTicks) * 1000 / Stopwatch.Frequency;
-        }
 
         private static void LogRestoreSkipped(string reason)
         {

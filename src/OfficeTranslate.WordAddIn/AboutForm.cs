@@ -71,7 +71,7 @@ namespace OfficeTranslate.WordAddIn
             // version dynamically (CurrentVersion); every section below
             // carries its own version header so the entry text stays
             // consistent across the three hosts sharing this window.
-            return "OfficeTranslate " + CurrentVersion + "\r\n" + ChangelogVersion128Text();
+            return "OfficeTranslate " + CurrentVersion + "\r\n• Word 图片预捕获使用可验证的容量预算，累计上限 512MiB；Word/Excel 剪贴板 PNG 编码过程中限制单图 128MiB，并检查 Word 的剩余预算。该限制不代表 Office 总进程内存上限。\r\n• 最终选区恢复采用共用一次性 UI 票据，超时失效不依赖 Office UI 消息队列，过期及被新任务取代的回调不触碰选区。\r\n\r\n" + ChangelogVersion128Text();
         }
 
         private string ChangelogVersion128Text()
