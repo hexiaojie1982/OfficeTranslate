@@ -15,7 +15,23 @@ namespace OfficeTranslate.Core
 {
     public sealed class TranslationClient : IDisposable
     {
-        private readonly HttpClient _http = new HttpClient();
+        private readonly HttpClient _http;
+        private readonly HttpClient _imageHttp;
+        private readonly TimeSpan _imageRequestTimeout;
+        internal const int ImageRequestTimeoutSeconds = 600;
+        public TranslationClient() : this(new HttpClient(), new HttpClient(), TimeSpan.FromSeconds(ImageRequestTimeoutSeconds)) { }
+        // A shared fake handler is owned exactly once (by the image client).
+        internal TranslationClient(HttpMessageHandler handler, TimeSpan? imageRequestTimeout = null)
+            : this(new HttpClient(handler, false), new HttpClient(handler), imageRequestTimeout ?? TimeSpan.FromSeconds(ImageRequestTimeoutSeconds)) { }
+        private TranslationClient(HttpClient textHttp, HttpClient imageHttp, TimeSpan imageRequestTimeout)
+        {
+            if (imageRequestTimeout <= TimeSpan.Zero || imageRequestTimeout.TotalMilliseconds > int.MaxValue)
+            { textHttp.Dispose(); imageHttp.Dispose(); throw new ArgumentOutOfRangeException(nameof(imageRequestTimeout)); }
+            _http = textHttp; _imageHttp = imageHttp; _imageRequestTimeout = imageRequestTimeout;
+            // Only this IMAGE transport is unlimited. Each image send below
+            // has its own linked 600s deadline; text Configure stays unchanged.
+            _imageHttp.Timeout = Timeout.InfiniteTimeSpan;
+        }
         // Image OCR embeds a whole PNG as base64 in the request body, which can be
         // megabytes long. Raising MaxJsonLength removes the serializer as a
         // possible failure point for large payloads. (The exact default
@@ -48,6 +64,8 @@ namespace OfficeTranslate.Core
             var anyTranslated = false;
             var anySkipped = false;
             var needsReview = false;
+            var fallbackTranslated = 0;
+            var fallbackReview = 0;
             foreach (var chunk in chunks)
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -57,16 +75,18 @@ namespace OfficeTranslate.Core
                 anyTranslated |= !result.SkippedNoSource;
                 anySkipped |= result.SkippedNoSource;
                 needsReview |= result.NeedsReview;
+                fallbackTranslated += result.FallbackTranslatedParagraphs;
+                fallbackReview += result.FallbackReviewParagraphs;
             }
             var completed = output.ToString();
             if (anyChanged && !needsReview)
             {
                 TranslationSessionCache.Store(cacheKey, completed);
-                return TranslationResult.Translated(completed);
+                return TranslationResult.Translated(completed, false, fallbackTranslated, fallbackReview);
             }
-            if (anyChanged) return TranslationResult.Translated(completed, true);
+            if (anyChanged) return TranslationResult.Translated(completed, true, fallbackTranslated, fallbackReview);
             if (!anyTranslated && anySkipped) return TranslationResult.Skipped(text);
-            return TranslationResult.Unchanged(text);
+            return TranslationResult.Unchanged(text, fallbackReview);
         }
 
         public async Task<IReadOnlyList<string>> GetModelsAsync(TranslationSettings settings, CancellationToken cancellationToken)
@@ -95,34 +115,68 @@ namespace OfficeTranslate.Core
             }
         }
 
-        public async Task<IReadOnlyList<ImageTranslationRegion>> TranslateImageAsync(byte[] imageBytes, TranslationSettings settings, CancellationToken token)
+        public async Task<ImageRecognitionResult> TranslateImageAsync(byte[] imageBytes, TranslationSettings settings, CancellationToken token, string diagnosticHost = "Image", string captureSource = "unknown", string captureReason = "unknown")
         {
-            settings.Validate(); Configure(settings);
-            var base64 = Convert.ToBase64String(imageBytes);
-            var model = string.IsNullOrWhiteSpace(settings.ImageModel) ? settings.Model : settings.ImageModel;
-            var automaticImageSource = SourceLanguageProtector.IsAutomatic(settings.SourceLanguage);
-            var imageSource = automaticImageSource
-                ? "自动识别文字语言，并将所有识别出的语言翻译成目标语言"
-                : "图片可能包含多种语言。只翻译其中属于" + settings.SourceLanguage + "的文字；其他语言必须在 translation 字段中逐字原样保留，不得翻译、改写、调整大小写或删除";
-            var imageGlossary = string.IsNullOrWhiteSpace(settings.Glossary) ? "" : " 必须遵循术语表：" + settings.Glossary;
-            var prompt = "图片本身就是本次需要处理的内容，请立即同时完成 OCR 和翻译，不要要求用户再发送文字。" +
-                imageSource + "，目标语言是" + settings.TargetLanguage + "。对于混合语言区域，只替换属于指定源语言的部分。" +
-                "每个文字区域必须同时填写 source 原文和 translation 译文，translation 不得留空。" +
-                "只返回严格 JSON，不要 Markdown：{\"regions\":[{\"bbox\":[x1,y1,x2,y2],\"source\":\"原文\",\"translation\":\"译文\"}]}。" +
-                "坐标必须是相对于图片宽高的 0 到 1000 整数；按阅读顺序返回；没有文字时返回 {\"regions\":[]}。" +
-                settings.CustomInstructions + imageGlossary;
-            var endpoint = settings.Provider == ProviderKind.Ollama
-                ? settings.BaseUrl.TrimEnd('/') + "/api/chat"
-                : settings.BaseUrl.TrimEnd('/') + "/chat/completions";
+            var watch = System.Diagnostics.Stopwatch.StartNew();
+            ImageRecognitionResult? result = null;
+            var finishReason = "unknown";
+            var truncated = false;
+            var status = "failed";
             try
             {
-                return await RequestImageRegionsAsync(endpoint, model, prompt, base64, settings, token, true).ConfigureAwait(false);
+                settings.Validate(); Configure(settings);
+                token.ThrowIfCancellationRequested();
+                var base64 = Convert.ToBase64String(imageBytes);
+                var model = string.IsNullOrWhiteSpace(settings.ImageModel) ? settings.Model : settings.ImageModel;
+                var automaticImageSource = SourceLanguageProtector.IsAutomatic(settings.SourceLanguage);
+                var imageSource = automaticImageSource
+                    ? "自动识别文字语言，并将所有识别出的语言翻译成目标语言"
+                    : "图片可能包含多种语言。只翻译其中属于" + settings.SourceLanguage + "的文字；其他语言必须在 translation 字段中逐字原样保留，不得翻译、改写、调整大小写或删除";
+                var imageGlossary = string.IsNullOrWhiteSpace(settings.Glossary) ? "" : " 必须遵循术语表：" + settings.Glossary;
+                var prompt = "图片本身就是本次需要处理的内容，请立即同时完成 OCR 和翻译，不要要求用户再发送文字。" +
+                    imageSource + "，目标语言是" + settings.TargetLanguage + "。对于混合语言区域，只替换属于指定源语言的部分。" +
+                    "每个文字区域必须同时填写 source 原文和 translation 译文，translation 不得留空。" +
+                    "从上到下、逐行逐块扫描整张图片，完整枚举所有可辨识文字，包括小字、密集段落、表格各单元格、注释、标题、页脚及四周边缘文字。" +
+                    "不得只返回主要段落，不得摘要、漏掉后半部分或合并后删减内容。邻近同一段可合为一个区域以节省重复坐标，但 source 和 translation 必须完整保留全部行。" +
+                    "只返回严格 JSON，不要 Markdown：{\"regions\":[{\"bbox\":[x1,y1,x2,y2],\"source\":\"原文\",\"translation\":\"译文\"}]}。" +
+                    "坐标必须是相对于图片宽高的 0 到 1000 整数；按阅读顺序返回；没有文字时返回 {\"regions\":[]}。" +
+                    settings.CustomInstructions + imageGlossary;
+                var endpoint = settings.Provider == ProviderKind.Ollama
+                    ? settings.BaseUrl.TrimEnd('/') + "/api/chat"
+                    : settings.BaseUrl.TrimEnd('/') + "/chat/completions";
+                try
+                {
+                    result = await RequestImageRegionsAsync(endpoint, model, prompt, base64, settings, token, true).ConfigureAwait(false);
+                }
+                catch (ImageFormatNotSupportedException)
+                {
+                    // Older compatible servers can reject structured output;
+                    // fallback still has the SAME image token budget and prompt.
+                    result = await RequestImageRegionsAsync(endpoint, model, prompt, base64, settings, token, false).ConfigureAwait(false);
+                }
+                finishReason = result.FinishReason;
+                truncated = result.Truncated;
+                if (truncated)
+                    throw new InvalidOperationException("图片模型输出因长度限制被截断，未写回部分结果。请分批识别或改用支持更长输出的图片模型。");
+                status = "parsed";
+                return result;
             }
-            catch (ImageFormatNotSupportedException)
+            catch (ImageResponseParseException ex)
             {
-                // Older OpenAI-compatible servers may reject the structured-output
-                // parameter; fall back to asking for JSON through the prompt only.
-                return await RequestImageRegionsAsync(endpoint, model, prompt, base64, settings, token, false).ConfigureAwait(false);
+                finishReason = ex.FinishReason; truncated = ex.Truncated;
+                throw new InvalidOperationException("图片模型返回的 JSON 区域无法解析；未写回。请检查诊断中的截断标志或更换图片模型。", ex);
+            }
+            catch (ImageOcrTimeoutException) { status = "timeout"; throw; }
+            catch (OperationCanceledException) when (token.IsCancellationRequested) { status = "cancelled"; throw; }
+            catch (OperationCanceledException ex)
+            {
+                throw new InvalidOperationException("图片识别请求被服务或网络中断（非用户取消），当前图片译文未写入。请重试或检查服务。", ex);
+            }
+            finally
+            {
+                PngDimensions.TryRead(imageBytes, out var width, out var height);
+                ImageOverlayDiagnostics.LogOcrSummary(diagnosticHost, width, height, result?.Statistics,
+                    finishReason, truncated, status, watch.ElapsedMilliseconds, captureSource, captureReason);
             }
         }
 
@@ -131,24 +185,35 @@ namespace OfficeTranslate.Core
             public ImageFormatNotSupportedException(string message) : base(message) { }
         }
 
-        private async Task<IReadOnlyList<ImageTranslationRegion>> RequestImageRegionsAsync(string endpoint, string model, string prompt, string base64, TranslationSettings settings, CancellationToken token, bool structuredOutput)
+        private sealed class ImageResponseParseException : InvalidOperationException
+        {
+            public ImageResponseParseException(string finishReason, bool truncated, Exception inner) : base("Invalid image JSON", inner)
+            { FinishReason = finishReason; Truncated = truncated; }
+            public string FinishReason { get; }
+            public bool Truncated { get; }
+        }
+
+        internal const int ImageMaxOutputTokens = 8192;
+
+        private async Task<ImageRecognitionResult> RequestImageRegionsAsync(string endpoint, string model, string prompt, string base64, TranslationSettings settings, CancellationToken token, bool structuredOutput)
         {
             object body;
             if (settings.Provider == ProviderKind.Ollama)
             {
                 var messages = new[] { new { role = "user", content = prompt, images = new[] { base64 } } };
+                var options = new { temperature = 0.1, num_predict = ImageMaxOutputTokens };
                 body = structuredOutput
-                    ? (object)new { model, stream = false, format = "json", messages }
-                    : new { model, stream = false, messages };
+                    ? (object)new { model, stream = false, format = "json", messages, options }
+                    : new { model, stream = false, messages, options };
             }
             else
             {
                 var messages = new object[] { new { role = "user", content = new object[] { new { type = "text", text = prompt }, new { type = "image_url", image_url = new { url = "data:image/png;base64," + base64 } } } } };
                 body = structuredOutput
-                    ? (object)new { model, temperature = 0.1, response_format = new { type = "json_object" }, messages }
-                    : new { model, temperature = 0.1, messages };
+                    ? (object)new { model, temperature = 0.1, max_tokens = ImageMaxOutputTokens, response_format = new { type = "json_object" }, messages }
+                    : new { model, temperature = 0.1, max_tokens = ImageMaxOutputTokens, messages };
             }
-            using (var response = await SendWithRetryAsync(() => CreateRequest(endpoint, body, settings.ApiKey), token).ConfigureAwait(false))
+            using (var response = await SendWithRetryAsync(() => CreateRequest(endpoint, body, settings.ApiKey), token, imageRequest: true).ConfigureAwait(false))
             {
                 var raw = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
                 if (!response.IsSuccessStatusCode)
@@ -159,10 +224,27 @@ namespace OfficeTranslate.Core
                 }
                 var root = _json.DeserializeObject(raw) as Dictionary<string, object>;
                 var imageResponse = settings.Provider == ProviderKind.Ollama ? ReadOllama(root) : ReadOpenAi(root);
-                if (imageResponse.Truncated)
-                    throw new InvalidOperationException("图片模型的输出因长度限制被截断，未生成译文覆盖框。请更换视觉模型或缩小图片后重试。");
-                return ParseImageRegions(imageResponse.Content);
+                var finish = ReadImageFinishReason(root, settings.Provider);
+                try
+                {
+                    var result = ImageRegionParser.Parse(imageResponse.Content);
+                    result.FinishReason = finish;
+                    result.Truncated = imageResponse.Truncated;
+                    return result;
+                }
+                catch (Exception ex) { throw new ImageResponseParseException(finish, imageResponse.Truncated, ex); }
             }
+        }
+
+        private static string ReadImageFinishReason(Dictionary<string, object>? root, ProviderKind provider)
+        {
+            if (root == null) return "unknown";
+            if (provider == ProviderKind.Ollama)
+                return root.TryGetValue("done_reason", out var reason) ? Convert.ToString(reason) ?? "unknown" : "unknown";
+            if (root.TryGetValue("choices", out var value) && value is object[] choices &&
+                choices.FirstOrDefault() is Dictionary<string, object> choice && choice.TryGetValue("finish_reason", out var finish))
+                return Convert.ToString(finish) ?? "unknown";
+            return "unknown";
         }
 
         // Some OpenAI-compatible servers (e.g. vLLM front-ends) answer 422 instead
@@ -173,47 +255,6 @@ namespace OfficeTranslate.Core
         private static bool IsFormatRejection(string raw) =>
             raw != null && (raw.IndexOf("response_format", StringComparison.OrdinalIgnoreCase) >= 0 ||
                             raw.IndexOf("\"format\"", StringComparison.OrdinalIgnoreCase) >= 0);
-
-        private IReadOnlyList<ImageTranslationRegion> ParseImageRegions(string content)
-        {
-            var start = content.IndexOf('{'); var end = content.LastIndexOf('}');
-            if (start < 0 || end <= start) throw new InvalidOperationException("图片模型没有返回有效的 JSON 坐标。");
-            var root = _json.DeserializeObject(content.Substring(start, end - start + 1)) as Dictionary<string, object>;
-            if (root == null || !root.TryGetValue("regions", out var value) || !(value is object[] items)) throw new InvalidOperationException("图片模型返回的 regions 格式无效。");
-            var result = new List<ImageTranslationRegion>();
-            foreach (var item in items.OfType<Dictionary<string, object>>())
-            {
-                if (!item.TryGetValue("bbox", out var boxValue) || !(boxValue is object[] box) || box.Length != 4) continue;
-                // Keep the model's raw coordinates (no 0-1000 clamping): range and
-                // sanity validation is the overlay planner's job, so abnormal
-                // values stay visible in diagnostics instead of being masked.
-                var region = new ImageTranslationRegion {
-                    X1 = ToCoordinate(box[0]), Y1 = ToCoordinate(box[1]),
-                    X2 = ToCoordinate(box[2]), Y2 = ToCoordinate(box[3]),
-                    Source = item.TryGetValue("source", out var source) ? Convert.ToString(source) ?? "" : "",
-                    Translation = item.TryGetValue("translation", out var translation) ? Convert.ToString(translation) ?? "" : ""
-                };
-                // A region without translated text has nothing to overlay; a
-                // geometrically invalid bbox is passed through so the planner
-                // can downgrade it to an explicit side-note instead of being
-                // silently dropped here.
-                if (!string.IsNullOrWhiteSpace(region.Translation)) result.Add(region);
-            }
-            return result;
-        }
-
-        private static float ToCoordinate(object value)
-        {
-            // Non-finite or unparsable coordinates become NaN, which the
-            // planner's range check rejects with a side-note. One corrupt
-            // region no longer aborts the whole image.
-            try
-            {
-                var parsed = Convert.ToSingle(value);
-                return float.IsNaN(parsed) || float.IsInfinity(parsed) ? float.NaN : parsed;
-            }
-            catch { return float.NaN; }
-        }
 
         private void Configure(TranslationSettings settings)
         {
@@ -268,9 +309,45 @@ namespace OfficeTranslate.Core
                 catch (ProtectedContentException) { }
             }
 
-            // A single stubborn paragraph must not abort the whole task. Keep the
-            // original text and let the task summary flag it for manual review.
-            return TranslationResult.Unchanged(original);
+            // Only after BOTH whole-chunk checks fail, reduce the all-or-nothing
+            // protection scope for an explicit source language. Automatic mode
+            // also protects layout separators, but its behavior must not change.
+            // Single paragraphs keep the existing two calls.
+            if (SourceLanguageProtector.IsAutomatic(settings.SourceLanguage)) return TranslationResult.Unchanged(original);
+            return await TranslateMixedParagraphFallbackAsync(original, settings, token).ConfigureAwait(false);
+        }
+
+        private async Task<TranslationResult> TranslateMixedParagraphFallbackAsync(string original,
+            TranslationSettings settings, CancellationToken token)
+        {
+            // Captured separators are appended verbatim (including CRLF, blank
+            // paragraphs and Office's manual line break). Do not normalize them.
+            var parts = System.Text.RegularExpressions.Regex.Split(original, "(\\r\\n|[\\r\\n\\v\\f\\u2028\\u2029])");
+            if (parts.Where((part, index) => index % 2 == 0).Count(part => !string.IsNullOrWhiteSpace(part)) < 2)
+                return TranslationResult.Unchanged(original);
+
+            var output = new StringBuilder();
+            var translated = 0;
+            var review = 0;
+            for (var i = 0; i < parts.Length; i++)
+            {
+                token.ThrowIfCancellationRequested();
+                var part = parts[i];
+                if (i % 2 != 0 || string.IsNullOrWhiteSpace(part)) { output.Append(part); continue; }
+                var start = 0;
+                var end = part.Length;
+                while (start < end && char.IsWhiteSpace(part[start])) start++;
+                while (end > start && char.IsWhiteSpace(part[end - 1])) end--;
+                var result = await TranslateChunkAsync(part.Substring(start, end - start), settings, token).ConfigureAwait(false);
+                if (result.Changed) translated++;
+                if (result.NeedsReview) review++;
+                output.Append(part.Substring(0, start));
+                output.Append(result.Text);
+                output.Append(part.Substring(end));
+            }
+            return translated > 0
+                ? TranslationResult.Translated(output.ToString(), review > 0, translated, review)
+                : TranslationResult.Unchanged(original, review);
         }
 
         private async Task<TranslationResult> RetryUnchangedChunkAsync(string original, ProtectedTranslationText protectedText, TranslationSettings settings, CancellationToken token)
@@ -357,7 +434,54 @@ namespace OfficeTranslate.Core
         // exponential backoff. User cancellation is never retried. A fresh
         // HttpRequestMessage is created per attempt because a sent request
         // cannot be re-sent.
-        private async Task<HttpResponseMessage> SendWithRetryAsync(Func<HttpRequestMessage> requestFactory, CancellationToken token)
+        private async Task<HttpResponseMessage> SendImageAttemptAsync(HttpRequestMessage request, CancellationToken userToken)
+        {
+            using (var deadline = new CancellationTokenSource())
+            using (var linked = CancellationTokenSource.CreateLinkedTokenSource(userToken, deadline.Token))
+            {
+                deadline.CancelAfter(_imageRequestTimeout);
+                HttpResponseMessage? response = null;
+                try
+                {
+                    // Default ResponseContentRead covers the complete non-streaming
+                    // JSON body, not just the arrival of HTTP headers.
+                    response = await _imageHttp.SendAsync(request, linked.Token).ConfigureAwait(false);
+                    userToken.ThrowIfCancellationRequested();
+                    deadline.Token.ThrowIfCancellationRequested();
+                    return response;
+                }
+                catch (OperationCanceledException) when (userToken.IsCancellationRequested)
+                {
+                    response?.Dispose();
+                    userToken.ThrowIfCancellationRequested();
+                    throw;
+                }
+                catch (OperationCanceledException ex) when (deadline.IsCancellationRequested)
+                {
+                    response?.Dispose();
+                    // TimeoutException, NOT OperationCanceledException: it cannot
+                    // enter either timeout retry or silent user-cancel handling.
+                    throw new ImageOcrTimeoutException(_imageRequestTimeout, ex);
+                }
+                catch (OperationCanceledException ex)
+                {
+                    response?.Dispose();
+                    // A transport may cancel without either token firing. Do not
+                    // fabricate a 600s elapsed timeout or silently call it user cancel.
+                    throw new InvalidOperationException("图片识别请求被服务或网络中断（非用户取消），当前图片译文未写入。请重试或检查服务。", ex);
+                }
+                catch (HttpRequestException) when (userToken.IsCancellationRequested)
+                {
+                    response?.Dispose(); userToken.ThrowIfCancellationRequested(); throw;
+                }
+                catch (HttpRequestException ex) when (deadline.IsCancellationRequested)
+                {
+                    response?.Dispose(); throw new ImageOcrTimeoutException(_imageRequestTimeout, ex);
+                }
+            }
+        }
+
+        private async Task<HttpResponseMessage> SendWithRetryAsync(Func<HttpRequestMessage> requestFactory, CancellationToken token, bool imageRequest = false)
         {
             var backoff = new[] { TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(3) };
             for (var attempt = 0; ; attempt++)
@@ -368,14 +492,16 @@ namespace OfficeTranslate.Core
                 try
                 {
                     using (var request = requestFactory())
-                        response = await _http.SendAsync(request, token).ConfigureAwait(false);
+                        response = imageRequest
+                            ? await SendImageAttemptAsync(request, token).ConfigureAwait(false)
+                            : await _http.SendAsync(request, token).ConfigureAwait(false);
                 }
                 catch (HttpRequestException) when (!lastAttempt)
                 {
                     await Task.Delay(backoff[attempt], token).ConfigureAwait(false);
                     continue;
                 }
-                catch (TaskCanceledException) when (!token.IsCancellationRequested && !lastAttempt)
+                catch (TaskCanceledException) when (!imageRequest && !token.IsCancellationRequested && !lastAttempt)
                 {
                     // HttpClient timeout, not user cancellation.
                     await Task.Delay(backoff[attempt], token).ConfigureAwait(false);
@@ -704,12 +830,17 @@ namespace OfficeTranslate.Core
 
         private enum PromptMode { Direct, Strict, Protected }
 
-        public void Dispose() => _http.Dispose();
+        public void Dispose() { _http.Dispose(); _imageHttp.Dispose(); }
     }
 
     public sealed class ImageTranslationRegion
     {
         public float X1 { get; set; } public float Y1 { get; set; } public float X2 { get; set; } public float Y2 { get; set; }
         public string Source { get; set; } = string.Empty; public string Translation { get; set; } = string.Empty;
+        public string ReviewReason { get; set; } = string.Empty;
+        public bool RequiresReview => !string.IsNullOrEmpty(ReviewReason);
+        public string DisplayText(bool bilingual) => string.IsNullOrWhiteSpace(Translation)
+            ? "【未提供译文；以下为识别原文，待检查】\r" + Source
+            : bilingual && !string.IsNullOrWhiteSpace(Source) ? Source + "\r" + Translation : Translation;
     }
 }

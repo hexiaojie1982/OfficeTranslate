@@ -89,16 +89,59 @@ namespace OfficeTranslate.PowerPointAddIn
                 var preNetwork = await ui.InvokeAsync(() =>
                 {
                     ui.LogProbe("capture_before");
-                    image.Export(path, PowerPoint.PpShapeFormat.ppShapeFormatPNG);
+                    token.ThrowIfCancellationRequested();
+                    var slide = image.Parent as PowerPoint.Slide
+                        ?? throw new InvalidOperationException("无法确定图片所在的幻灯片。");
+                    byte[] bytes = Array.Empty<byte>();
+                    var captureSource = "fallback";
+                    var captureReason = "presentation-identity-not-proven";
+                    var sourceWidth = 0; var sourceHeight = 0;
+                    var original = false;
+                    var presentation = slide.Parent as PowerPoint.Presentation;
+                    if (presentation != null)
+                    {
+                        try
+                        {
+                            original = OriginalImageCapture.TryCaptureFile(presentation.Path.Length == 0 ? "" : presentation.FullName,
+                                presentation.Saved == Office.MsoTriState.msoTrue, "PowerPoint", slide.SlideID.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                                image.Name, image.Width, image.Height, ImageCaptureBudget.MaxSinglePngBytes,
+                                out bytes, out captureReason, out sourceWidth, out sourceHeight);
+                        }
+                        catch (ImageCaptureLimitException) { throw; }
+                        catch (Exception ex) { captureReason = "ppt-package-" + ex.GetType().Name; }
+                    }
+                    if (original) captureSource = "original";
+                    else
+                    {
+                        try
+                        {
+                            if (presentation == null) throw new InvalidOperationException("No presentation scale");
+                            var scale = ImageCaptureResolution.PowerPointExportScale(image.Width, image.Height,
+                                presentation.PageSetup.SlideWidth, presentation.PageSetup.SlideHeight);
+                            // Parameters are whole-slide POINT dimensions. PIA:
+                            // Export(string, PpShapeFormat, int, int, PpExportMode).
+                            image.Export(path, PowerPoint.PpShapeFormat.ppShapeFormatPNG, scale.Item1, scale.Item2, PowerPoint.PpExportMode.ppRelativeToSlide);
+                            bytes = ImageCaptureBudget.ReadPngFile(path);
+                            captureReason += "-scaled-export";
+                        }
+                        catch (ImageCaptureLimitException) { throw; }
+                        catch (Exception ex)
+                        {
+                            // Never read a partially written/old export file.
+                            if (File.Exists(path)) File.Delete(path);
+                            image.Export(path, PowerPoint.PpShapeFormat.ppShapeFormatPNG);
+                            bytes = ImageCaptureBudget.ReadPngFile(path);
+                            captureReason += "-scaled-export-failed-" + ex.GetType().Name + "-default-export";
+                        }
+                    }
+                    token.ThrowIfCancellationRequested();
+                    ImageOverlayDiagnostics.LogOcrCapture("PowerPoint", captureSource, captureReason, sourceWidth, sourceHeight, bytes);
                     ui.LogProbe("capture_after");
-                    var bytes = File.ReadAllBytes(path);
                     // R5: owner identity is the slide-unique shape Name (persisted,
                     // stable across move/resize/reopen), falling back to a content
                     // hash when the name is unavailable.
                     var owner = ImageOverlayIdentity.ForNamedShape(
                         "pp", SafeString(() => image.Name), bytes);
-                    var slide = image.Parent as PowerPoint.Slide
-                        ?? throw new InvalidOperationException("无法确定图片所在的幻灯片。");
                     // Slide shapes live in a single slide-points frame.
                     // R3: flip state is recorded for diagnostics only. The exported
                     // PNG already shows the flipped rendering, so the model's bbox
@@ -116,16 +159,17 @@ namespace OfficeTranslate.PowerPointAddIn
                         Rotation = SafeFloat(() => image.Rotation),
                         FlipH = SafeTriState(() => image.HorizontalFlip),
                         FlipV = SafeTriState(() => image.VerticalFlip),
+                        CaptureSource = captureSource,
+                        CaptureReason = captureReason,
                     };
                 });
                 var imageBytes = preNetwork.Bytes;
                 var ownerId = preNetwork.Owner;
                 var hasPixels = PngDimensions.TryRead(imageBytes, out var pixelWidth, out var pixelHeight);
-                var regions = await client.TranslateImageAsync(imageBytes, settings, token);
-                // R8: an empty OCR result is still an image outcome and must be
-                // counted, exactly like the Word/Excel paths do.
-                if (regions.Count == 0) { summary.RecordImage(false); return; }
-                summary.RecordImage(true);
+                var recognition = await client.TranslateImageAsync(imageBytes, settings, token, "PowerPoint", preNetwork.CaptureSource, preNetwork.CaptureReason);
+                summary.RecordImageRecognition(recognition);
+                var regions = recognition.Regions;
+                if (regions.Count == 0) return;
                 var slide = preNetwork.Slide;
                 var imageLeft = preNetwork.Left; var imageTop = preNetwork.Top;
                 var imageWidth = preNetwork.Width; var imageHeight = preNetwork.Height;
@@ -138,10 +182,10 @@ namespace OfficeTranslate.PowerPointAddIn
                 var plans = new List<Tuple<ImageTranslationRegion, PlannedOverlay, string>>();
                 foreach (var region in regions)
                 {
-                    var overlayText = settings.BilingualMode && !string.IsNullOrWhiteSpace(region.Source)
-                        ? region.Source + "\r" + region.Translation
-                        : region.Translation;
-                    var plan = hasPixels
+                    var overlayText = region.DisplayText(settings.BilingualMode);
+                    var plan = region.RequiresReview
+                        ? new PlannedOverlay(ImageOverlayVerdict.SideNote, region.ReviewReason, 0F, 0F, 0F, 0F, 0F)
+                        : hasPixels
                         ? ImageOverlayPlanner.Plan(
                             region.X1, region.Y1, region.X2, region.Y2,
                             pixelWidth, pixelHeight, imageWidth, imageHeight, overlayText,
@@ -217,61 +261,71 @@ namespace OfficeTranslate.PowerPointAddIn
                             continue;
                         }
                     }
-                    // R2: one image gets ONE combined side-note, so no region's
-                    // translation is lost when several regions degrade.
+                    // Cleanup once per image, never once per owner-tagged chunk.
                     if (noteEntries.Count > 0)
                     {
-                        PlaceCombinedNote(slide, ownerId, ImageOverlayNotes.Combine(noteEntries),
-                            imageLeft, imageTop + imageHeight + 6F, imageWidth);
                         summary.RecordImageNeedsReview();
+                        ImageOverlayNotes.Place(noteEntries, ImageOverlayNotes.NoteWidth(imageWidth), imageTop + imageHeight + 6F,
+                            (chunk, top) => PlaceCombinedNote(slide, ownerId, chunk.Text, imageLeft, top, imageWidth),
+                            (chunk, error) => summary.RecordImageNoteFailure(ownerId, chunk.Text, error.Message));
                     }
                 });
             }
             finally { try { if (File.Exists(path)) File.Delete(path); } catch { } }
         }
 
-        private static void PlaceCombinedNote(PowerPoint.Slide slide, string ownerId, string noteText, float noteLeft, float noteTop, float imageWidth)
+        private static float PlaceCombinedNote(PowerPoint.Slide slide, string ownerId, string noteText, float noteLeft, float noteTop, float imageWidth)
         {
             // A side-note explicitly does NOT claim positional coverage: it is
             // placed below the image.
-            var noteWidth = Math.Min(420F, Math.Max(160F, imageWidth));
+            var noteWidth = ImageOverlayNotes.NoteWidth(imageWidth);
             // D3: clamp the initial height to the cap up front; an estimate
             // that already exceeds the cap must go through the bounded growth
             // check instead of returning success immediately.
             var noteHeight = Math.Min(ImageOverlayLayout.MaxNoteHeightPt,
-                ImageOverlayLayout.EstimateNoteHeight(noteWidth, noteText, 9F));
+                ImageOverlayLayout.EstimateNoteHeight(noteWidth - 4F, noteText, ImageOverlayNotes.NoteFontSize));
             var note = slide.Shapes.AddTextbox(Office.MsoTextOrientation.msoTextOrientationHorizontal,
                 noteLeft, noteTop, noteWidth, noteHeight);
-            note.Tags.Add("OfficeTranslateOCR", "Note:" + ownerId);
-            // D2/D3: no host auto-growth for notes either; W2 grows the note
-            // manually under the cap so the limit cannot be bypassed.
-            note.TextFrame2.AutoSize = Office.MsoAutoSize.msoAutoSizeNone;
-            note.Fill.Visible = Office.MsoTriState.msoTrue;
-            note.Fill.ForeColor.RGB = 0xE1FFFF; // light yellow (BGR)
-            note.Fill.Transparency = 0F;
-            note.Line.Visible = Office.MsoTriState.msoFalse;
-            note.TextFrame2.MarginLeft = 4; note.TextFrame2.MarginRight = 4;
-            note.TextFrame2.MarginTop = 3; note.TextFrame2.MarginBottom = 3;
-            note.TextFrame2.WordWrap = Office.MsoTriState.msoTrue;
-            note.TextFrame2.TextRange.Text = noteText;
-            note.TextFrame2.TextRange.Font.Size = 9F;
-            // W2: grow the note downward until the real laid-out text height
-            // fits. Bounded; a note that still overflows at the cap is deleted
-            // and reported explicitly instead of being kept clipped.
-            GrowNoteToFit(note);
+            try
+            {
+                note.Tags.Add("OfficeTranslateOCR", "Note:" + ownerId);
+                // D2/D3: no host auto-growth for notes either; W2 grows the note
+                // manually under the cap so the limit cannot be bypassed.
+                note.TextFrame2.AutoSize = Office.MsoAutoSize.msoAutoSizeNone;
+                note.Fill.Visible = Office.MsoTriState.msoTrue;
+                note.Fill.ForeColor.RGB = 0xE1FFFF; // light yellow (BGR)
+                note.Fill.Transparency = 0F;
+                note.Line.Visible = Office.MsoTriState.msoFalse;
+                note.TextFrame2.MarginLeft = 4; note.TextFrame2.MarginRight = 4;
+                note.TextFrame2.MarginTop = 3; note.TextFrame2.MarginBottom = 3;
+                note.TextFrame2.WordWrap = Office.MsoTriState.msoTrue;
+                note.TextFrame2.TextRange.Text = noteText;
+                note.TextFrame2.TextRange.Font.Size = ImageOverlayNotes.NoteFontSize;
+                // W2: grow the note downward until the real laid-out text height
+                // fits. Bounded; a note that still overflows at the cap is deleted
+                // and reported explicitly instead of being kept clipped.
+                GrowNoteToFit(note);
+                return note.Height;
+            }
+            catch
+            {
+                // Only this failed attempt is deleted; earlier chunks survive.
+                try { note.Delete(); } catch { }
+                throw;
+            }
         }
 
         // W1: real-layout fit check for PowerPoint overlays.
         // TextRange2.BoundHeight is the actual rendered text height with word
-        // wrap applied. The font shrinks stepwise to the 8pt floor; the box
+        // wrap applied. The font shrinks stepwise to the shared 6pt floor; the box
         // geometry never expands.
         private static bool TextFitsBox(PowerPoint.Shape box, float startSize)
         {
-            const float floorSize = 8F;
+            const float floorSize = ImageOverlayLayout.MinFontSize;
             var size = Math.Min(startSize, 18F);
             try { box.TextFrame2.TextRange.Font.Size = size; }
             catch { return false; }
-            for (var i = 0; i < 12; i++)
+            for (var i = 0; i < (int)Math.Ceiling(ImageOverlayLayout.MaxFontSize - floorSize) + 2; i++)
             {
                 float boundHeight, availHeight;
                 try
@@ -333,7 +387,7 @@ namespace OfficeTranslate.PowerPointAddIn
                     string text;
                     try { text = note.TextFrame2.TextRange.Text; } catch { text = string.Empty; }
                     try { note.Delete(); } catch { }
-                    throw new InvalidOperationException(
+                    throw new ImageOverlayNoteOverflowException(
                         "译文旁注过长，增高到上限仍无法完整显示，已删除避免静默裁切。译文（截断）：" +
                         ImageOverlayText.Truncate(text));
                 }
@@ -347,7 +401,7 @@ namespace OfficeTranslate.PowerPointAddIn
             string leftover;
             try { leftover = note.TextFrame2.TextRange.Text; } catch { leftover = string.Empty; }
             try { note.Delete(); } catch { }
-            throw new InvalidOperationException(
+            throw new ImageOverlayNoteOverflowException(
                 "译文旁注排版校验未收敛，已删除避免静默裁切。译文（截断）：" +
                 ImageOverlayText.Truncate(leftover));
         }
@@ -419,6 +473,8 @@ namespace OfficeTranslate.PowerPointAddIn
                 OutWidth = plan.Width,
                 OutHeight = plan.Height,
                 FontSize = plan.FontSize,
+                WidthGrowthFactor = plan.WidthGrowthFactor,
+                HeightGrowthFactor = plan.HeightGrowthFactor,
                 Verdict = plan.Verdict.ToString(),
                 Reason = plan.Reason,
                 TextLength = text == null ? 0 : text.Length,

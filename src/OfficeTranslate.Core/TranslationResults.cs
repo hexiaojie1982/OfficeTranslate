@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
+using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -7,13 +9,16 @@ namespace OfficeTranslate.Core
 {
     public sealed class TranslationResult
     {
-        internal TranslationResult(string text, bool changed, bool fromCache, bool skippedNoSource, bool needsReview)
+        internal TranslationResult(string text, bool changed, bool fromCache, bool skippedNoSource, bool needsReview,
+            int fallbackTranslatedParagraphs = 0, int fallbackReviewParagraphs = 0)
         {
             Text = text;
             Changed = changed;
             FromCache = fromCache;
             SkippedNoSource = skippedNoSource;
             NeedsReview = needsReview;
+            FallbackTranslatedParagraphs = fallbackTranslatedParagraphs;
+            FallbackReviewParagraphs = fallbackReviewParagraphs;
         }
 
         public string Text { get; }
@@ -21,9 +26,12 @@ namespace OfficeTranslate.Core
         public bool FromCache { get; }
         public bool SkippedNoSource { get; }
         public bool NeedsReview { get; }
+        public int FallbackTranslatedParagraphs { get; }
+        public int FallbackReviewParagraphs { get; }
 
-        internal static TranslationResult Translated(string text, bool needsReview = false) =>
-            new TranslationResult(text, true, false, false, needsReview);
+        internal static TranslationResult Translated(string text, bool needsReview = false,
+            int fallbackTranslatedParagraphs = 0, int fallbackReviewParagraphs = 0) =>
+            new TranslationResult(text, true, false, false, needsReview, fallbackTranslatedParagraphs, fallbackReviewParagraphs);
 
         internal static TranslationResult Cached(string text) =>
             new TranslationResult(text, true, true, false, false);
@@ -31,12 +39,13 @@ namespace OfficeTranslate.Core
         internal static TranslationResult Skipped(string text) =>
             new TranslationResult(text, false, false, true, false);
 
-        internal static TranslationResult Unchanged(string text) =>
-            new TranslationResult(text, false, false, false, true);
+        internal static TranslationResult Unchanged(string text, int fallbackReviewParagraphs = 0) =>
+            new TranslationResult(text, false, false, false, true, 0, fallbackReviewParagraphs);
     }
 
     public sealed class TranslationTaskSummary
     {
+        private readonly List<string> _unplacedImageNotes = new List<string>();
         public TranslationTaskSummary(int total) => Total = total;
 
         public int Total { get; }
@@ -45,14 +54,34 @@ namespace OfficeTranslate.Core
         public int SkippedNoSource { get; private set; }
         public int NeedsReview { get; private set; }
         public int OcrNoText { get; private set; }
+        public int TextNeedsReview { get; private set; }
+        public int TextUnchangedNeedsReview { get; private set; }
+        public int TextPartiallyTranslated { get; private set; }
+        public int FallbackTranslatedParagraphs { get; private set; }
+        public int FallbackReviewParagraphs { get; private set; }
+        public int ImageNeedsReview { get; private set; }
+        public int OcrImages { get; private set; }
+        public int OcrRawRegions { get; private set; }
+        public int OcrKeptRegions { get; private set; }
+        public int OcrDroppedRegions { get; private set; }
+        public int OcrBboxNotes { get; private set; }
+        public int OcrEmptyTranslations { get; private set; }
+        public IReadOnlyList<string> UnplacedImageNotes => _unplacedImageNotes.AsReadOnly();
 
         public void Record(TranslationResult result)
         {
+            FallbackTranslatedParagraphs += result.FallbackTranslatedParagraphs;
+            FallbackReviewParagraphs += result.FallbackReviewParagraphs;
             if (result.FromCache) CacheHits++;
             else if (result.SkippedNoSource) SkippedNoSource++;
-            else if (result.NeedsReview) NeedsReview++;
+            else if (result.NeedsReview)
+            {
+                NeedsReview++; TextNeedsReview++;
+                if (result.Changed) { Translated++; TextPartiallyTranslated++; }
+                else TextUnchangedNeedsReview++;
+            }
             else if (result.Changed) Translated++;
-            else NeedsReview++;
+            else { NeedsReview++; TextNeedsReview++; TextUnchangedNeedsReview++; }
         }
 
         public void RecordSkipped() => SkippedNoSource++;
@@ -63,7 +92,26 @@ namespace OfficeTranslate.Core
             else OcrNoText++;
         }
 
-        public void RecordImageNeedsReview() => NeedsReview++;
+        public void RecordImageNeedsReview() { NeedsReview++; ImageNeedsReview++; }
+
+        public void RecordImageRecognition(ImageRecognitionResult result)
+        {
+            OcrImages++;
+            OcrRawRegions += result.Statistics.RawCount;
+            OcrKeptRegions += result.Statistics.RetainedCount;
+            OcrDroppedRegions += result.Statistics.DroppedCount;
+            OcrBboxNotes += result.Statistics.InvalidBboxDowngradedCount;
+            OcrEmptyTranslations += result.Statistics.EmptyTranslationCount;
+            if (result.Regions.Count == 0) OcrNoText++;
+            else if (result.Regions.Any(r => !string.IsNullOrWhiteSpace(r.Translation))) Translated++;
+            // A source-only result is NOT a translated image or empty OCR.
+            // Its forced side-note is counted by the normal host review path.
+        }
+
+        // Complete, recoverable text in the result window, never OCR text in
+        // metadata-only diagnostic logs or silently truncated content.
+        public void RecordImageNoteFailure(string ownerId, string noteText, string reason) =>
+            _unplacedImageNotes.Add("图片 " + ownerId + "\r\n" + reason + "\r\n" + noteText);
     }
 
     internal static class TranslationSessionCache

@@ -3,12 +3,9 @@ using System.Text;
 
 namespace OfficeTranslate.Core
 {
-    // R2: one image gets ONE combined side-note. Previously every degraded
-    // region created its own note at the same position and each creation
-    // deleted the previous one, so only the last region's translation
-    // survived. Hosts collect one entry per degraded region
-    // (reason + "\r" + translation) and call Combine once.
-    public static class ImageOverlayNotes
+    // Hosts collect degraded regions first, then place owner-tagged chunks.
+    // Cleanup happens once per image, never once per chunk.
+    public static partial class ImageOverlayNotes
     {
         // C1: the header must be non-empty and recognizable. An empty header
         // both mislabels the note and breaks naive counting helpers that

@@ -53,8 +53,8 @@ namespace OfficeTranslate.Tests
         [TestMethod]
         public void Plan_TinyBbox_GoesToSideNote()
         {
-            // 5x5 units on the 0-1000 scale is noise, not a text region.
-            var plan = ImageOverlayPlanner.Plan(100F, 200F, 105F, 205F,
+            // Under 3 units is still below the 2.1.34 trust gate.
+            var plan = ImageOverlayPlanner.Plan(100F, 200F, 102.9F, 202.9F,
                 1000, 800, 500F, 400F, "Hi", 0F);
 
             Assert.AreEqual(ImageOverlayVerdict.SideNote, plan.Verdict);
@@ -98,16 +98,19 @@ namespace OfficeTranslate.Tests
         }
 
         [TestMethod]
-        public void Plan_EdgeTinyRegion_DoesNotExpandBeyondImage()
+        public void Plan_EdgeTinyRegion_GrowsButStaysInsideImage()
         {
-            // R6 (review 2026-09-30): bbox=[980,800,1000,1000] on a 100x100pt
-            // image maps to a 2pt-wide strip at the right edge. The planner
-            // must NOT expand it to 8pt (right=106 > image right=100), and
-            // the text cannot fit anyway, so the verdict is SideNote.
+            // 2.1.34: the existing layout estimator can fit this strip after
+            // growth. Its right edge must remain within the image, not 106pt.
             var plan = ImageOverlayPlanner.Plan(980F, 800F, 1000F, 1000F,
                 200, 200, 100F, 100F, "A", 0F);
 
-            Assert.AreEqual(ImageOverlayVerdict.SideNote, plan.Verdict);
+            Assert.AreEqual(ImageOverlayVerdict.Place, plan.Verdict);
+            Assert.IsTrue(plan.Width > 2F && plan.Width <= 10F);
+            Assert.IsTrue(plan.Height <= 100F);
+            Assert.IsTrue(plan.Left + plan.Width <= 100.05F);
+            Assert.IsTrue(plan.Top + plan.Height <= 100.05F);
+            Assert.IsTrue(plan.GrowthFactor > 1F && plan.GrowthFactor <= 5F);
         }
 
         [TestMethod]
@@ -160,7 +163,7 @@ namespace OfficeTranslate.Tests
         {
             // A wall of text can never fit the small region: no fake overlay.
             var plan = ImageOverlayPlanner.Plan(100F, 200F, 300F, 260F,
-                1000, 800, 500F, 400F, new string('中', 500), 0F);
+                1000, 800, 500F, 400F, new string('中', 2000), 0F);
 
             Assert.AreEqual(ImageOverlayVerdict.SideNote, plan.Verdict);
             Assert.IsTrue(plan.Reason.Contains("放不下"));

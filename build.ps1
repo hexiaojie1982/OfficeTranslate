@@ -1,4 +1,4 @@
-param([ValidateSet('Debug','Release')][string]$Configuration = 'Release')
+param([ValidateSet('Debug','Release')][string]$Configuration = 'Release', [switch]$SkipInstaller)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $solution = Join-Path $root 'OfficeTranslate.Word.sln'
@@ -35,7 +35,7 @@ foreach ($candidate in $wixCandidates) {
     if (-not $candlePath -and (Test-Path (Join-Path $candidate 'candle.exe'))) { $candlePath = Join-Path $candidate 'candle.exe' }
     if (-not $lightPath -and (Test-Path (Join-Path $candidate 'light.exe'))) { $lightPath = Join-Path $candidate 'light.exe' }
 }
-if (-not $candlePath -or -not $lightPath) { $missing.Add('WiX Toolset 3.14 (candle.exe and light.exe were not found)') }
+if (-not $SkipInstaller -and (-not $candlePath -or -not $lightPath)) { $missing.Add('WiX Toolset 3.14 (candle.exe and light.exe were not found)') }
 
 if ($missing.Count -gt 0) {
     $message = "Build prerequisites are missing:`n - " + ($missing -join "`n - ") + "`n`nInstall them, open a new PowerShell window, and run this script again."
@@ -69,6 +69,10 @@ dotnet restore $solution
 if ($LASTEXITCODE -ne 0) { throw "dotnet restore failed with exit code $LASTEXITCODE" }
 dotnet build $solution -c $Configuration --no-restore
 if ($LASTEXITCODE -ne 0) { throw "dotnet build failed with exit code $LASTEXITCODE" }
+if ($SkipInstaller) {
+    Write-Host "DLL build complete for $productVersion; installer generation skipped (-SkipInstaller)."
+    return
+}
 New-Item -ItemType Directory -Force -Path $artifacts | Out-Null
 
 & $candlePath (Join-Path $root 'installer\Product.wxs') ("-dBuildOutput={0}" -f $output) ("-dExcelOutput={0}" -f $excelOutput) ("-dPowerPointOutput={0}" -f $powerPointOutput) ("-dLicenseRtf={0}" -f (Join-Path $root 'installer\License.rtf')) ("-dProductVersion={0}" -f $productVersion) -out (Join-Path $artifacts 'Product.wixobj') -arch x64

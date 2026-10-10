@@ -134,7 +134,8 @@ namespace OfficeTranslate.WordAddIn
                 _progressForm.CloseAndShowResult(summary, taskWindow);
                 _progressForm = null;
             }
-            catch (OperationCanceledException) { }
+            catch (OperationCanceledException ex) when (TranslationFailurePolicy.IsUserCancellation(ex, _cancellation.Token))
+            { _progressForm?.SetStatus("OfficeTranslate：已取消"); }
             // N1: error presentation is UI work and must enter the same UI
             // dispatch boundary; the ambient SynchronizationContext cannot
             // be trusted to bring the post-await continuation back to STA.
@@ -176,8 +177,7 @@ namespace OfficeTranslate.WordAddIn
                     WordSelectionProbe.Log(_word, "error_dialog_shown", window);
                     try
                     {
-                        if (window != IntPtr.Zero) MessageBox.Show(new TranslationProgressForm.WindowHandle(window), ex.Message, "OfficeTranslate", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                        else MessageBox.Show(ex.Message, "OfficeTranslate", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                        TranslationErrorDialog.Show(ex, window != IntPtr.Zero ? new TranslationProgressForm.WindowHandle(window) : null);
                     }
                     finally
                     {

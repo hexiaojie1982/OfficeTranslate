@@ -229,9 +229,9 @@ namespace OfficeTranslate.WordAddIn
             return await ui.InvokeAsync(() =>
             {
                 ui.LogProbe("capture_before");
-                // Clipboard round-trip is the only way to rasterize a Word shape.
-                // CapturePng saves/restores the user's clipboard and clears stale
-                // content first so a leftover image is never mistaken for the shape.
+                // Prefer proven, untransformed inline or named-anchor original pixels. Other
+                // shapes use the existing rendered clipboard round-trip, which
+                // saves/restores the clipboard and rejects stale data.
                 // S1: pump the UI message loop while capturing (like the Excel
                 // host): Office delayed clipboard rendering may need its
                 // messages dispatched, and a transiently busy clipboard is
@@ -239,10 +239,33 @@ namespace OfficeTranslate.WordAddIn
                 byte[] captured;
                 try
                 {
-                    captured = ClipboardImageCapture.CapturePng(
-                        image.CopyAsPicture,
-                        () => System.Windows.Forms.Application.DoEvents(),
-                        token, maxPngBytes);
+                    token.ThrowIfCancellationRequested();
+                    var sourceWidth = 0; var sourceHeight = 0;
+                    var fallbackReason = "floating-or-unsupported-kind";
+                    var originalCaptured = false;
+                    captured = Array.Empty<byte>();
+                    if (image.Kind == "Inline" || image.Kind == "Floating")
+                    {
+                        try
+                        {
+                            // Read only: no resize, clipboard or source-document
+                            // mutation. XML proves the original pixels are not
+                            // cropped/flipped/rotated before using this path.
+                            originalCaptured = WordOriginalImageCapture.TryCapture(image.Anchor.WordOpenXML,
+                                image.Width, image.Height, maxPngBytes, image.Kind == "Floating" ? image.ShapeName : null, out captured,
+                                out fallbackReason, out sourceWidth, out sourceHeight);
+                        }
+                        catch (ImageCaptureLimitException) { throw; }
+                        catch (Exception ex) { fallbackReason = "word-xml-" + ex.GetType().Name; }
+                    }
+                    if (!originalCaptured)
+                        captured = ClipboardImageCapture.CapturePng(image.CopyAsPicture,
+                            () => System.Windows.Forms.Application.DoEvents(), token, maxPngBytes);
+                    token.ThrowIfCancellationRequested();
+                    image.CaptureSource = originalCaptured ? "original" : "fallback";
+                    image.CaptureReason = fallbackReason;
+                    ImageOverlayDiagnostics.LogOcrCapture("Word", originalCaptured ? "original-raster" : "copy-as-picture",
+                        fallbackReason, sourceWidth, sourceHeight, captured);
                 }
                 catch (Exception ex) when (!(ex is OperationCanceledException))
                 {
@@ -304,9 +327,10 @@ namespace OfficeTranslate.WordAddIn
             var ownerId = resolved.Item1;
             var inlineResolution = resolved.Item2;
             var hasPixels = PngDimensions.TryRead(bytes, out var pixelWidth, out var pixelHeight);
-            var regions = await client.TranslateImageAsync(bytes, settings, token);
-            if (regions.Count == 0) { summary.RecordImage(false); return; }
-            summary.RecordImage(true);
+            var recognition = await client.TranslateImageAsync(bytes, settings, token, "Word", image.CaptureSource, image.CaptureReason);
+            summary.RecordImageRecognition(recognition);
+            var regions = recognition.Regions;
+            if (regions.Count == 0) return;
 
             // R4: a floating picture positioned by alignment (center/right/...)
             // reports a WdShapePosition sentinel (e.g. -999995) as Left/Top,
@@ -321,10 +345,11 @@ namespace OfficeTranslate.WordAddIn
             var plans = new List<Tuple<ImageTranslationRegion, PlannedOverlay, string>>();
             foreach (var region in regions)
             {
-                var bilingualImage = settings.BilingualMode && !string.IsNullOrWhiteSpace(region.Source);
-                var overlayText = bilingualImage ? region.Source + "\r" + region.Translation : region.Translation;
+                var overlayText = region.DisplayText(settings.BilingualMode);
                 PlannedOverlay plan;
-                if (originIsSentinel)
+                if (region.RequiresReview)
+                    plan = new PlannedOverlay(ImageOverlayVerdict.SideNote, region.ReviewReason, 0F, 0F, 0F, 0F, 0F);
+                else if (originIsSentinel)
                     plan = new PlannedOverlay(ImageOverlayVerdict.SideNote, sentinelReason, 0F, 0F, 0F, 0F, 0F);
                 else if (hasPixels)
                     plan = ImageOverlayPlanner.Plan(
@@ -377,8 +402,7 @@ namespace OfficeTranslate.WordAddIn
                     if (!PlaceOverlay(image, plan, overlayText, ownerId, out frameFailure))
                         noteEntries.Add(frameFailure + "\r" + overlayText);
                 }
-                // R2: one image gets ONE combined side-note, placed after all
-                // regions are processed, so no region's translation is lost.
+                // Collect all degraded regions, then stack owner-tagged chunks.
                 if (noteEntries.Count > 0)
                 {
                     // C3: coordinates and their reference frame travel together.
@@ -414,9 +438,11 @@ namespace OfficeTranslate.WordAddIn
                         noteRelH = image.RelativeHorizontalPosition;
                         noteRelV = image.RelativeVerticalPosition;
                     }
-                    PlaceCombinedNote(image, ownerId, ImageOverlayNotes.Combine(noteEntries),
-                        noteLeft, noteTop, noteRelH, noteRelV);
                     summary.RecordImageNeedsReview();
+                    ImageOverlayNotes.Place(noteEntries, ImageOverlayNotes.NoteWidth(image.Width), noteTop,
+                        (chunk, top) => PlaceCombinedNote(image, ownerId, chunk.Text,
+                            noteLeft, top, noteRelH, noteRelV),
+                        (chunk, error) => summary.RecordImageNoteFailure(ownerId, chunk.Text, error.Message));
                 }
             });
         }
@@ -980,15 +1006,15 @@ namespace OfficeTranslate.WordAddIn
 
         // W1: real-layout overflow check. TextFrame.Overflowing reports whether
         // the current text actually fits the fixed box (after Repaginate).
-        // The font shrinks stepwise from the planned size to the 8pt floor
+        // The font shrinks stepwise from the planned size to the shared 6pt floor
         // (the planner's minimum); the box geometry is never expanded.
         private bool ShrinkFontToFit(Shape box, float startSize)
         {
-            const float floorSize = 8F;
+            const float floorSize = ImageOverlayLayout.MinFontSize;
             var size = Math.Min(startSize, 18F);
             try { box.TextFrame.TextRange.Font.Size = size; }
             catch { return false; }
-            for (var i = 0; i < 12; i++)
+            for (var i = 0; i < (int)Math.Ceiling(ImageOverlayLayout.MaxFontSize - floorSize) + 2; i++)
             {
                 bool overflowing;
                 try
@@ -1009,7 +1035,7 @@ namespace OfficeTranslate.WordAddIn
             return false;
         }
 
-        private void PlaceCombinedNote(ImageTarget image, string ownerId, string noteText,
+        private float PlaceCombinedNote(ImageTarget image, string ownerId, string noteText,
             float noteLeft, float noteTop,
             WdRelativeHorizontalPosition relH, WdRelativeVerticalPosition relV)
         {
@@ -1017,55 +1043,65 @@ namespace OfficeTranslate.WordAddIn
             // placed below the image (or at a fixed page position when the
             // image uses alignment positioning), in the frame its coordinates
             // were computed in (C3: coordinates and frame travel together).
-            var noteWidth = Math.Min(420F, Math.Max(160F, image.Width));
+            var noteWidth = ImageOverlayNotes.NoteWidth(image.Width);
             // D3: clamp the initial height to the cap up front; an estimate
             // that already exceeds the cap must go through the bounded growth
             // check instead of returning success immediately.
             var noteHeight = Math.Min(ImageOverlayLayout.MaxNoteHeightPt,
-                ImageOverlayLayout.EstimateNoteHeight(noteWidth, noteText, 9F));
+                ImageOverlayLayout.EstimateNoteHeight(noteWidth - 4F, noteText, ImageOverlayNotes.NoteFontSize));
             object anchor = image.Anchor.Duplicate;
             // P0 (4ca3b46 review): the side-note belongs to the entry document.
             var note = TaskDocument().Shapes.AddTextbox(
                 Office.MsoTextOrientation.msoTextOrientationHorizontal,
                 noteLeft, noteTop, noteWidth, noteHeight, ref anchor);
-            note.AlternativeText = ImageOverlayTags.NoteFor(ownerId);
-            // D2/D3: no host auto-growth for notes either; W2 grows the note
-            // manually under the cap so the limit cannot be bypassed.
-            // Word.TextFrame.AutoSize is int in the interop assembly (see R1).
-            note.TextFrame.AutoSize = (int)Office.MsoAutoSize.msoAutoSizeNone;
-            // The frame is assigned BEFORE Left/Top so Office interprets the
-            // numbers in the intended system. C3: a note whose frame cannot be
-            // set is deleted and reported instead of being kept in an unknown
-            // frame, which would silently misplace the translations.
             try
             {
-                note.RelativeHorizontalPosition = relH;
-                note.RelativeVerticalPosition = relV;
+                note.AlternativeText = ImageOverlayTags.NoteFor(ownerId);
+                // D2/D3: no host auto-growth for notes either; W2 grows the note
+                // manually under the cap so the limit cannot be bypassed.
+                // Word.TextFrame.AutoSize is int in the interop assembly (see R1).
+                note.TextFrame.AutoSize = (int)Office.MsoAutoSize.msoAutoSizeNone;
+                // The frame is assigned BEFORE Left/Top so Office interprets the
+                // numbers in the intended system. C3: a note whose frame cannot be
+                // set is deleted and reported instead of being kept in an unknown
+                // frame, which would silently misplace the translations.
+                try
+                {
+                    note.RelativeHorizontalPosition = relH;
+                    note.RelativeVerticalPosition = relV;
+                }
+                catch (System.Runtime.InteropServices.COMException ex)
+                {
+                    try { note.Delete(); } catch { }
+                    throw new InvalidOperationException(
+                        "已完成图片识别，但无法设置译文旁注的定位参考系，已删除错位旁注避免误导。译文（截断）：" +
+                        ImageOverlayText.Truncate(noteText), ex);
+                }
+                note.Left = noteLeft; note.Top = noteTop; note.Width = noteWidth; note.Height = noteHeight;
+                note.WrapFormat.Type = WdWrapType.wdWrapFront;
+                note.Fill.Visible = Office.MsoTriState.msoTrue;
+                note.Fill.ForeColor.RGB = 0xE1FFFF; // light yellow (BGR)
+                note.Fill.Transparency = 0F;
+                note.Line.Visible = Office.MsoTriState.msoFalse;
+                note.TextFrame.MarginLeft = 4; note.TextFrame.MarginRight = 4;
+                note.TextFrame.MarginTop = 3; note.TextFrame.MarginBottom = 3;
+                // R1: Word.TextFrame.WordWrap is int in the interop assembly, not MsoTriState.
+                note.TextFrame.WordWrap = (int)Office.MsoTriState.msoTrue;
+                note.TextFrame.TextRange.Text = noteText;
+                note.TextFrame.TextRange.Font.Size = ImageOverlayNotes.NoteFontSize;
+                // W2: "no height cap" is not "fully visible". Grow the note
+                // downward until Word's real layout reports no overflow. Bounded;
+                // a note that still overflows at the cap is deleted and reported
+                // explicitly instead of being kept clipped.
+                GrowNoteToFit(note);
+                return note.Height;
             }
-            catch (System.Runtime.InteropServices.COMException ex)
+            catch
             {
+                // Only this failed attempt is deleted; earlier chunks survive.
                 try { note.Delete(); } catch { }
-                throw new InvalidOperationException(
-                    "已完成图片识别，但无法设置译文旁注的定位参考系，已删除错位旁注避免误导。译文（截断）：" +
-                    ImageOverlayText.Truncate(noteText), ex);
+                throw;
             }
-            note.Left = noteLeft; note.Top = noteTop; note.Width = noteWidth; note.Height = noteHeight;
-            note.WrapFormat.Type = WdWrapType.wdWrapFront;
-            note.Fill.Visible = Office.MsoTriState.msoTrue;
-            note.Fill.ForeColor.RGB = 0xE1FFFF; // light yellow (BGR)
-            note.Fill.Transparency = 0F;
-            note.Line.Visible = Office.MsoTriState.msoFalse;
-            note.TextFrame.MarginLeft = 4; note.TextFrame.MarginRight = 4;
-            note.TextFrame.MarginTop = 3; note.TextFrame.MarginBottom = 3;
-            // R1: Word.TextFrame.WordWrap is int in the interop assembly, not MsoTriState.
-            note.TextFrame.WordWrap = (int)Office.MsoTriState.msoTrue;
-            note.TextFrame.TextRange.Text = noteText;
-            note.TextFrame.TextRange.Font.Size = 9F;
-            // W2: "no height cap" is not "fully visible". Grow the note
-            // downward until Word's real layout reports no overflow. Bounded;
-            // a note that still overflows at the cap is deleted and reported
-            // explicitly instead of being kept clipped.
-            GrowNoteToFit(note);
         }
 
         // W2: grows the side-note downward until its real layout fits.
@@ -1117,7 +1153,7 @@ namespace OfficeTranslate.WordAddIn
                     string text;
                     try { text = note.TextFrame.TextRange.Text; } catch { text = string.Empty; }
                     try { note.Delete(); } catch { }
-                    throw new InvalidOperationException(
+                    throw new ImageOverlayNoteOverflowException(
                         "译文旁注过长，增高到上限仍无法完整显示，已删除避免静默裁切。译文（截断）：" +
                         ImageOverlayText.Truncate(text));
                 }
@@ -1132,7 +1168,7 @@ namespace OfficeTranslate.WordAddIn
             string leftover;
             try { leftover = note.TextFrame.TextRange.Text; } catch { leftover = string.Empty; }
             try { note.Delete(); } catch { }
-            throw new InvalidOperationException(
+            throw new ImageOverlayNoteOverflowException(
                 "译文旁注排版校验未收敛，已删除避免静默裁切。译文（截断）：" +
                 ImageOverlayText.Truncate(leftover));
         }
@@ -1182,6 +1218,8 @@ namespace OfficeTranslate.WordAddIn
                 OutWidth = plan.Width,
                 OutHeight = plan.Height,
                 FontSize = plan.FontSize,
+                WidthGrowthFactor = plan.WidthGrowthFactor,
+                HeightGrowthFactor = plan.HeightGrowthFactor,
                 Verdict = plan.Verdict.ToString(),
                 Reason = plan.Reason,
                 TextLength = text == null ? 0 : text.Length,
@@ -1698,6 +1736,8 @@ namespace OfficeTranslate.WordAddIn
             public Range Anchor { get; } public float Left { get; } public float Top { get; } public float Width { get; } public float Height { get; }
             public string Kind { get; set; } = "Unknown";
             public string ShapeName { get; set; } = string.Empty;
+            public string CaptureSource { get; set; } = "unknown";
+            public string CaptureReason { get; set; } = "unknown";
             public float Rotation { get; set; }
             public bool FlipHorizontal { get; set; }
             public bool FlipVertical { get; set; }

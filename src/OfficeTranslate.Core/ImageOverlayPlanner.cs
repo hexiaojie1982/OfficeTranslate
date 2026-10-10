@@ -4,7 +4,7 @@ namespace OfficeTranslate.Core
 {
     public enum ImageOverlayVerdict
     {
-        // The region geometry is trustworthy: draw the overlay exactly here.
+        // The region geometry is trustworthy: draw the planned overlay here.
         Place,
         // Geometry is not trustworthy (bad bbox, aspect mismatch, rotated image,
         // or text that cannot fit). Do NOT draw a positioned overlay; the caller
@@ -15,7 +15,8 @@ namespace OfficeTranslate.Core
     public sealed class PlannedOverlay
     {
         public PlannedOverlay(ImageOverlayVerdict verdict, string reason,
-            float left, float top, float width, float height, float fontSize)
+            float left, float top, float width, float height, float fontSize,
+            float widthGrowthFactor = 1F, float heightGrowthFactor = 1F)
         {
             Verdict = verdict;
             Reason = reason ?? string.Empty;
@@ -24,6 +25,8 @@ namespace OfficeTranslate.Core
             Width = width;
             Height = height;
             FontSize = fontSize;
+            WidthGrowthFactor = verdict == ImageOverlayVerdict.SideNote ? 0F : widthGrowthFactor;
+            HeightGrowthFactor = verdict == ImageOverlayVerdict.SideNote ? 0F : heightGrowthFactor;
         }
 
         public ImageOverlayVerdict Verdict { get; }
@@ -32,14 +35,16 @@ namespace OfficeTranslate.Core
         // Offsets/sizes in Office points, relative to the source image's own
         // origin. The caller adds the image's Left/Top in whichever reference
         // frame the host uses, so no cross-frame conversion happens here.
-        // Width/Height are the EXACT bbox-mapped sizes: the planner never
-        // expands a small region (R6). If the text cannot fit even at the
-        // minimum font size, the verdict is SideNote instead.
+        // Starts at the bbox-mapped size. If needed, grows around its center
+        // independently up to 5x per dimension, inside the image, minimizing area.
         public float Left { get; }
         public float Top { get; }
         public float Width { get; }
         public float Height { get; }
         public float FontSize { get; }
+        public float WidthGrowthFactor { get; }
+        public float HeightGrowthFactor { get; }
+        public float GrowthFactor => Math.Max(WidthGrowthFactor, HeightGrowthFactor);
     }
 
     // Pure, host-independent geometry: validates the model's 0-1000 bbox,
@@ -60,7 +65,8 @@ namespace OfficeTranslate.Core
     public static class ImageOverlayPlanner
     {
         private const float BboxScale = 1000F;
-        private const float MinBboxUnits = 10F;
+        private const float MinBboxUnits = 3F;
+        private const float MaxGrowthFactor = 5F;
         private const float MaxAspectDeviation = 0.05F;
         private const float MaxRotationDegrees = 0.5F;
         // Tolerance for float rounding when validating the final rect against
@@ -102,8 +108,8 @@ namespace OfficeTranslate.Core
                 return SideNote("捕获图像长宽比与 Office 图片不一致（偏差 " +
                     (deviation * 100F).ToString("0.#") + "%），坐标无法可靠换算。");
 
-            // R6: exact bbox mapping, never expanded. A region smaller than the
-            // text is handled by FitFontSize below, which degrades to SideNote.
+            // Validate the exact starting rectangle before any growth. Invalid
+            // geometry must never be rescued by the expansion path.
             var left = shapeWidth * x1 / BboxScale;
             var top = shapeHeight * y1 / BboxScale;
             var width = shapeWidth * (x2 - x1) / BboxScale;
@@ -119,7 +125,28 @@ namespace OfficeTranslate.Core
 
             var fit = ImageOverlayLayout.FitFontSize(width, height, text);
             if (!fit.Fits)
-                return SideNote("译文在原文区域内放不下（已尝试最小字号），改用旁注。");
+            {
+                var maxWidth = Math.Min(shapeWidth, width * MaxGrowthFactor);
+                var maxHeight = Math.Min(shapeHeight, height * MaxGrowthFactor);
+                if (!ImageOverlayLayout.FitFontSize(maxWidth, maxHeight, text).Fits)
+                    return SideNote("译文在放大至上限的区域内仍放不下（已尝试最小字号），改用旁注。");
+
+                FindMinimumArea(width, height, maxWidth, maxHeight, text, out var grownWidth, out var grownHeight);
+                // Translate at the edges instead of clipping away the fitting
+                // dimensions. The whole frame must stay inside the image.
+                left = Math.Max(0F, Math.Min(shapeWidth - grownWidth, left + width / 2F - grownWidth / 2F));
+                top = Math.Max(0F, Math.Min(shapeHeight - grownHeight, top + height / 2F - grownHeight / 2F));
+                var widthGrowth = grownWidth / width;
+                var heightGrowth = grownHeight / height;
+                width = grownWidth;
+                height = grownHeight;
+                fit = ImageOverlayLayout.FitFontSize(width, height, text);
+                if (!fit.Fits || left < -BoundsEpsilon || top < -BoundsEpsilon ||
+                    left + width > shapeWidth + BoundsEpsilon || top + height > shapeHeight + BoundsEpsilon)
+                    return SideNote("译文在放大并钳制后的区域内仍放不下，改用旁注。");
+                return new PlannedOverlay(ImageOverlayVerdict.Place, string.Empty,
+                    left, top, width, height, fit.FontSize, widthGrowth, heightGrowth);
+            }
 
             return new PlannedOverlay(ImageOverlayVerdict.Place, string.Empty,
                 left, top, width, height, fit.FontSize);
@@ -130,9 +157,57 @@ namespace OfficeTranslate.Core
             return !float.IsNaN(value) && !float.IsInfinity(value) && value > 0F;
         }
 
+        // FitFontSize is unchanged and is the only layout oracle. At the
+        // minimum font its required height is a staircase of wrapped-line
+        // counts. The least-width/least-height corner of EVERY fitting stair
+        // is an area candidate; any interior point has no smaller area.
+        private static void FindMinimumArea(float minWidth, float minHeight, float maxWidth, float maxHeight,
+            string text, out float bestWidth, out float bestHeight)
+        {
+            bool Fits(float w, float h) => ImageOverlayLayout.FitFontSize(w, h, text).Fits;
+            var heightFloor = FirstFittingFloat(minHeight, maxHeight, h => Fits(maxWidth, h));
+            var width = FirstFittingFloat(minWidth, maxWidth, w => Fits(w, maxHeight));
+            bestWidth = width;
+            bestHeight = maxHeight;
+            var bestArea = double.PositiveInfinity;
+            while (true)
+            {
+                var height = FirstFittingFloat(minHeight, maxHeight, h => Fits(width, h));
+                var area = (double)width * height;
+                if (area < bestArea) { bestArea = area; bestWidth = width; bestHeight = height; }
+                if (height == heightFloor || width == maxWidth) break;
+                // One float below the exact fitting height forces the next
+                // wrapping stair. No guessed font metrics or fixed grid.
+                var below = FromBits(ToBits(height) - 1);
+                var nextWidth = FirstFittingFloat(width, maxWidth, w => Fits(w, below));
+                // All later widths are larger and cannot beat this area bound.
+                if ((double)nextWidth * heightFloor >= bestArea) break;
+                width = nextWidth;
+            }
+        }
+
+        // Positive finite floats have the same ordering as their integer bits.
+        // Exact representable endpoints avoid rounding that would keep us on
+        // the same wrapping stair indefinitely. Caller proves high fits.
+        private static float FirstFittingFloat(float low, float high, Func<float, bool> fits)
+        {
+            if (fits(low)) return low;
+            var lo = ToBits(low);
+            var hi = ToBits(high);
+            while (hi - lo > 1)
+            {
+                var mid = lo + (hi - lo) / 2;
+                if (fits(FromBits(mid))) hi = mid;
+                else lo = mid;
+            }
+            return FromBits(hi);
+        }
+        private static int ToBits(float value) => BitConverter.ToInt32(BitConverter.GetBytes(value), 0);
+        private static float FromBits(int value) => BitConverter.ToSingle(BitConverter.GetBytes(value), 0);
+
         private static PlannedOverlay SideNote(string reason)
         {
-            return new PlannedOverlay(ImageOverlayVerdict.SideNote, reason, 0F, 0F, 0F, 0F, 0F);
+            return new PlannedOverlay(ImageOverlayVerdict.SideNote, reason, 0F, 0F, 0F, 0F, 0F, 0F);
         }
     }
 }

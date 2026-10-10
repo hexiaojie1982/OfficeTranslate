@@ -91,7 +91,7 @@ namespace OfficeTranslate.PowerPointAddIn
             // UI thread instead of after the network awaits.
             var hostWindow = GetHostWindow();
             try { var settings = LoadForTranslation(); settings.Validate(); _progressForm = new TranslationProgressForm(settings.UiLanguage, () => _cancellation?.Cancel()); _progressForm.ShowFor(hostWindow); var service = new HostService(_host); SetStatus("OfficeTranslate：正在准备翻译…"); var summary = await service.TranslateAsync(whole, settings, _cancellation.Token, SetStatus, ui); _progressForm.CloseAndShowResult(summary, hostWindow); _progressForm = null; }
-            catch (OperationCanceledException) { SetStatus("OfficeTranslate：已取消"); }
+            catch (OperationCanceledException ex) when (TranslationFailurePolicy.IsUserCancellation(ex, _cancellation.Token)) { SetStatus("OfficeTranslate：已取消"); }
             catch (Exception ex)
             {
                 CloseProgress();
@@ -106,8 +106,7 @@ namespace OfficeTranslate.PowerPointAddIn
                 ui.Invoke(() =>
                 {
                     var window = ResolveErrorDialogOwner(hostWindow);
-                    if (window != IntPtr.Zero) MessageBox.Show(new HostWindow(window), ex.Message, "OfficeTranslate", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                    else MessageBox.Show(ex.Message, "OfficeTranslate", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    TranslationErrorDialog.Show(ex, window != IntPtr.Zero ? new HostWindow(window) : null);
                 });
             }
             finally { CloseProgress(); _cancellation.Dispose(); _cancellation = null; }

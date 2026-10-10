@@ -102,9 +102,31 @@ namespace OfficeTranslate.ExcelAddIn
                 // the next review can tell a stale object from an activation
                 // or clipboard issue.
                 byte[] bytes;
+                var captureSource = "fallback";
+                var captureReason = "sheet-identity-not-proven";
+                var sourceWidth = 0; var sourceHeight = 0;
+                var imageSheet = image.Parent as Excel.Worksheet;
+                var capturedSheet = imageSheet ?? _excel.ActiveSheet as Excel.Worksheet
+                    ?? throw new InvalidOperationException("无法确定图片所在的工作表。");
                 try
                 {
-                    bytes = ClipboardImageCapture.CapturePng(_ =>
+                    token.ThrowIfCancellationRequested();
+                    bytes = Array.Empty<byte>();
+                    var original = false;
+                    if (imageSheet != null)
+                    {
+                        try
+                        {
+                            var workbook = (Excel.Workbook)imageSheet.Parent;
+                            original = OriginalImageCapture.TryCaptureFile(workbook.Path.Length == 0 ? "" : workbook.FullName,
+                                workbook.Saved, "Excel", imageSheet.Name, image.Name, image.Width, image.Height,
+                                ImageCaptureBudget.MaxSinglePngBytes, out bytes, out captureReason, out sourceWidth, out sourceHeight);
+                        }
+                        catch (ImageCaptureLimitException) { throw; }
+                        catch (Exception ex) { captureReason = "excel-package-" + ex.GetType().Name; }
+                    }
+                    if (original) captureSource = "original";
+                    else bytes = ClipboardImageCapture.CapturePng(_ =>
                     {
                         // Excel copy diagnostics: keep the ORIGINAL COM HResult/type of
                         // both the Copy attempt and the CopyPicture fallback, plus the
@@ -125,6 +147,8 @@ namespace OfficeTranslate.ExcelAddIn
                                 "请选择该图片后重试。", ex);
                         }
                     }, () => Application.DoEvents(), token);
+                    token.ThrowIfCancellationRequested();
+                    ImageOverlayDiagnostics.LogOcrCapture("Excel", captureSource, captureReason, sourceWidth, sourceHeight, bytes);
                 }
                 catch (Exception ex) when (!(ex is OperationCanceledException))
                 {
@@ -145,15 +169,16 @@ namespace OfficeTranslate.ExcelAddIn
                 // hash when the name is unavailable.
                 var owner = ImageOverlayIdentity.ForNamedShape(
                     "xl", SafeString(() => image.Name), bytes);
-                return Tuple.Create(bytes, owner);
+                return new { Bytes = bytes, Owner = owner, Sheet = capturedSheet, CaptureSource = captureSource, CaptureReason = captureReason };
             });
-            var imageBytes = preNetwork.Item1;
-            var ownerId = preNetwork.Item2;
+            var imageBytes = preNetwork.Bytes;
+            var ownerId = preNetwork.Owner;
 
             var hasPixels = PngDimensions.TryRead(imageBytes, out var pixelWidth, out var pixelHeight);
-            var regions = await client.TranslateImageAsync(imageBytes, settings, token);
-            if (regions.Count == 0) { summary.RecordImage(false); return; }
-            summary.RecordImage(true);
+            var recognition = await client.TranslateImageAsync(imageBytes, settings, token, "Excel", preNetwork.CaptureSource, preNetwork.CaptureReason);
+            summary.RecordImageRecognition(recognition);
+            var regions = recognition.Regions;
+            if (regions.Count == 0) return;
 
             // M2: every shape access below runs on the Office UI (STA) thread.
             // The sheet is resolved here (not earlier) so the "no sheet"
@@ -167,8 +192,7 @@ namespace OfficeTranslate.ExcelAddIn
                 // Once this callback starts, its shape mutations run to
                 // completion for this image.
                 token.ThrowIfCancellationRequested();
-                var sheet = _excel.ActiveSheet as Excel.Worksheet
-                    ?? throw new InvalidOperationException("无法确定图片所在的工作表。");
+                var sheet = preNetwork.Sheet;
                 // Excel shapes live in a single sheet-points frame, so the overlay
                 // rect is the image rect plus the planner's offsets directly.
                 var imageLeft = image.Left; var imageTop = image.Top;
@@ -182,10 +206,10 @@ namespace OfficeTranslate.ExcelAddIn
                 var plans = new List<Tuple<ImageTranslationRegion, PlannedOverlay, string>>();
                 foreach (var region in regions)
                 {
-                    var overlayText = settings.BilingualMode && !string.IsNullOrWhiteSpace(region.Source)
-                        ? region.Source + "\r" + region.Translation
-                        : region.Translation;
-                    var plan = hasPixels
+                    var overlayText = region.DisplayText(settings.BilingualMode);
+                    var plan = region.RequiresReview
+                        ? new PlannedOverlay(ImageOverlayVerdict.SideNote, region.ReviewReason, 0F, 0F, 0F, 0F, 0F)
+                        : hasPixels
                         ? ImageOverlayPlanner.Plan(
                             region.X1, region.Y1, region.X2, region.Y2,
                             pixelWidth, pixelHeight, imageWidth, imageHeight, overlayText,
@@ -266,58 +290,68 @@ namespace OfficeTranslate.ExcelAddIn
                         continue;
                     }
                 }
-                // R2: one image gets ONE combined side-note, so no region's
-                // translation is lost when several regions degrade.
+                // Cleanup once per image, never once per owner-tagged chunk.
                 if (noteEntries.Count > 0)
                 {
-                    PlaceCombinedNote(sheet, ownerId, ImageOverlayNotes.Combine(noteEntries),
-                        imageLeft, imageTop + imageHeight + 6F, imageWidth);
                     summary.RecordImageNeedsReview();
+                    ImageOverlayNotes.Place(noteEntries, ImageOverlayNotes.NoteWidth(imageWidth), imageTop + imageHeight + 6F,
+                        (chunk, top) => PlaceCombinedNote(sheet, ownerId, chunk.Text, imageLeft, top, imageWidth),
+                        (chunk, error) => summary.RecordImageNoteFailure(ownerId, chunk.Text, error.Message));
                 }
             });
         }
 
-        private void PlaceCombinedNote(Excel.Worksheet sheet, string ownerId, string noteText, float noteLeft, float noteTop, float imageWidth)
+        private float PlaceCombinedNote(Excel.Worksheet sheet, string ownerId, string noteText, float noteLeft, float noteTop, float imageWidth)
         {
             // A side-note explicitly does NOT claim positional coverage: it is
             // placed below the image.
-            var noteWidth = Math.Min(420F, Math.Max(160F, imageWidth));
+            var noteWidth = ImageOverlayNotes.NoteWidth(imageWidth);
             // D3: clamp the initial height to the cap up front; an estimate
             // that already exceeds the cap must go through the bounded growth
             // check instead of returning success immediately.
             var noteHeight = Math.Min(ImageOverlayLayout.MaxNoteHeightPt,
-                ImageOverlayLayout.EstimateNoteHeight(noteWidth, noteText, 9F));
+                ImageOverlayLayout.EstimateNoteHeight(noteWidth - 4F, noteText, ImageOverlayNotes.NoteFontSize));
             var note = sheet.Shapes.AddTextbox(Office.MsoTextOrientation.msoTextOrientationHorizontal,
                 noteLeft, noteTop, noteWidth, noteHeight);
-            note.AlternativeText = ImageOverlayTags.NoteFor(ownerId);
-            // D2/D3: no host auto-growth for notes either; W2 grows the note
-            // manually under the cap so the limit cannot be bypassed.
-            note.TextFrame2.AutoSize = Office.MsoAutoSize.msoAutoSizeNone;
-            note.Fill.Visible = Office.MsoTriState.msoTrue;
-            note.Fill.ForeColor.RGB = 0xE1FFFF; // light yellow (BGR)
-            note.Fill.Transparency = 0F;
-            note.Line.Visible = Office.MsoTriState.msoFalse;
-            note.TextFrame2.MarginLeft = 4; note.TextFrame2.MarginRight = 4;
-            note.TextFrame2.MarginTop = 3; note.TextFrame2.MarginBottom = 3;
-            note.TextFrame2.WordWrap = Office.MsoTriState.msoTrue;
-            note.TextFrame2.TextRange.Text = noteText;
-            note.TextFrame2.TextRange.Font.Size = 9F;
-            // W2: grow the note downward until the real laid-out text height
-            // fits. Bounded; a note that still overflows at the cap is deleted
-            // and reported explicitly instead of being kept clipped.
-            GrowNoteToFit(note);
+            try
+            {
+                note.AlternativeText = ImageOverlayTags.NoteFor(ownerId);
+                // D2/D3: no host auto-growth for notes either; W2 grows the note
+                // manually under the cap so the limit cannot be bypassed.
+                note.TextFrame2.AutoSize = Office.MsoAutoSize.msoAutoSizeNone;
+                note.Fill.Visible = Office.MsoTriState.msoTrue;
+                note.Fill.ForeColor.RGB = 0xE1FFFF; // light yellow (BGR)
+                note.Fill.Transparency = 0F;
+                note.Line.Visible = Office.MsoTriState.msoFalse;
+                note.TextFrame2.MarginLeft = 4; note.TextFrame2.MarginRight = 4;
+                note.TextFrame2.MarginTop = 3; note.TextFrame2.MarginBottom = 3;
+                note.TextFrame2.WordWrap = Office.MsoTriState.msoTrue;
+                note.TextFrame2.TextRange.Text = noteText;
+                note.TextFrame2.TextRange.Font.Size = ImageOverlayNotes.NoteFontSize;
+                // W2: grow the note downward until the real laid-out text height
+                // fits. Bounded; a note that still overflows at the cap is deleted
+                // and reported explicitly instead of being kept clipped.
+                GrowNoteToFit(note);
+                return note.Height;
+            }
+            catch
+            {
+                // Only this failed attempt is deleted; earlier chunks survive.
+                try { note.Delete(); } catch { }
+                throw;
+            }
         }
 
         // W1: real-layout fit check for Excel overlays. TextRange2.BoundHeight
         // is the actual rendered text height with word wrap applied. The font
-        // shrinks stepwise to the 8pt floor; the box geometry never expands.
+        // shrinks stepwise to the shared 6pt floor; the box geometry never expands.
         private static bool TextFitsBox(Excel.Shape box, float startSize)
         {
-            const float floorSize = 8F;
+            const float floorSize = ImageOverlayLayout.MinFontSize;
             var size = Math.Min(startSize, 18F);
             try { box.TextFrame2.TextRange.Font.Size = size; }
             catch { return false; }
-            for (var i = 0; i < 12; i++)
+            for (var i = 0; i < (int)Math.Ceiling(ImageOverlayLayout.MaxFontSize - floorSize) + 2; i++)
             {
                 float boundHeight, availHeight;
                 try
@@ -379,7 +413,7 @@ namespace OfficeTranslate.ExcelAddIn
                     string text;
                     try { text = note.TextFrame2.TextRange.Text; } catch { text = string.Empty; }
                     try { note.Delete(); } catch { }
-                    throw new InvalidOperationException(
+                    throw new ImageOverlayNoteOverflowException(
                         "译文旁注过长，增高到上限仍无法完整显示，已删除避免静默裁切。译文（截断）：" +
                         ImageOverlayText.Truncate(text));
                 }
@@ -393,7 +427,7 @@ namespace OfficeTranslate.ExcelAddIn
             string leftover;
             try { leftover = note.TextFrame2.TextRange.Text; } catch { leftover = string.Empty; }
             try { note.Delete(); } catch { }
-            throw new InvalidOperationException(
+            throw new ImageOverlayNoteOverflowException(
                 "译文旁注排版校验未收敛，已删除避免静默裁切。译文（截断）：" +
                 ImageOverlayText.Truncate(leftover));
         }
@@ -518,6 +552,8 @@ namespace OfficeTranslate.ExcelAddIn
                 OutWidth = plan.Width,
                 OutHeight = plan.Height,
                 FontSize = plan.FontSize,
+                WidthGrowthFactor = plan.WidthGrowthFactor,
+                HeightGrowthFactor = plan.HeightGrowthFactor,
                 Verdict = plan.Verdict.ToString(),
                 Reason = plan.Reason,
                 TextLength = text == null ? 0 : text.Length,
