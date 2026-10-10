@@ -49,6 +49,29 @@ namespace OfficeTranslate.Core
             }
         }
 
+        // Read exported PNGs only after checking file bytes and the complete
+        // IHDR header (PngDimensions requires its 33 bytes, not just 24).
+        public static byte[] ReadPngFile(string path, long maxBytes = MaxSinglePngBytes)
+        {
+            if (maxBytes <= 0) throw new ImageCaptureLimitException();
+            using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read))
+            {
+                if (stream.Length > Math.Min(maxBytes, MaxSinglePngBytes)) throw new ImageCaptureLimitException();
+                var header = new byte[33]; var read = 0;
+                while (read < header.Length)
+                {
+                    var count = stream.Read(header, read, header.Length - read);
+                    if (count == 0) throw new InvalidDataException("Invalid export PNG");
+                    read += count;
+                }
+                if (!PngDimensions.TryRead(header, out var width, out var height)) throw new InvalidDataException("Invalid export PNG");
+                if (width > 8000 || height > 8000 || (long)width * height > 32_000_000)
+                    throw new ImageCaptureLimitException("导出图片像素过大，请降低分辨率后重试。");
+                stream.Position = 0;
+                using (var output = new MemoryStream()) { stream.CopyTo(output); return output.ToArray(); }
+            }
+        }
+
         // GDI+ sometimes wraps stream exceptions in ExternalException. The
         // sticky flag lets EncodePng report the actual cause, not a vague GDI error.
         internal sealed class LimitedPngStream : MemoryStream

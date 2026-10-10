@@ -229,7 +229,7 @@ namespace OfficeTranslate.WordAddIn
             return await ui.InvokeAsync(() =>
             {
                 ui.LogProbe("capture_before");
-                // Prefer proven, untransformed inline original pixels. Other
+                // Prefer proven, untransformed inline or named-anchor original pixels. Other
                 // shapes use the existing rendered clipboard round-trip, which
                 // saves/restores the clipboard and rejects stale data.
                 // S1: pump the UI message loop while capturing (like the Excel
@@ -244,7 +244,7 @@ namespace OfficeTranslate.WordAddIn
                     var fallbackReason = "floating-or-unsupported-kind";
                     var originalCaptured = false;
                     captured = Array.Empty<byte>();
-                    if (image.Kind == "Inline")
+                    if (image.Kind == "Inline" || image.Kind == "Floating")
                     {
                         try
                         {
@@ -252,7 +252,7 @@ namespace OfficeTranslate.WordAddIn
                             // mutation. XML proves the original pixels are not
                             // cropped/flipped/rotated before using this path.
                             originalCaptured = WordOriginalImageCapture.TryCapture(image.Anchor.WordOpenXML,
-                                image.Width, image.Height, maxPngBytes, out captured,
+                                image.Width, image.Height, maxPngBytes, image.Kind == "Floating" ? image.ShapeName : null, out captured,
                                 out fallbackReason, out sourceWidth, out sourceHeight);
                         }
                         catch (ImageCaptureLimitException) { throw; }
@@ -262,6 +262,8 @@ namespace OfficeTranslate.WordAddIn
                         captured = ClipboardImageCapture.CapturePng(image.CopyAsPicture,
                             () => System.Windows.Forms.Application.DoEvents(), token, maxPngBytes);
                     token.ThrowIfCancellationRequested();
+                    image.CaptureSource = originalCaptured ? "original" : "fallback";
+                    image.CaptureReason = fallbackReason;
                     ImageOverlayDiagnostics.LogOcrCapture("Word", originalCaptured ? "original-raster" : "copy-as-picture",
                         fallbackReason, sourceWidth, sourceHeight, captured);
                 }
@@ -325,7 +327,7 @@ namespace OfficeTranslate.WordAddIn
             var ownerId = resolved.Item1;
             var inlineResolution = resolved.Item2;
             var hasPixels = PngDimensions.TryRead(bytes, out var pixelWidth, out var pixelHeight);
-            var recognition = await client.TranslateImageAsync(bytes, settings, token, "Word");
+            var recognition = await client.TranslateImageAsync(bytes, settings, token, "Word", image.CaptureSource, image.CaptureReason);
             summary.RecordImageRecognition(recognition);
             var regions = recognition.Regions;
             if (regions.Count == 0) return;
@@ -1732,6 +1734,8 @@ namespace OfficeTranslate.WordAddIn
             public Range Anchor { get; } public float Left { get; } public float Top { get; } public float Width { get; } public float Height { get; }
             public string Kind { get; set; } = "Unknown";
             public string ShapeName { get; set; } = string.Empty;
+            public string CaptureSource { get; set; } = "unknown";
+            public string CaptureReason { get; set; } = "unknown";
             public float Rotation { get; set; }
             public bool FlipHorizontal { get; set; }
             public bool FlipVertical { get; set; }

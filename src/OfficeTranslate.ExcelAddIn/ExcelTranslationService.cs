@@ -102,9 +102,31 @@ namespace OfficeTranslate.ExcelAddIn
                 // the next review can tell a stale object from an activation
                 // or clipboard issue.
                 byte[] bytes;
+                var captureSource = "fallback";
+                var captureReason = "sheet-identity-not-proven";
+                var sourceWidth = 0; var sourceHeight = 0;
+                var imageSheet = image.Parent as Excel.Worksheet;
+                var capturedSheet = imageSheet ?? _excel.ActiveSheet as Excel.Worksheet
+                    ?? throw new InvalidOperationException("无法确定图片所在的工作表。");
                 try
                 {
-                    bytes = ClipboardImageCapture.CapturePng(_ =>
+                    token.ThrowIfCancellationRequested();
+                    bytes = Array.Empty<byte>();
+                    var original = false;
+                    if (imageSheet != null)
+                    {
+                        try
+                        {
+                            var workbook = (Excel.Workbook)imageSheet.Parent;
+                            original = OriginalImageCapture.TryCaptureFile(workbook.Path.Length == 0 ? "" : workbook.FullName,
+                                workbook.Saved, "Excel", imageSheet.Name, image.Name, image.Width, image.Height,
+                                ImageCaptureBudget.MaxSinglePngBytes, out bytes, out captureReason, out sourceWidth, out sourceHeight);
+                        }
+                        catch (ImageCaptureLimitException) { throw; }
+                        catch (Exception ex) { captureReason = "excel-package-" + ex.GetType().Name; }
+                    }
+                    if (original) captureSource = "original";
+                    else bytes = ClipboardImageCapture.CapturePng(_ =>
                     {
                         // Excel copy diagnostics: keep the ORIGINAL COM HResult/type of
                         // both the Copy attempt and the CopyPicture fallback, plus the
@@ -125,6 +147,8 @@ namespace OfficeTranslate.ExcelAddIn
                                 "请选择该图片后重试。", ex);
                         }
                     }, () => Application.DoEvents(), token);
+                    token.ThrowIfCancellationRequested();
+                    ImageOverlayDiagnostics.LogOcrCapture("Excel", captureSource, captureReason, sourceWidth, sourceHeight, bytes);
                 }
                 catch (Exception ex) when (!(ex is OperationCanceledException))
                 {
@@ -145,13 +169,13 @@ namespace OfficeTranslate.ExcelAddIn
                 // hash when the name is unavailable.
                 var owner = ImageOverlayIdentity.ForNamedShape(
                     "xl", SafeString(() => image.Name), bytes);
-                return Tuple.Create(bytes, owner);
+                return new { Bytes = bytes, Owner = owner, Sheet = capturedSheet, CaptureSource = captureSource, CaptureReason = captureReason };
             });
-            var imageBytes = preNetwork.Item1;
-            var ownerId = preNetwork.Item2;
+            var imageBytes = preNetwork.Bytes;
+            var ownerId = preNetwork.Owner;
 
             var hasPixels = PngDimensions.TryRead(imageBytes, out var pixelWidth, out var pixelHeight);
-            var recognition = await client.TranslateImageAsync(imageBytes, settings, token, "Excel");
+            var recognition = await client.TranslateImageAsync(imageBytes, settings, token, "Excel", preNetwork.CaptureSource, preNetwork.CaptureReason);
             summary.RecordImageRecognition(recognition);
             var regions = recognition.Regions;
             if (regions.Count == 0) return;
@@ -168,8 +192,7 @@ namespace OfficeTranslate.ExcelAddIn
                 // Once this callback starts, its shape mutations run to
                 // completion for this image.
                 token.ThrowIfCancellationRequested();
-                var sheet = _excel.ActiveSheet as Excel.Worksheet
-                    ?? throw new InvalidOperationException("无法确定图片所在的工作表。");
+                var sheet = preNetwork.Sheet;
                 // Excel shapes live in a single sheet-points frame, so the overlay
                 // rect is the image rect plus the planner's offsets directly.
                 var imageLeft = image.Left; var imageTop = image.Top;

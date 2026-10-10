@@ -67,7 +67,12 @@ namespace OfficeTranslate.WordAddIn
 
         private string ChangelogText()
         {
-            return "OfficeTranslate " + CurrentVersion + "\r\n• Word 对无裁剪、翻转、旋转及效果的内嵌位图只读提取原图，按长边 2560px 及容量规则限幅；不可靠时回退现有渲染捕获并记录原因，不改原文档。\r\n• 图片请求强化整图逐行扫描，OpenAI-compatible/Ollama 显式设置 8192 输出 Token 预算；截断结果不作完整译文写回。普通文本翻译不变。\r\n• 图片解析返回区域统计；空译文或坏坐标有可用文字时保留为待检查旁注。摘要分开说明 OCR 与文本检查，零区域也记录元数据诊断。\r\n\r\n" + ChangelogVersion130Text();
+            return "OfficeTranslate " + CurrentVersion + "\r\n• Word 增加按名称唯一证明的安全浮动位图原图提取；Excel/PowerPoint 对已保存且无未保存修改的 OOXML 包只读定位原图，共用 EXIF、裁剪/变换及容量校验，长边限幅 2560px。\r\n• 原图无法可靠证明时保持渲染回退；PowerPoint 优先按幻灯片比例高分辨率导出，失败才用原导出。OCR 汇总记录捕获来源与原因，不改源文档、不触发保存。\r\n\r\n" + ChangelogVersion131Text();
+        }
+
+        private string ChangelogVersion131Text()
+        {
+            return "OfficeTranslate 2.1.31\r\n• Word 对无裁剪、翻转、旋转及效果的内嵌位图只读提取原图，EXIF 1–8 校正后按长边 2560px 及容量规则限幅；不可靠时回退现有渲染捕获并记录原因，不改原文档。\r\n• 图片请求强化整图逐行扫描，OpenAI-compatible/Ollama 显式设置 8192 输出 Token 预算；截断结果不作完整译文写回。普通文本翻译不变。\r\n• 图片解析返回区域统计；空译文或坏坐标有可用文字时保留为待检查旁注。摘要分开说明 OCR 与文本检查，零区域也记录元数据诊断。\r\n\r\n" + ChangelogVersion130Text();
         }
 
         private string ChangelogVersion130Text()

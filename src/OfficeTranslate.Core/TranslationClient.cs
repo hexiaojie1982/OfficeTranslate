@@ -97,7 +97,7 @@ namespace OfficeTranslate.Core
             }
         }
 
-        public async Task<ImageRecognitionResult> TranslateImageAsync(byte[] imageBytes, TranslationSettings settings, CancellationToken token, string diagnosticHost = "Image")
+        public async Task<ImageRecognitionResult> TranslateImageAsync(byte[] imageBytes, TranslationSettings settings, CancellationToken token, string diagnosticHost = "Image", string captureSource = "unknown", string captureReason = "unknown")
         {
             var watch = System.Diagnostics.Stopwatch.StartNew();
             ImageRecognitionResult? result = null;
@@ -153,7 +153,7 @@ namespace OfficeTranslate.Core
             {
                 PngDimensions.TryRead(imageBytes, out var width, out var height);
                 ImageOverlayDiagnostics.LogOcrSummary(diagnosticHost, width, height, result?.Statistics,
-                    finishReason, truncated, status, watch.ElapsedMilliseconds);
+                    finishReason, truncated, status, watch.ElapsedMilliseconds, captureSource, captureReason);
             }
         }
 

@@ -89,16 +89,59 @@ namespace OfficeTranslate.PowerPointAddIn
                 var preNetwork = await ui.InvokeAsync(() =>
                 {
                     ui.LogProbe("capture_before");
-                    image.Export(path, PowerPoint.PpShapeFormat.ppShapeFormatPNG);
+                    token.ThrowIfCancellationRequested();
+                    var slide = image.Parent as PowerPoint.Slide
+                        ?? throw new InvalidOperationException("无法确定图片所在的幻灯片。");
+                    byte[] bytes = Array.Empty<byte>();
+                    var captureSource = "fallback";
+                    var captureReason = "presentation-identity-not-proven";
+                    var sourceWidth = 0; var sourceHeight = 0;
+                    var original = false;
+                    var presentation = slide.Parent as PowerPoint.Presentation;
+                    if (presentation != null)
+                    {
+                        try
+                        {
+                            original = OriginalImageCapture.TryCaptureFile(presentation.Path.Length == 0 ? "" : presentation.FullName,
+                                presentation.Saved == Office.MsoTriState.msoTrue, "PowerPoint", slide.SlideID.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                                image.Name, image.Width, image.Height, ImageCaptureBudget.MaxSinglePngBytes,
+                                out bytes, out captureReason, out sourceWidth, out sourceHeight);
+                        }
+                        catch (ImageCaptureLimitException) { throw; }
+                        catch (Exception ex) { captureReason = "ppt-package-" + ex.GetType().Name; }
+                    }
+                    if (original) captureSource = "original";
+                    else
+                    {
+                        try
+                        {
+                            if (presentation == null) throw new InvalidOperationException("No presentation scale");
+                            var scale = ImageCaptureResolution.PowerPointExportScale(image.Width, image.Height,
+                                presentation.PageSetup.SlideWidth, presentation.PageSetup.SlideHeight);
+                            // Parameters are whole-slide POINT dimensions. PIA:
+                            // Export(string, PpShapeFormat, int, int, PpExportMode).
+                            image.Export(path, PowerPoint.PpShapeFormat.ppShapeFormatPNG, scale.Item1, scale.Item2, PowerPoint.PpExportMode.ppRelativeToSlide);
+                            bytes = ImageCaptureBudget.ReadPngFile(path);
+                            captureReason += "-scaled-export";
+                        }
+                        catch (ImageCaptureLimitException) { throw; }
+                        catch (Exception ex)
+                        {
+                            // Never read a partially written/old export file.
+                            if (File.Exists(path)) File.Delete(path);
+                            image.Export(path, PowerPoint.PpShapeFormat.ppShapeFormatPNG);
+                            bytes = ImageCaptureBudget.ReadPngFile(path);
+                            captureReason += "-scaled-export-failed-" + ex.GetType().Name + "-default-export";
+                        }
+                    }
+                    token.ThrowIfCancellationRequested();
+                    ImageOverlayDiagnostics.LogOcrCapture("PowerPoint", captureSource, captureReason, sourceWidth, sourceHeight, bytes);
                     ui.LogProbe("capture_after");
-                    var bytes = File.ReadAllBytes(path);
                     // R5: owner identity is the slide-unique shape Name (persisted,
                     // stable across move/resize/reopen), falling back to a content
                     // hash when the name is unavailable.
                     var owner = ImageOverlayIdentity.ForNamedShape(
                         "pp", SafeString(() => image.Name), bytes);
-                    var slide = image.Parent as PowerPoint.Slide
-                        ?? throw new InvalidOperationException("无法确定图片所在的幻灯片。");
                     // Slide shapes live in a single slide-points frame.
                     // R3: flip state is recorded for diagnostics only. The exported
                     // PNG already shows the flipped rendering, so the model's bbox
@@ -116,12 +159,14 @@ namespace OfficeTranslate.PowerPointAddIn
                         Rotation = SafeFloat(() => image.Rotation),
                         FlipH = SafeTriState(() => image.HorizontalFlip),
                         FlipV = SafeTriState(() => image.VerticalFlip),
+                        CaptureSource = captureSource,
+                        CaptureReason = captureReason,
                     };
                 });
                 var imageBytes = preNetwork.Bytes;
                 var ownerId = preNetwork.Owner;
                 var hasPixels = PngDimensions.TryRead(imageBytes, out var pixelWidth, out var pixelHeight);
-                var recognition = await client.TranslateImageAsync(imageBytes, settings, token, "PowerPoint");
+                var recognition = await client.TranslateImageAsync(imageBytes, settings, token, "PowerPoint", preNetwork.CaptureSource, preNetwork.CaptureReason);
                 summary.RecordImageRecognition(recognition);
                 var regions = recognition.Regions;
                 if (regions.Count == 0) return;

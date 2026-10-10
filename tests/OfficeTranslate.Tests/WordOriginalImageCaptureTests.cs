@@ -97,7 +97,7 @@ namespace OfficeTranslate.Tests
 
         // A real GDI+ JPEG with an explicit APP1 Exif/TIFF IFD. Avoid
         // SetPropertyItem/Save silently dropping the metadata under test.
-        private static byte[] PatternJpeg(int orientation, bool shortValue = false, bool bigEndian = false)
+        internal static byte[] PatternJpeg(int orientation, bool shortValue = false, bool bigEndian = false)
         {
             byte[] jpeg;
             using (var bitmap = new Bitmap(120, 80, PixelFormat.Format24bppRgb))
