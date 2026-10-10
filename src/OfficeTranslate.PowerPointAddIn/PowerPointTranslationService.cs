@@ -473,6 +473,7 @@ namespace OfficeTranslate.PowerPointAddIn
                 OutWidth = plan.Width,
                 OutHeight = plan.Height,
                 FontSize = plan.FontSize,
+                GrowthFactor = plan.GrowthFactor,
                 Verdict = plan.Verdict.ToString(),
                 Reason = plan.Reason,
                 TextLength = text == null ? 0 : text.Length,

@@ -67,7 +67,12 @@ namespace OfficeTranslate.WordAddIn
 
         private string ChangelogText()
         {
-            return "OfficeTranslate " + CurrentVersion + "\r\n• Word 增加按名称唯一证明的安全浮动位图原图提取；Excel/PowerPoint 对已保存且无未保存修改的 OOXML 包只读定位原图，共用 EXIF、裁剪/变换及容量校验，长边限幅 2560px。\r\n• 原图无法可靠证明时保持渲染回退；PowerPoint 优先按幻灯片比例高分辨率导出，失败才用原导出。OCR 汇总记录捕获来源与原因，不改源文档、不触发保存。\r\n• 图片请求单次独立超时 600 秒，超时不自动重新生成并明确提示；主动取消仍静默停止。文本超时配置及重试策略不变。\r\n\r\n" + ChangelogVersion131Text();
+            return "OfficeTranslate " + CurrentVersion + "\r\n• 三宿主共用的图片覆盖框允许围绕原区域中心按需放大，每维最多 3 倍，始终保持在图片内；可能遮住邻近原文。\r\n• 小框信任门由 10 下调为 5 个坐标单位；沿用 8pt 最小字号，放大后仍放不下则走原旁注流程。逐区诊断增加 grow 放大倍数，不记录正文。\r\n\r\n" + ChangelogVersion132Text();
+        }
+
+        private string ChangelogVersion132Text()
+        {
+            return "OfficeTranslate 2.1.32\r\n• Word 增加按名称唯一证明的安全浮动位图原图提取；Excel/PowerPoint 对已保存且无未保存修改的 OOXML 包只读定位原图，共用 EXIF、裁剪/变换及容量校验，长边限幅 2560px。\r\n• 原图无法可靠证明时保持渲染回退；PowerPoint 优先按幻灯片比例高分辨率导出，失败才用原导出。OCR 汇总记录捕获来源与原因，不改源文档、不触发保存。\r\n• 图片请求单次独立超时 600 秒，超时不自动重新生成并明确提示；主动取消仍静默停止。文本超时配置及重试策略不变。\r\n• 指定源语言的混合文本整块校验失败后逐段降级，保留原分隔符；失败段保留原文，摘要区分部分成功与整项未变化。\r\n\r\n" + ChangelogVersion131Text();
         }
 
         private string ChangelogVersion131Text()

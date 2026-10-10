@@ -36,6 +36,7 @@ namespace OfficeTranslate.Core
         public float OutWidth;
         public float OutHeight;
         public float FontSize;
+        public float GrowthFactor;
         public string Verdict = string.Empty;
         public string Reason = string.Empty;
         public int TextLength;
@@ -180,17 +181,18 @@ namespace OfficeTranslate.Core
             }
         }
 
-        private static string Format(ImageOverlayDiagnosticEntry e)
+        internal static string Format(ImageOverlayDiagnosticEntry e)
         {
             var culture = CultureInfo.InvariantCulture;
             return string.Format(culture,
-                "{0:O} host={1} kind={2} png={3}x{4} bbox=[{5},{6},{7},{8}] shape=[{9},{10},{11},{12}]pt frame={13} rot={14} flipH={15} flipV={16} out=[{17},{18},{19},{20}] font={21} textLen={22} verdict={23} reason={24} owner={25}",
+                "{0:O} host={1} kind={2} png={3}x{4} bbox=[{5},{6},{7},{8}] shape=[{9},{10},{11},{12}]pt frame={13} rot={14} flipH={15} flipV={16} out=[{17},{18},{19},{20}] font={21} textLen={22} verdict={23} reason={24} owner={25} grow={26}",
                 DateTime.UtcNow, e.Host, e.ImageKind, e.PixelWidth, e.PixelHeight,
                 F(e.BboxX1), F(e.BboxY1), F(e.BboxX2), F(e.BboxY2),
                 F(e.ShapeLeft), F(e.ShapeTop), F(e.ShapeWidth), F(e.ShapeHeight), e.FrameNote,
                 F(e.RotationDegrees), e.FlipHorizontal, e.FlipVertical,
                 F(e.OutLeft), F(e.OutTop), F(e.OutWidth), F(e.OutHeight),
-                F(e.FontSize), e.TextLength, e.Verdict, e.Reason ?? string.Empty, e.OwnerId ?? string.Empty);
+                F(e.FontSize), e.TextLength, e.Verdict, e.Reason ?? string.Empty, e.OwnerId ?? string.Empty,
+                e.GrowthFactor.ToString("0.0##", culture));
         }
 
         private static string F(float value)

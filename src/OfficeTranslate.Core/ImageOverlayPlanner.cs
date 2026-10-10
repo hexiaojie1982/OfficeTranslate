@@ -4,7 +4,7 @@ namespace OfficeTranslate.Core
 {
     public enum ImageOverlayVerdict
     {
-        // The region geometry is trustworthy: draw the overlay exactly here.
+        // The region geometry is trustworthy: draw the planned overlay here.
         Place,
         // Geometry is not trustworthy (bad bbox, aspect mismatch, rotated image,
         // or text that cannot fit). Do NOT draw a positioned overlay; the caller
@@ -15,7 +15,7 @@ namespace OfficeTranslate.Core
     public sealed class PlannedOverlay
     {
         public PlannedOverlay(ImageOverlayVerdict verdict, string reason,
-            float left, float top, float width, float height, float fontSize)
+            float left, float top, float width, float height, float fontSize, float growthFactor = 1F)
         {
             Verdict = verdict;
             Reason = reason ?? string.Empty;
@@ -24,6 +24,7 @@ namespace OfficeTranslate.Core
             Width = width;
             Height = height;
             FontSize = fontSize;
+            GrowthFactor = verdict == ImageOverlayVerdict.SideNote ? 0F : growthFactor;
         }
 
         public ImageOverlayVerdict Verdict { get; }
@@ -32,14 +33,15 @@ namespace OfficeTranslate.Core
         // Offsets/sizes in Office points, relative to the source image's own
         // origin. The caller adds the image's Left/Top in whichever reference
         // frame the host uses, so no cross-frame conversion happens here.
-        // Width/Height are the EXACT bbox-mapped sizes: the planner never
-        // expands a small region (R6). If the text cannot fit even at the
-        // minimum font size, the verdict is SideNote instead.
+        // Starts at the bbox-mapped size. If needed, grows around its center
+        // up to 3x per dimension, capped and translated inside the image.
         public float Left { get; }
         public float Top { get; }
         public float Width { get; }
         public float Height { get; }
         public float FontSize { get; }
+        // Largest actual per-dimension growth. SideNote has no output rect: 0.
+        public float GrowthFactor { get; }
     }
 
     // Pure, host-independent geometry: validates the model's 0-1000 bbox,
@@ -60,7 +62,8 @@ namespace OfficeTranslate.Core
     public static class ImageOverlayPlanner
     {
         private const float BboxScale = 1000F;
-        private const float MinBboxUnits = 10F;
+        private const float MinBboxUnits = 5F;
+        private const float MaxGrowthFactor = 3F;
         private const float MaxAspectDeviation = 0.05F;
         private const float MaxRotationDegrees = 0.5F;
         // Tolerance for float rounding when validating the final rect against
@@ -102,8 +105,8 @@ namespace OfficeTranslate.Core
                 return SideNote("捕获图像长宽比与 Office 图片不一致（偏差 " +
                     (deviation * 100F).ToString("0.#") + "%），坐标无法可靠换算。");
 
-            // R6: exact bbox mapping, never expanded. A region smaller than the
-            // text is handled by FitFontSize below, which degrades to SideNote.
+            // Validate the exact starting rectangle before any growth. Invalid
+            // geometry must never be rescued by the expansion path.
             var left = shapeWidth * x1 / BboxScale;
             var top = shapeHeight * y1 / BboxScale;
             var width = shapeWidth * (x2 - x1) / BboxScale;
@@ -119,7 +122,40 @@ namespace OfficeTranslate.Core
 
             var fit = ImageOverlayLayout.FitFontSize(width, height, text);
             if (!fit.Fits)
-                return SideNote("译文在原文区域内放不下（已尝试最小字号），改用旁注。");
+            {
+                var maxWidth = Math.Min(shapeWidth, width * MaxGrowthFactor);
+                var maxHeight = Math.Min(shapeHeight, height * MaxGrowthFactor);
+                if (!ImageOverlayLayout.FitFontSize(maxWidth, maxHeight, text).Fits)
+                    return SideNote("译文在放大至上限的区域内仍放不下（已尝试最小字号），改用旁注。");
+
+                // Uniform center growth with independent image-edge caps.
+                // FitFontSize's minimum-font predicate is monotone in both
+                // dimensions. Keep the fitting endpoint, not the failing one.
+                var low = 1F;
+                var high = MaxGrowthFactor;
+                for (var i = 0; i < 20; i++)
+                {
+                    var mid = (low + high) / 2F;
+                    if (ImageOverlayLayout.FitFontSize(Math.Min(shapeWidth, width * mid),
+                        Math.Min(shapeHeight, height * mid), text).Fits) high = mid;
+                    else low = mid;
+                }
+                var grownWidth = Math.Min(shapeWidth, width * high);
+                var grownHeight = Math.Min(shapeHeight, height * high);
+                // Translate at the edges instead of clipping away the fitting
+                // dimensions. The whole frame must stay inside the image.
+                left = Math.Max(0F, Math.Min(shapeWidth - grownWidth, left + width / 2F - grownWidth / 2F));
+                top = Math.Max(0F, Math.Min(shapeHeight - grownHeight, top + height / 2F - grownHeight / 2F));
+                var growth = Math.Max(grownWidth / width, grownHeight / height);
+                width = grownWidth;
+                height = grownHeight;
+                fit = ImageOverlayLayout.FitFontSize(width, height, text);
+                if (!fit.Fits || left < -BoundsEpsilon || top < -BoundsEpsilon ||
+                    left + width > shapeWidth + BoundsEpsilon || top + height > shapeHeight + BoundsEpsilon)
+                    return SideNote("译文在放大并钳制后的区域内仍放不下，改用旁注。");
+                return new PlannedOverlay(ImageOverlayVerdict.Place, string.Empty,
+                    left, top, width, height, fit.FontSize, growth);
+            }
 
             return new PlannedOverlay(ImageOverlayVerdict.Place, string.Empty,
                 left, top, width, height, fit.FontSize);
@@ -132,7 +168,7 @@ namespace OfficeTranslate.Core
 
         private static PlannedOverlay SideNote(string reason)
         {
-            return new PlannedOverlay(ImageOverlayVerdict.SideNote, reason, 0F, 0F, 0F, 0F, 0F);
+            return new PlannedOverlay(ImageOverlayVerdict.SideNote, reason, 0F, 0F, 0F, 0F, 0F, 0F);
         }
     }
 }
