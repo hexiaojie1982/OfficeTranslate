@@ -67,7 +67,7 @@ namespace OfficeTranslate.WordAddIn
 
         private string ChangelogText()
         {
-            return "OfficeTranslate " + CurrentVersion + "\r\n• Word 增加按名称唯一证明的安全浮动位图原图提取；Excel/PowerPoint 对已保存且无未保存修改的 OOXML 包只读定位原图，共用 EXIF、裁剪/变换及容量校验，长边限幅 2560px。\r\n• 原图无法可靠证明时保持渲染回退；PowerPoint 优先按幻灯片比例高分辨率导出，失败才用原导出。OCR 汇总记录捕获来源与原因，不改源文档、不触发保存。\r\n\r\n" + ChangelogVersion131Text();
+            return "OfficeTranslate " + CurrentVersion + "\r\n• Word 增加按名称唯一证明的安全浮动位图原图提取；Excel/PowerPoint 对已保存且无未保存修改的 OOXML 包只读定位原图，共用 EXIF、裁剪/变换及容量校验，长边限幅 2560px。\r\n• 原图无法可靠证明时保持渲染回退；PowerPoint 优先按幻灯片比例高分辨率导出，失败才用原导出。OCR 汇总记录捕获来源与原因，不改源文档、不触发保存。\r\n• 图片请求单次独立超时 600 秒，超时不自动重新生成并明确提示；主动取消仍静默停止。文本超时配置及重试策略不变。\r\n\r\n" + ChangelogVersion131Text();
         }
 
         private string ChangelogVersion131Text()

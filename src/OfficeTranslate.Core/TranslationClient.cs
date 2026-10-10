@@ -16,8 +16,22 @@ namespace OfficeTranslate.Core
     public sealed class TranslationClient : IDisposable
     {
         private readonly HttpClient _http;
-        public TranslationClient() { _http = new HttpClient(); }
-        internal TranslationClient(HttpMessageHandler handler) { _http = new HttpClient(handler); }
+        private readonly HttpClient _imageHttp;
+        private readonly TimeSpan _imageRequestTimeout;
+        internal const int ImageRequestTimeoutSeconds = 600;
+        public TranslationClient() : this(new HttpClient(), new HttpClient(), TimeSpan.FromSeconds(ImageRequestTimeoutSeconds)) { }
+        // A shared fake handler is owned exactly once (by the image client).
+        internal TranslationClient(HttpMessageHandler handler, TimeSpan? imageRequestTimeout = null)
+            : this(new HttpClient(handler, false), new HttpClient(handler), imageRequestTimeout ?? TimeSpan.FromSeconds(ImageRequestTimeoutSeconds)) { }
+        private TranslationClient(HttpClient textHttp, HttpClient imageHttp, TimeSpan imageRequestTimeout)
+        {
+            if (imageRequestTimeout <= TimeSpan.Zero || imageRequestTimeout.TotalMilliseconds > int.MaxValue)
+            { textHttp.Dispose(); imageHttp.Dispose(); throw new ArgumentOutOfRangeException(nameof(imageRequestTimeout)); }
+            _http = textHttp; _imageHttp = imageHttp; _imageRequestTimeout = imageRequestTimeout;
+            // Only this IMAGE transport is unlimited. Each image send below
+            // has its own linked 600s deadline; text Configure stays unchanged.
+            _imageHttp.Timeout = Timeout.InfiniteTimeSpan;
+        }
         // Image OCR embeds a whole PNG as base64 in the request body, which can be
         // megabytes long. Raising MaxJsonLength removes the serializer as a
         // possible failure point for large payloads. (The exact default
@@ -148,7 +162,12 @@ namespace OfficeTranslate.Core
                 finishReason = ex.FinishReason; truncated = ex.Truncated;
                 throw new InvalidOperationException("图片模型返回的 JSON 区域无法解析；未写回。请检查诊断中的截断标志或更换图片模型。", ex);
             }
-            catch (OperationCanceledException) { status = "cancelled"; throw; }
+            catch (ImageOcrTimeoutException) { status = "timeout"; throw; }
+            catch (OperationCanceledException) when (token.IsCancellationRequested) { status = "cancelled"; throw; }
+            catch (OperationCanceledException ex)
+            {
+                throw new InvalidOperationException("图片识别请求被服务或网络中断（非用户取消），当前图片译文未写入。请重试或检查服务。", ex);
+            }
             finally
             {
                 PngDimensions.TryRead(imageBytes, out var width, out var height);
@@ -190,7 +209,7 @@ namespace OfficeTranslate.Core
                     ? (object)new { model, temperature = 0.1, max_tokens = ImageMaxOutputTokens, response_format = new { type = "json_object" }, messages }
                     : new { model, temperature = 0.1, max_tokens = ImageMaxOutputTokens, messages };
             }
-            using (var response = await SendWithRetryAsync(() => CreateRequest(endpoint, body, settings.ApiKey), token).ConfigureAwait(false))
+            using (var response = await SendWithRetryAsync(() => CreateRequest(endpoint, body, settings.ApiKey), token, imageRequest: true).ConfigureAwait(false))
             {
                 var raw = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
                 if (!response.IsSuccessStatusCode)
@@ -375,7 +394,54 @@ namespace OfficeTranslate.Core
         // exponential backoff. User cancellation is never retried. A fresh
         // HttpRequestMessage is created per attempt because a sent request
         // cannot be re-sent.
-        private async Task<HttpResponseMessage> SendWithRetryAsync(Func<HttpRequestMessage> requestFactory, CancellationToken token)
+        private async Task<HttpResponseMessage> SendImageAttemptAsync(HttpRequestMessage request, CancellationToken userToken)
+        {
+            using (var deadline = new CancellationTokenSource())
+            using (var linked = CancellationTokenSource.CreateLinkedTokenSource(userToken, deadline.Token))
+            {
+                deadline.CancelAfter(_imageRequestTimeout);
+                HttpResponseMessage? response = null;
+                try
+                {
+                    // Default ResponseContentRead covers the complete non-streaming
+                    // JSON body, not just the arrival of HTTP headers.
+                    response = await _imageHttp.SendAsync(request, linked.Token).ConfigureAwait(false);
+                    userToken.ThrowIfCancellationRequested();
+                    deadline.Token.ThrowIfCancellationRequested();
+                    return response;
+                }
+                catch (OperationCanceledException) when (userToken.IsCancellationRequested)
+                {
+                    response?.Dispose();
+                    userToken.ThrowIfCancellationRequested();
+                    throw;
+                }
+                catch (OperationCanceledException ex) when (deadline.IsCancellationRequested)
+                {
+                    response?.Dispose();
+                    // TimeoutException, NOT OperationCanceledException: it cannot
+                    // enter either timeout retry or silent user-cancel handling.
+                    throw new ImageOcrTimeoutException(_imageRequestTimeout, ex);
+                }
+                catch (OperationCanceledException ex)
+                {
+                    response?.Dispose();
+                    // A transport may cancel without either token firing. Do not
+                    // fabricate a 600s elapsed timeout or silently call it user cancel.
+                    throw new InvalidOperationException("图片识别请求被服务或网络中断（非用户取消），当前图片译文未写入。请重试或检查服务。", ex);
+                }
+                catch (HttpRequestException) when (userToken.IsCancellationRequested)
+                {
+                    response?.Dispose(); userToken.ThrowIfCancellationRequested(); throw;
+                }
+                catch (HttpRequestException ex) when (deadline.IsCancellationRequested)
+                {
+                    response?.Dispose(); throw new ImageOcrTimeoutException(_imageRequestTimeout, ex);
+                }
+            }
+        }
+
+        private async Task<HttpResponseMessage> SendWithRetryAsync(Func<HttpRequestMessage> requestFactory, CancellationToken token, bool imageRequest = false)
         {
             var backoff = new[] { TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(3) };
             for (var attempt = 0; ; attempt++)
@@ -386,14 +452,16 @@ namespace OfficeTranslate.Core
                 try
                 {
                     using (var request = requestFactory())
-                        response = await _http.SendAsync(request, token).ConfigureAwait(false);
+                        response = imageRequest
+                            ? await SendImageAttemptAsync(request, token).ConfigureAwait(false)
+                            : await _http.SendAsync(request, token).ConfigureAwait(false);
                 }
                 catch (HttpRequestException) when (!lastAttempt)
                 {
                     await Task.Delay(backoff[attempt], token).ConfigureAwait(false);
                     continue;
                 }
-                catch (TaskCanceledException) when (!token.IsCancellationRequested && !lastAttempt)
+                catch (TaskCanceledException) when (!imageRequest && !token.IsCancellationRequested && !lastAttempt)
                 {
                     // HttpClient timeout, not user cancellation.
                     await Task.Delay(backoff[attempt], token).ConfigureAwait(false);
@@ -722,7 +790,7 @@ namespace OfficeTranslate.Core
 
         private enum PromptMode { Direct, Strict, Protected }
 
-        public void Dispose() => _http.Dispose();
+        public void Dispose() { _http.Dispose(); _imageHttp.Dispose(); }
     }
 
     public sealed class ImageTranslationRegion
