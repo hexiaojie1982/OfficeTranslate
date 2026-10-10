@@ -85,8 +85,11 @@ namespace OfficeTranslate.Core
                     sourceWidth = original.Width; sourceHeight = original.Height;
                     if (sourceWidth > 8000 || sourceHeight > 8000 || (long)sourceWidth * sourceHeight > 32_000_000)
                     { reason = "source-pixels-limit"; return false; }
-                    if (original.PropertyIdList.Contains(0x112) && BitConverter.ToUInt16(original.GetPropertyItem(0x112).Value, 0) != 1)
-                    { reason = "exif-orientation"; return false; }
+                    if (!TryNormalizeExifOrientation(original, out reason)) return false;
+                    // RotateFlip affects the decoded pixels, not merely these
+                    // numbers. All remaining checks and encoding use that same
+                    // corrected image; 5-8 exchange its width and height.
+                    sourceWidth = original.Width; sourceHeight = original.Height;
                     // Transparent text can depend on the document background.
                     // Do not replace its rendered appearance with a white PNG.
                     if (HasTransparency(original))
@@ -111,6 +114,48 @@ namespace OfficeTranslate.Core
             }
             catch (ImageCaptureLimitException) { throw; }
             catch (Exception ex) { reason = "extraction-" + ex.GetType().Name; return false; }
+        }
+
+        private static bool TryNormalizeExifOrientation(Image image, out string reason)
+        {
+            reason = string.Empty;
+            ushort orientation;
+            try
+            {
+                if (!image.PropertyIdList.Contains(0x112)) return true;
+                var item = image.GetPropertyItem(0x112);
+                // EXIF Orientation is precisely one SHORT. GDI+ exposes its
+                // value in native byte order, including big-endian JPEG TIFFs.
+                if (item.Type != 3 || item.Len != 2 || item.Value == null || item.Value.Length != 2)
+                { reason = "exif-orientation-invalid"; return false; }
+                orientation = BitConverter.ToUInt16(item.Value, 0);
+                if (orientation < 1 || orientation > 8)
+                { reason = "exif-orientation-invalid"; return false; }
+            }
+            catch (Exception)
+            {
+                // Unreadable/short EXIF is an explicit rendered fallback, not
+                // an outer extraction exception or a guessed orientation.
+                reason = "exif-orientation-invalid"; return false;
+            }
+            if (orientation == 1) return true;
+            RotateFlipType transform;
+            switch (orientation)
+            {
+                case 2: transform = RotateFlipType.RotateNoneFlipX; break;
+                case 3: transform = RotateFlipType.Rotate180FlipNone; break;
+                case 4: transform = RotateFlipType.Rotate180FlipX; break;
+                case 5: transform = RotateFlipType.Rotate90FlipX; break;
+                case 6: transform = RotateFlipType.Rotate90FlipNone; break;
+                case 7: transform = RotateFlipType.Rotate270FlipX; break;
+                case 8: transform = RotateFlipType.Rotate270FlipNone; break;
+                default: reason = "exif-orientation-invalid"; return false;
+            }
+            // FromStream leaves JPEG stored pixels unrotated (verified with
+            // asymmetric pixel tests). Normalize once; the new PNG below is
+            // drawn into a fresh bitmap and does not inherit the EXIF tag.
+            try { image.RotateFlip(transform); return true; }
+            catch (Exception) { reason = "exif-orientation-transform-failed"; return false; }
         }
 
         private static bool HasTransparency(Image image)

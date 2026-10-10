@@ -4,6 +4,7 @@
 基线：`d23d68e6c32e8a50b37ca19775644476c83e300a`（2.1.30 候选）。
 分支：`fix/ocr-recognition-recall`。本地提交哈希见交付回复及 `git log -1`。
 范围：仅本地候选；不 push、合并、打 tag、生成 MSI、安装或发布。
+EXIF 补修基线：`3d5ce6c9763891ed2c0ef75a73b42f129ae3f3a5`；仍为未定稿的 2.1.31 候选，在同一分支追加一个本地提交，不变更其他分支。
 
 ## 根因与证据边界
 
@@ -17,7 +18,7 @@
 
 ## 改动与安全原则
 
-- Word 对单个行内图片 Range.WordOpenXML 的 Flat OPC 做只读提取。只接受可证明的内嵌 PNG/JPEG/BMP、单一行内矩形，无分组/替代渲染、裁剪、旋转、翻转、效果、外链、未知图像扩展、非正常 EXIF 方向或实际透明像素。原始长宽比与 Office 矩形相差超过 1% 时也回退（比 Planner 的 5% 更保守）。
+- Word 对单个行内图片 Range.WordOpenXML 的 Flat OPC 做只读提取。只接受可证明的内嵌 PNG/JPEG/BMP、单一行内矩形，无分组/替代渲染、Office 几何裁剪/旋转/翻转、效果、外链、未知图像扩展或实际透明像素。EXIF orientation 1–8 均支持：缺失及 1 无变换，2–8 先在解码位图上校正方向，再进行透明度、长宽比、缩放及编码；其他守卫通过时走高清原图路径。非法或不可解析属性才以 `exif-orientation-invalid` 回退（包括非单个 SHORT、短字节或数值不在 1–8）；GDI+ 校正执行失败另以 `exif-orientation-transform-failed` 回退，不猜测方向。校正后的源宽高供 sourceWidth/sourceHeight 和长宽比校验使用；校正后长宽比与 Office 矩形相差超过 1% 仍回退（比 Planner 的 5% 更保守）。
 - 不改原图片尺寸、内容、书签或视图，不创建草稿文档。不能证明安全的情况（含浮动图）回退既有 CopyAsPicture，并记录固定原因及捕获尺寸；容量限制异常不伪装成普通回退。
 - `ImageCaptureResolution.Plan` 纯计算：不超过原始像素；长边目标 2560px，显示尺寸 96DPI 像素的最大倍率 12；8000px 单边、32MP 总像素上限。小图不插值放大，小图标不发送无意义的巨大图。
 - 原图解码也拒绝超 8000px/32MP 的来源；编码继续服从单图 128MiB、Word 512MiB 累计及剩余 PNG 字节预算。**这些不是总进程内存或 OOM 保证**：WordOpenXML 字符串、base64、原始解码和临时位图有额外分配。
@@ -43,13 +44,13 @@ $env:DOTNET_SKIP_FIRST_TIME_EXPERIENCE = '1'
 $env:DOTNET_CLI_TELEMETRY_OPTOUT = '1'
 & 'C:\Program Files\dotnet\dotnet.exe' restore OfficeTranslate.Word.sln --ignore-failed-sources
 & 'C:\Program Files\dotnet\dotnet.exe' build OfficeTranslate.Word.sln -c Release --no-restore -t:Rebuild
-& 'C:\Program Files\dotnet\dotnet.exe' test tests\OfficeTranslate.Tests\OfficeTranslate.Tests.csproj -c Release --no-build --no-restore --logger 'trx;LogFileName=2.1.31-final.trx' --results-directory TestResults\ocr-recognition-recall
+& 'C:\Program Files\dotnet\dotnet.exe' test tests\OfficeTranslate.Tests\OfficeTranslate.Tests.csproj -c Release --no-build --no-restore --logger 'trx;LogFileName=2.1.31-exif-final.trx' --results-directory TestResults\ocr-recognition-recall
 ```
 
 - Restore：退出码 0，所有项目已还原/缓存最新，无还原错误。
 - 完整 Release Rebuild（Core、Word、Excel、PPT、Tests）：退出码 0；**0 Error，7 Warning**。7 项 nullable 警告位于既有语句：OfficeUiDispatcher(134)、WordTranslationService(77)、WordSelectionProbe(71)、ImageOverlayTextTests(14)、StagingNameContractTests(52/94)、ReviewFixesTests(49)；本轮新增源文件无编译警告。
-- 全量 MSTest：**169/169 通过，失败 0，跳过 0**。既有 141 项 + 新增 28 项；测试约 31 秒。
-- 最终 TRX：`TestResults/ocr-recognition-recall/2.1.31-final.trx`（忽略的本地结果，不提交生成物）。
+- 全量 MSTest（EXIF 补修后）：**189/189 通过，失败 0，跳过 0**。既有 141 项 + 首轮 OCR 召回新增 28 项 + EXIF 补修新增 20 项；测试约 31 秒。首轮 169/169 的记录保留在原 TRX 中。
+- 最终 TRX：`TestResults/ocr-recognition-recall/2.1.31-exif-final.trx`；预验证映射 TRX：`2.1.31-exif-mapping.trx`（忽略的本地结果，不提交生成物）。补修只重建/测试，未重复执行依赖已就绪的 restore；上述 restore 是候选首轮的实际命令。
 - 7 个 HTTP 测试使用内存 HttpMessageHandler，不连接真实模型服务；取消和结构化回退均有隔离测试。
 - `build.ps1` 未执行（会生成 MSI）；未生成任何新安装包。
 
@@ -71,7 +72,7 @@ $env:DOTNET_CLI_TELEMETRY_OPTOUT = '1'
 
 真实 Word COM 尺寸对照：**本轮未完成**。独立自测探针的初始编译发现 Word Application PIA 无 Hwnd；使用 ActiveWindow 证明实例归属的修订执行又被执行保护拒绝，要求同时证明无窗口时的新进程清理，避免误操作现有 Word。没有执行创建文档/捕获/退出命令，不将其称为 COM 通过。已有 WINWORD PID 14152 前后不变。未运行探针源文件移入忽略的 `artifacts/ocr-recall-probe/unexecuted-source.cs` 保存，不进候选提交。
 
-## 新增单测名（28 个方法/28 项）
+## 新增单测名（合计 35 个方法/48 项，以下先列首轮 28 项）
 
 `ImageRecognitionRecallTests`（14）：
 
@@ -110,6 +111,28 @@ $env:DOTNET_CLI_TELEMETRY_OPTOUT = '1'
 - Original3200x2400_InSyntheticFlatOpc_Produces2560x1920
 - OriginalPixelsOverSafetyLimit_RequireRenderedFallback
 
+### EXIF 补修新增（7 个方法/20 项）
+
+- GdiRotateFlip_AllExifMappingsMatchIndependentPixelCoordinates（1–8，共 8 项）
+- Exif6_CorrectsStoredPixelsAndSwapsCaptureDimensions
+- Exif2_CorrectsLeftRightMirrorPixels
+- OtherValidExifOrientations_PreserveCorrectViewedPixels（1/3/4/5/7/8，共 6 项）
+- ExifBigEndian6_IsNormalizedByGdiAndCorrectedOnce
+- InvalidExifOrientation_HasDistinctFallbackReason（0/9，共 2 项）
+- OneByteExifOrientation_HasDistinctFallbackWithoutThrowing
+
+先不改产品逻辑，单独运行 `--filter 'FullyQualifiedName~GdiRotateFlip_AllExifMappingsMatchIndependentPixelCoordinates'`（日志名 `2.1.31-exif-mapping.trx`），**8/8 通过**后才实现校正。fixture 为 GDI+ 实际编码的 120×80 JPEG，加合法 APP1 Exif/TIFF IFD，不修改产品公开接口；六个 40×40 色块构成不对称的 3×2 像素图案。坐标期望独立于 RotateFlipType：6 将存储 (x,y) 放到 (79-y,x)，2 放到 (119-x,y)。JPEG 通道允许 ±12 压缩误差。
+
+- orientation=6：FromStream 实测仍为未校正的 120×80；校正和最终 PNG 均为 80×120。红块中心 (20,20)→(59,20)，蓝块 (100,20)→(59,100)，黄块 (20,60)→(19,20)，其余三个色块也逐一核对。这证明不是只改宽高，且 DrawImage 没有二次旋转。
+- orientation=2：最终 120×80；红块 (20,20)→(99,20)，蓝块 (100,20)→(19,20)，下排同样左右反转。1/3/4/5/7/8 的最终 PNG 也按六个独立坐标逐项验证。
+- big-endian TIFF 的 orientation=6 也通过：GDI+ 属性值读取与本机字节序一致，校正一次；所有成功输出 PNG 均实测无 0x112 属性。
+- orientation=0/9 和确实由 GDI+ 暴露的单字节 BYTE 属性：返回 false、空输出和 `exif-orientation-invalid`，没有抛到外层。
+- 原有无 EXIF PNG、透明度、几何回退、容量及解析/请求测试继续通过。using 资源生命周期保留；没有改宿主 COM、源文档、覆盖框或旁注逻辑。
+
+这些是实际 JPEG 解码、GDI+ 变换和编码后的像素测试，**不是实际 Word 显示测试**。本轮未操作 Word；尚未证明各 Word 版本对具体手机照片的 EXIF 显示行为，未发现实际宿主不一致的证据，也不宣称完成该验收。方向校正后若与 Office 矩形长宽比不符仍安全回退；镜像方向不能仅凭长宽比证明 Word 的显示处理，须现场用不对称照片核对。
+
+本次补修仅改三个文件：`src/OfficeTranslate.Core/WordOriginalImageCapture.cs`、`tests/OfficeTranslate.Tests/WordOriginalImageCaptureTests.cs`、本报告。下方 22 文件清单描述完整 2.1.31 候选相对 d23d68e 的累积改动。
+
 ## 改动文件清单（22）
 
 1. VERSION.txt
@@ -138,7 +161,7 @@ $env:DOTNET_CLI_TELEMETRY_OPTOUT = '1'
 ## 未覆盖项与公司验收口径
 
 - 公司服务器、Qwen3.8-27b、公司照片均不可在 nuc 复现；未验证识别完整度、译文质量、请求实际时延、input/output/视觉 Token 消耗或与 Open WebUI 的同条件速度对比。
-- 实际 Word Range.WordOpenXML 的结构/源像素读取、真实捕获像素、同图多轮、页眉/页脚、浮动/裁剪/翻转/旋转回退的现场表现均待验。纯 XML/GDI+ 回归不能替代这些宿主验证。
+- 实际 Word Range.WordOpenXML 的结构/源像素读取、真实捕获像素、同图多轮、页眉/页脚、浮动/裁剪/翻转/旋转回退，以及 Word 显示与 EXIF 1–8 的对应关系均待验。纯 XML/JPEG/GDI+ 像素回归不能替代这些宿主验证。
 - 三宿主真实 Ribbon 菜单、OCR 覆盖/旁注排版、结果窗口显示均未做本轮验收；Excel/PPT 捕获提高清晰度未实施。
 - 8192 是最大生成预算，不是强制生成量，也不保证服务接受该长度。输入视觉 Token 增加可能拖慢模型；服务端上下文、视觉缩放或超时配置不足时需要现场确认，不自动降低预算并掩盖漏识别。
 - 无“完整识别”质量判定：模型没有返回的文字无法单靠 regions 数推知；新增日志用于区分低输入像素、模型少返回、解析损失和截断。格式有效而漏识别仍需要与原图人工对照。
