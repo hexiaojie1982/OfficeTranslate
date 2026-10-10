@@ -344,14 +344,14 @@ namespace OfficeTranslate.ExcelAddIn
 
         // W1: real-layout fit check for Excel overlays. TextRange2.BoundHeight
         // is the actual rendered text height with word wrap applied. The font
-        // shrinks stepwise to the 8pt floor; the box geometry never expands.
+        // shrinks stepwise to the shared 6pt floor; the box geometry never expands.
         private static bool TextFitsBox(Excel.Shape box, float startSize)
         {
-            const float floorSize = 8F;
+            const float floorSize = ImageOverlayLayout.MinFontSize;
             var size = Math.Min(startSize, 18F);
             try { box.TextFrame2.TextRange.Font.Size = size; }
             catch { return false; }
-            for (var i = 0; i < 12; i++)
+            for (var i = 0; i < (int)Math.Ceiling(ImageOverlayLayout.MaxFontSize - floorSize) + 2; i++)
             {
                 float boundHeight, availHeight;
                 try
@@ -552,7 +552,8 @@ namespace OfficeTranslate.ExcelAddIn
                 OutWidth = plan.Width,
                 OutHeight = plan.Height,
                 FontSize = plan.FontSize,
-                GrowthFactor = plan.GrowthFactor,
+                WidthGrowthFactor = plan.WidthGrowthFactor,
+                HeightGrowthFactor = plan.HeightGrowthFactor,
                 Verdict = plan.Verdict.ToString(),
                 Reason = plan.Reason,
                 TextLength = text == null ? 0 : text.Length,

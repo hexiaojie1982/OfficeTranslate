@@ -1006,15 +1006,15 @@ namespace OfficeTranslate.WordAddIn
 
         // W1: real-layout overflow check. TextFrame.Overflowing reports whether
         // the current text actually fits the fixed box (after Repaginate).
-        // The font shrinks stepwise from the planned size to the 8pt floor
+        // The font shrinks stepwise from the planned size to the shared 6pt floor
         // (the planner's minimum); the box geometry is never expanded.
         private bool ShrinkFontToFit(Shape box, float startSize)
         {
-            const float floorSize = 8F;
+            const float floorSize = ImageOverlayLayout.MinFontSize;
             var size = Math.Min(startSize, 18F);
             try { box.TextFrame.TextRange.Font.Size = size; }
             catch { return false; }
-            for (var i = 0; i < 12; i++)
+            for (var i = 0; i < (int)Math.Ceiling(ImageOverlayLayout.MaxFontSize - floorSize) + 2; i++)
             {
                 bool overflowing;
                 try
@@ -1218,7 +1218,8 @@ namespace OfficeTranslate.WordAddIn
                 OutWidth = plan.Width,
                 OutHeight = plan.Height,
                 FontSize = plan.FontSize,
-                GrowthFactor = plan.GrowthFactor,
+                WidthGrowthFactor = plan.WidthGrowthFactor,
+                HeightGrowthFactor = plan.HeightGrowthFactor,
                 Verdict = plan.Verdict.ToString(),
                 Reason = plan.Reason,
                 TextLength = text == null ? 0 : text.Length,

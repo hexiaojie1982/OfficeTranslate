@@ -16,7 +16,7 @@ namespace OfficeTranslate.Core
 
     public static class ImageOverlayLayout
     {
-        public const float MinFontSize = 8F;
+        public const float MinFontSize = 6F;
         public const float MaxFontSize = 18F;
 
         // W2/D3: side-notes may grow downward, but the growth is bounded.

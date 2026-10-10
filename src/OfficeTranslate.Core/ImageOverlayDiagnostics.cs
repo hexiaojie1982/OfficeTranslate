@@ -36,7 +36,8 @@ namespace OfficeTranslate.Core
         public float OutWidth;
         public float OutHeight;
         public float FontSize;
-        public float GrowthFactor;
+        public float WidthGrowthFactor;
+        public float HeightGrowthFactor;
         public string Verdict = string.Empty;
         public string Reason = string.Empty;
         public int TextLength;
@@ -192,7 +193,8 @@ namespace OfficeTranslate.Core
                 F(e.RotationDegrees), e.FlipHorizontal, e.FlipVertical,
                 F(e.OutLeft), F(e.OutTop), F(e.OutWidth), F(e.OutHeight),
                 F(e.FontSize), e.TextLength, e.Verdict, e.Reason ?? string.Empty, e.OwnerId ?? string.Empty,
-                e.GrowthFactor.ToString("0.0##", culture));
+                e.Verdict == ImageOverlayVerdict.SideNote.ToString() ? "0.0"
+                    : e.WidthGrowthFactor.ToString("0.0", culture) + "x" + e.HeightGrowthFactor.ToString("0.0", culture));
         }
 
         private static string F(float value)

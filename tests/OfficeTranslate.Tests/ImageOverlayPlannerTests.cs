@@ -53,8 +53,8 @@ namespace OfficeTranslate.Tests
         [TestMethod]
         public void Plan_TinyBbox_GoesToSideNote()
         {
-            // Under 5 units is still below the 2.1.33 trust gate.
-            var plan = ImageOverlayPlanner.Plan(100F, 200F, 104F, 204F,
+            // Under 3 units is still below the 2.1.34 trust gate.
+            var plan = ImageOverlayPlanner.Plan(100F, 200F, 102.9F, 202.9F,
                 1000, 800, 500F, 400F, "Hi", 0F);
 
             Assert.AreEqual(ImageOverlayVerdict.SideNote, plan.Verdict);
@@ -100,17 +100,17 @@ namespace OfficeTranslate.Tests
         [TestMethod]
         public void Plan_EdgeTinyRegion_GrowsButStaysInsideImage()
         {
-            // 2.1.33: the existing layout estimator can fit this strip after
+            // 2.1.34: the existing layout estimator can fit this strip after
             // growth. Its right edge must remain within the image, not 106pt.
             var plan = ImageOverlayPlanner.Plan(980F, 800F, 1000F, 1000F,
                 200, 200, 100F, 100F, "A", 0F);
 
             Assert.AreEqual(ImageOverlayVerdict.Place, plan.Verdict);
-            Assert.IsTrue(plan.Width > 2F && plan.Width <= 6F);
-            Assert.IsTrue(plan.Height <= 60F);
+            Assert.IsTrue(plan.Width > 2F && plan.Width <= 10F);
+            Assert.IsTrue(plan.Height <= 100F);
             Assert.IsTrue(plan.Left + plan.Width <= 100.05F);
             Assert.IsTrue(plan.Top + plan.Height <= 100.05F);
-            Assert.IsTrue(plan.GrowthFactor > 1F && plan.GrowthFactor <= 3F);
+            Assert.IsTrue(plan.GrowthFactor > 1F && plan.GrowthFactor <= 5F);
         }
 
         [TestMethod]
@@ -163,7 +163,7 @@ namespace OfficeTranslate.Tests
         {
             // A wall of text can never fit the small region: no fake overlay.
             var plan = ImageOverlayPlanner.Plan(100F, 200F, 300F, 260F,
-                1000, 800, 500F, 400F, new string('中', 500), 0F);
+                1000, 800, 500F, 400F, new string('中', 2000), 0F);
 
             Assert.AreEqual(ImageOverlayVerdict.SideNote, plan.Verdict);
             Assert.IsTrue(plan.Reason.Contains("放不下"));

@@ -13,13 +13,13 @@ namespace OfficeTranslate.Tests
             var metrics = ImageOverlayLayout.FitFontSize(200F, 20F, "Hello");
 
             Assert.IsTrue(metrics.Fits);
-            Assert.IsTrue(metrics.FontSize >= 8F && metrics.FontSize <= 18F);
+            Assert.IsTrue(metrics.FontSize >= ImageOverlayLayout.MinFontSize && metrics.FontSize <= 18F);
         }
 
         [TestMethod]
         public void FitFontSize_LongText_ShrinksInsteadOfGrowing()
         {
-            // 100 CJK chars on a 100x12 region cannot fit even at 8pt:
+            // 100 CJK chars on a 100x12 region cannot fit even at 6pt:
             // no downward growth is allowed anymore, so this must NOT fit.
             var metrics = ImageOverlayLayout.FitFontSize(100F, 12F, new string('中', 100));
 
@@ -33,18 +33,18 @@ namespace OfficeTranslate.Tests
             var metrics = ImageOverlayLayout.FitFontSize(200F, 30F, new string('中', 20));
 
             Assert.IsTrue(metrics.Fits);
-            Assert.IsTrue(metrics.FontSize >= 8F);
+            Assert.IsTrue(metrics.FontSize >= ImageOverlayLayout.MinFontSize);
         }
 
         [TestMethod]
         public void FitFontSize_InvalidDimensions_FallsBackToSafeDefaults()
         {
-            // Defaults are 24x12: usable height 10pt cannot host even 8pt text
-            // (8 * 1.3 = 10.4 > 10), so the honest answer is "does not fit".
+            // Defaults are 24x12: 10pt usable height fits one line at 6pt,
+            // with the largest fitting font approaching 10 / 1.3.
             var metrics = ImageOverlayLayout.FitFontSize(0F, -5F, "x");
 
-            Assert.AreEqual(8F, metrics.FontSize, 0.001);
-            Assert.IsFalse(metrics.Fits);
+            Assert.IsTrue(metrics.Fits);
+            Assert.AreEqual(7.685697F, metrics.FontSize, 0.001);
         }
 
         [TestMethod]
@@ -64,7 +64,18 @@ namespace OfficeTranslate.Tests
             var metrics = ImageOverlayLayout.FitFontSize(30F, 30F, "A");
 
             Assert.IsTrue(metrics.Fits);
-            Assert.IsTrue(metrics.FontSize >= 8F);
+            Assert.IsTrue(metrics.FontSize >= ImageOverlayLayout.MinFontSize);
+        }
+
+        [TestMethod]
+        public void FitFontSize_SixPointFloor_FitsWhereEightPointWouldOverflow()
+        {
+            var metrics = ImageOverlayLayout.FitFontSize(10F, 9.8F, "A");
+
+            Assert.AreEqual(6F, ImageOverlayLayout.MinFontSize);
+            Assert.IsTrue(metrics.Fits);
+            Assert.AreEqual(6F, metrics.FontSize, 0.001);
+            Assert.IsFalse(ImageOverlayLayout.FitFontSize(10F, 9.79F, "A").Fits);
         }
 
         [TestMethod]

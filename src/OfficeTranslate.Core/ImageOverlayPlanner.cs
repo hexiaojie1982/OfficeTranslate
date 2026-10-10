@@ -15,7 +15,8 @@ namespace OfficeTranslate.Core
     public sealed class PlannedOverlay
     {
         public PlannedOverlay(ImageOverlayVerdict verdict, string reason,
-            float left, float top, float width, float height, float fontSize, float growthFactor = 1F)
+            float left, float top, float width, float height, float fontSize,
+            float widthGrowthFactor = 1F, float heightGrowthFactor = 1F)
         {
             Verdict = verdict;
             Reason = reason ?? string.Empty;
@@ -24,7 +25,8 @@ namespace OfficeTranslate.Core
             Width = width;
             Height = height;
             FontSize = fontSize;
-            GrowthFactor = verdict == ImageOverlayVerdict.SideNote ? 0F : growthFactor;
+            WidthGrowthFactor = verdict == ImageOverlayVerdict.SideNote ? 0F : widthGrowthFactor;
+            HeightGrowthFactor = verdict == ImageOverlayVerdict.SideNote ? 0F : heightGrowthFactor;
         }
 
         public ImageOverlayVerdict Verdict { get; }
@@ -34,14 +36,15 @@ namespace OfficeTranslate.Core
         // origin. The caller adds the image's Left/Top in whichever reference
         // frame the host uses, so no cross-frame conversion happens here.
         // Starts at the bbox-mapped size. If needed, grows around its center
-        // up to 3x per dimension, capped and translated inside the image.
+        // independently up to 5x per dimension, inside the image, minimizing area.
         public float Left { get; }
         public float Top { get; }
         public float Width { get; }
         public float Height { get; }
         public float FontSize { get; }
-        // Largest actual per-dimension growth. SideNote has no output rect: 0.
-        public float GrowthFactor { get; }
+        public float WidthGrowthFactor { get; }
+        public float HeightGrowthFactor { get; }
+        public float GrowthFactor => Math.Max(WidthGrowthFactor, HeightGrowthFactor);
     }
 
     // Pure, host-independent geometry: validates the model's 0-1000 bbox,
@@ -62,8 +65,8 @@ namespace OfficeTranslate.Core
     public static class ImageOverlayPlanner
     {
         private const float BboxScale = 1000F;
-        private const float MinBboxUnits = 5F;
-        private const float MaxGrowthFactor = 3F;
+        private const float MinBboxUnits = 3F;
+        private const float MaxGrowthFactor = 5F;
         private const float MaxAspectDeviation = 0.05F;
         private const float MaxRotationDegrees = 0.5F;
         // Tolerance for float rounding when validating the final rect against
@@ -128,25 +131,13 @@ namespace OfficeTranslate.Core
                 if (!ImageOverlayLayout.FitFontSize(maxWidth, maxHeight, text).Fits)
                     return SideNote("译文在放大至上限的区域内仍放不下（已尝试最小字号），改用旁注。");
 
-                // Uniform center growth with independent image-edge caps.
-                // FitFontSize's minimum-font predicate is monotone in both
-                // dimensions. Keep the fitting endpoint, not the failing one.
-                var low = 1F;
-                var high = MaxGrowthFactor;
-                for (var i = 0; i < 20; i++)
-                {
-                    var mid = (low + high) / 2F;
-                    if (ImageOverlayLayout.FitFontSize(Math.Min(shapeWidth, width * mid),
-                        Math.Min(shapeHeight, height * mid), text).Fits) high = mid;
-                    else low = mid;
-                }
-                var grownWidth = Math.Min(shapeWidth, width * high);
-                var grownHeight = Math.Min(shapeHeight, height * high);
+                FindMinimumArea(width, height, maxWidth, maxHeight, text, out var grownWidth, out var grownHeight);
                 // Translate at the edges instead of clipping away the fitting
                 // dimensions. The whole frame must stay inside the image.
                 left = Math.Max(0F, Math.Min(shapeWidth - grownWidth, left + width / 2F - grownWidth / 2F));
                 top = Math.Max(0F, Math.Min(shapeHeight - grownHeight, top + height / 2F - grownHeight / 2F));
-                var growth = Math.Max(grownWidth / width, grownHeight / height);
+                var widthGrowth = grownWidth / width;
+                var heightGrowth = grownHeight / height;
                 width = grownWidth;
                 height = grownHeight;
                 fit = ImageOverlayLayout.FitFontSize(width, height, text);
@@ -154,7 +145,7 @@ namespace OfficeTranslate.Core
                     left + width > shapeWidth + BoundsEpsilon || top + height > shapeHeight + BoundsEpsilon)
                     return SideNote("译文在放大并钳制后的区域内仍放不下，改用旁注。");
                 return new PlannedOverlay(ImageOverlayVerdict.Place, string.Empty,
-                    left, top, width, height, fit.FontSize, growth);
+                    left, top, width, height, fit.FontSize, widthGrowth, heightGrowth);
             }
 
             return new PlannedOverlay(ImageOverlayVerdict.Place, string.Empty,
@@ -165,6 +156,54 @@ namespace OfficeTranslate.Core
         {
             return !float.IsNaN(value) && !float.IsInfinity(value) && value > 0F;
         }
+
+        // FitFontSize is unchanged and is the only layout oracle. At the
+        // minimum font its required height is a staircase of wrapped-line
+        // counts. The least-width/least-height corner of EVERY fitting stair
+        // is an area candidate; any interior point has no smaller area.
+        private static void FindMinimumArea(float minWidth, float minHeight, float maxWidth, float maxHeight,
+            string text, out float bestWidth, out float bestHeight)
+        {
+            bool Fits(float w, float h) => ImageOverlayLayout.FitFontSize(w, h, text).Fits;
+            var heightFloor = FirstFittingFloat(minHeight, maxHeight, h => Fits(maxWidth, h));
+            var width = FirstFittingFloat(minWidth, maxWidth, w => Fits(w, maxHeight));
+            bestWidth = width;
+            bestHeight = maxHeight;
+            var bestArea = double.PositiveInfinity;
+            while (true)
+            {
+                var height = FirstFittingFloat(minHeight, maxHeight, h => Fits(width, h));
+                var area = (double)width * height;
+                if (area < bestArea) { bestArea = area; bestWidth = width; bestHeight = height; }
+                if (height == heightFloor || width == maxWidth) break;
+                // One float below the exact fitting height forces the next
+                // wrapping stair. No guessed font metrics or fixed grid.
+                var below = FromBits(ToBits(height) - 1);
+                var nextWidth = FirstFittingFloat(width, maxWidth, w => Fits(w, below));
+                // All later widths are larger and cannot beat this area bound.
+                if ((double)nextWidth * heightFloor >= bestArea) break;
+                width = nextWidth;
+            }
+        }
+
+        // Positive finite floats have the same ordering as their integer bits.
+        // Exact representable endpoints avoid rounding that would keep us on
+        // the same wrapping stair indefinitely. Caller proves high fits.
+        private static float FirstFittingFloat(float low, float high, Func<float, bool> fits)
+        {
+            if (fits(low)) return low;
+            var lo = ToBits(low);
+            var hi = ToBits(high);
+            while (hi - lo > 1)
+            {
+                var mid = lo + (hi - lo) / 2;
+                if (fits(FromBits(mid))) hi = mid;
+                else lo = mid;
+            }
+            return FromBits(hi);
+        }
+        private static int ToBits(float value) => BitConverter.ToInt32(BitConverter.GetBytes(value), 0);
+        private static float FromBits(int value) => BitConverter.ToSingle(BitConverter.GetBytes(value), 0);
 
         private static PlannedOverlay SideNote(string reason)
         {

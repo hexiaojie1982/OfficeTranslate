@@ -67,7 +67,12 @@ namespace OfficeTranslate.WordAddIn
 
         private string ChangelogText()
         {
-            return "OfficeTranslate " + CurrentVersion + "\r\n• 三宿主共用的图片覆盖框允许围绕原区域中心按需放大，每维最多 3 倍，始终保持在图片内；可能遮住邻近原文。\r\n• 小框信任门由 10 下调为 5 个坐标单位；沿用 8pt 最小字号，放大后仍放不下则走原旁注流程。逐区诊断增加 grow 放大倍数，不记录正文。\r\n\r\n" + ChangelogVersion132Text();
+            return "OfficeTranslate " + CurrentVersion + "\r\n• 图片覆盖框宽高独立放大，每维最多 5 倍，按最小覆盖面积选择组合，始终保持在图片内；可能遮住邻近原文。\r\n• 小框信任门下调为 3 个坐标单位；最小字号由 8pt 下调为 6pt，宿主真实排版失败仍回退旁注。逐区诊断 grow 分别显示宽高倍数。\r\n\r\n" + ChangelogVersion133Text();
+        }
+
+        private string ChangelogVersion133Text()
+        {
+            return "OfficeTranslate 2.1.33\r\n• 三宿主共用的图片覆盖框允许围绕原区域中心按需放大，每维最多 3 倍，始终保持在图片内；可能遮住邻近原文。\r\n• 小框信任门由 10 下调为 5 个坐标单位；沿用 8pt 最小字号，放大后仍放不下则走原旁注流程。逐区诊断增加 grow 放大倍数，不记录正文。\r\n\r\n" + ChangelogVersion132Text();
         }
 
         private string ChangelogVersion132Text()
