@@ -130,6 +130,34 @@ namespace OfficeTranslate.Core
             AppendLine(line);
         }
 
+        // Only allow known finish-reason tokens into the metadata log; arbitrary
+        // service strings or exceptions could contain echoed prompts/content.
+        public static void LogOcrSummary(string host, int width, int height, ImageRecognitionStatistics? stats,
+            string finish, bool truncated, string status, long milliseconds) =>
+            AppendLine(FormatOcrSummary(host, width, height, stats, finish, truncated, status, milliseconds));
+
+        internal static string FormatOcrSummary(string host, int width, int height, ImageRecognitionStatistics? s,
+            string finish, bool truncated, string status, long milliseconds)
+        {
+            var safeFinish = new[] { "stop", "length", "end_turn", "eos_token", "tool_calls", "content_filter", "unknown" };
+            if (Array.IndexOf(safeFinish, finish) < 0) finish = "other";
+            if (host != "Word" && host != "Excel" && host != "PowerPoint") host = "Image";
+            return string.Format(CultureInfo.InvariantCulture,
+                "{0:O} host={1} event=ocr_summary png={2}x{3} parsed={4} raw={5} kept={6} dropped={7} bbox_invalid={8} bbox_note={9} empty_translation={10} empty_translation_dropped={11} non_dictionary={12} review={13} finish_reason={14} truncated={15} status={16} elapsed_ms={17}",
+                DateTime.UtcNow, host, width, height, s != null, s?.RawCount ?? -1, s?.RetainedCount ?? -1,
+                s?.DroppedCount ?? -1, s?.InvalidBboxCount ?? -1, s?.InvalidBboxDowngradedCount ?? -1,
+                s?.EmptyTranslationCount ?? -1, s?.EmptyTranslationDroppedCount ?? -1, s?.NonDictionaryCount ?? -1,
+                s?.ReviewCount ?? -1, finish, truncated, status, milliseconds);
+        }
+
+        public static void LogOcrCapture(string host, string path, string reason, int sourceWidth, int sourceHeight, byte[] png)
+        {
+            PngDimensions.TryRead(png, out var width, out var height);
+            AppendLine(string.Format(CultureInfo.InvariantCulture,
+                "{0:O} host={1} event=ocr_capture path={2} reason={3} source={4}x{5} png={6}x{7} bytes={8}",
+                DateTime.UtcNow, host, path, reason, sourceWidth, sourceHeight, width, height, png.Length));
+        }
+
         private static void AppendLine(string line)
         {
             Trace.WriteLine("OfficeTranslate: " + line);

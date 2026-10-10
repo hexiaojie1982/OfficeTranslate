@@ -121,11 +121,10 @@ namespace OfficeTranslate.PowerPointAddIn
                 var imageBytes = preNetwork.Bytes;
                 var ownerId = preNetwork.Owner;
                 var hasPixels = PngDimensions.TryRead(imageBytes, out var pixelWidth, out var pixelHeight);
-                var regions = await client.TranslateImageAsync(imageBytes, settings, token);
-                // R8: an empty OCR result is still an image outcome and must be
-                // counted, exactly like the Word/Excel paths do.
-                if (regions.Count == 0) { summary.RecordImage(false); return; }
-                summary.RecordImage(true);
+                var recognition = await client.TranslateImageAsync(imageBytes, settings, token, "PowerPoint");
+                summary.RecordImageRecognition(recognition);
+                var regions = recognition.Regions;
+                if (regions.Count == 0) return;
                 var slide = preNetwork.Slide;
                 var imageLeft = preNetwork.Left; var imageTop = preNetwork.Top;
                 var imageWidth = preNetwork.Width; var imageHeight = preNetwork.Height;
@@ -138,10 +137,10 @@ namespace OfficeTranslate.PowerPointAddIn
                 var plans = new List<Tuple<ImageTranslationRegion, PlannedOverlay, string>>();
                 foreach (var region in regions)
                 {
-                    var overlayText = settings.BilingualMode && !string.IsNullOrWhiteSpace(region.Source)
-                        ? region.Source + "\r" + region.Translation
-                        : region.Translation;
-                    var plan = hasPixels
+                    var overlayText = region.DisplayText(settings.BilingualMode);
+                    var plan = region.RequiresReview
+                        ? new PlannedOverlay(ImageOverlayVerdict.SideNote, region.ReviewReason, 0F, 0F, 0F, 0F, 0F)
+                        : hasPixels
                         ? ImageOverlayPlanner.Plan(
                             region.X1, region.Y1, region.X2, region.Y2,
                             pixelWidth, pixelHeight, imageWidth, imageHeight, overlayText,

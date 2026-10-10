@@ -151,9 +151,10 @@ namespace OfficeTranslate.ExcelAddIn
             var ownerId = preNetwork.Item2;
 
             var hasPixels = PngDimensions.TryRead(imageBytes, out var pixelWidth, out var pixelHeight);
-            var regions = await client.TranslateImageAsync(imageBytes, settings, token);
-            if (regions.Count == 0) { summary.RecordImage(false); return; }
-            summary.RecordImage(true);
+            var recognition = await client.TranslateImageAsync(imageBytes, settings, token, "Excel");
+            summary.RecordImageRecognition(recognition);
+            var regions = recognition.Regions;
+            if (regions.Count == 0) return;
 
             // M2: every shape access below runs on the Office UI (STA) thread.
             // The sheet is resolved here (not earlier) so the "no sheet"
@@ -182,10 +183,10 @@ namespace OfficeTranslate.ExcelAddIn
                 var plans = new List<Tuple<ImageTranslationRegion, PlannedOverlay, string>>();
                 foreach (var region in regions)
                 {
-                    var overlayText = settings.BilingualMode && !string.IsNullOrWhiteSpace(region.Source)
-                        ? region.Source + "\r" + region.Translation
-                        : region.Translation;
-                    var plan = hasPixels
+                    var overlayText = region.DisplayText(settings.BilingualMode);
+                    var plan = region.RequiresReview
+                        ? new PlannedOverlay(ImageOverlayVerdict.SideNote, region.ReviewReason, 0F, 0F, 0F, 0F, 0F)
+                        : hasPixels
                         ? ImageOverlayPlanner.Plan(
                             region.X1, region.Y1, region.X2, region.Y2,
                             pixelWidth, pixelHeight, imageWidth, imageHeight, overlayText,

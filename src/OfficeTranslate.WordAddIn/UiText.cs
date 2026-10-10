@@ -25,6 +25,12 @@ namespace OfficeTranslate.WordAddIn
             ["CancelTranslation"] = new[] { "取消翻译", "取消翻譯", "번역 취소", "翻訳をキャンセル", "Cancel translation" },
             ["CancellingTranslation"] = new[] { "正在取消，已完成的内容将保留…", "正在取消，已完成的內容將保留…", "취소하는 중입니다. 완료된 내용은 유지됩니다…", "キャンセルしています。完了した内容は保持されます…", "Cancelling… Completed content will be kept." },
             ["SummaryTitle"] = new[] { "翻译摘要", "翻譯摘要", "번역 요약", "翻訳概要", "Translation summary" },
+            ["OcrRegionDetails"] = new[] {
+                "图片 OCR：{0} 张；模型条目 {1}，保留 {2}，无可用内容丢弃 {3}\r\n坏坐标转旁注 {4}，空译文 {5}；图片待检查 {6} 项（含排版降级，不代表文本严格重试失败）。",
+                "圖片 OCR：{0} 張；模型條目 {1}，保留 {2}，無可用內容捨棄 {3}\r\n壞座標轉旁註 {4}，空譯文 {5}；圖片待檢查 {6} 項（含排版降級，並非文字重試失敗）。",
+                "이미지 OCR {0}개: 모델 항목 {1}, 보존 {2}, 사용 불가 {3}\r\n좌표 오류 주석 {4}, 번역 누락 {5}, 이미지 확인 {6}개 (레이아웃 대체 포함; 텍스트 재시도 실패와 별개).",
+                "画像 OCR {0} 枚：モデル項目 {1}、保持 {2}、使用不可 {3}\r\n座標不良の注記 {4}、訳文なし {5}、画像要確認 {6} 件（配置の代替を含む。テキスト再試行失敗とは別）。",
+                "Image OCR: {0} images; model entries {1}, kept {2}, unusable {3}\r\nBad-box notes {4}, missing translations {5}; image review {6} (includes layout fallback, not text retry failures)." },
             ["SummaryUnplaced"] = new[] { "需处理：{0} 条图片旁注未放置", "需處理：{0} 條圖片旁註未放置", "확인 필요: 이미지 주석 {0}개 미배치", "要確認：画像注記 {0} 件未配置", "Action needed: {0} image notes not placed" },
             ["UnplacedNoteDetails"] = new[] { "以下旁注未放置；已成功的译文保留。完整内容可选中复制，本窗口不会自动关闭。", "以下旁註未放置；已成功的譯文保留。完整內容可選取複製，本視窗不會自動關閉。", "아래 주석을 배치하지 못했습니다. 완료된 번역은 유지됩니다. 전체 내용을 복사할 수 있으며 창은 자동으로 닫히지 않습니다.", "以下の注記は配置できませんでした。完了分は保持されます。全文をコピーできます。このウィンドウは自動で閉じません。", "The notes below were not placed. Successful translations remain. Select and copy the full text; this window will not close automatically." },
             ["SummaryCompleted"] = new[] { "翻译完成：共 {0} 项", "翻譯完成：共 {0} 項", "번역 완료: 총 {0}개", "翻訳完了：全 {0} 件", "Translation complete: {0} items" },

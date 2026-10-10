@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -47,15 +48,23 @@ namespace OfficeTranslate.Core
         public int SkippedNoSource { get; private set; }
         public int NeedsReview { get; private set; }
         public int OcrNoText { get; private set; }
+        public int TextNeedsReview { get; private set; }
+        public int ImageNeedsReview { get; private set; }
+        public int OcrImages { get; private set; }
+        public int OcrRawRegions { get; private set; }
+        public int OcrKeptRegions { get; private set; }
+        public int OcrDroppedRegions { get; private set; }
+        public int OcrBboxNotes { get; private set; }
+        public int OcrEmptyTranslations { get; private set; }
         public IReadOnlyList<string> UnplacedImageNotes => _unplacedImageNotes.AsReadOnly();
 
         public void Record(TranslationResult result)
         {
             if (result.FromCache) CacheHits++;
             else if (result.SkippedNoSource) SkippedNoSource++;
-            else if (result.NeedsReview) NeedsReview++;
+            else if (result.NeedsReview) { NeedsReview++; TextNeedsReview++; }
             else if (result.Changed) Translated++;
-            else NeedsReview++;
+            else { NeedsReview++; TextNeedsReview++; }
         }
 
         public void RecordSkipped() => SkippedNoSource++;
@@ -66,7 +75,21 @@ namespace OfficeTranslate.Core
             else OcrNoText++;
         }
 
-        public void RecordImageNeedsReview() => NeedsReview++;
+        public void RecordImageNeedsReview() { NeedsReview++; ImageNeedsReview++; }
+
+        public void RecordImageRecognition(ImageRecognitionResult result)
+        {
+            OcrImages++;
+            OcrRawRegions += result.Statistics.RawCount;
+            OcrKeptRegions += result.Statistics.RetainedCount;
+            OcrDroppedRegions += result.Statistics.DroppedCount;
+            OcrBboxNotes += result.Statistics.InvalidBboxDowngradedCount;
+            OcrEmptyTranslations += result.Statistics.EmptyTranslationCount;
+            if (result.Regions.Count == 0) OcrNoText++;
+            else if (result.Regions.Any(r => !string.IsNullOrWhiteSpace(r.Translation))) Translated++;
+            // A source-only result is NOT a translated image or empty OCR.
+            // Its forced side-note is counted by the normal host review path.
+        }
 
         // Complete, recoverable text in the result window, never OCR text in
         // metadata-only diagnostic logs or silently truncated content.

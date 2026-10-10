@@ -67,7 +67,12 @@ namespace OfficeTranslate.WordAddIn
 
         private string ChangelogText()
         {
-            return "OfficeTranslate " + CurrentVersion + "\r\n• Word、Excel、PowerPoint 的图片旁注按条目及行分段，单条过长继续切分，真实排版仍溢出则进一步拆分；每框仍不超过 1400pt。\r\n• 各段带同一图片归属标记并向下堆叠，重译一并清理；单段失败不删除已成功的译文，完整未放置内容显示在可复制且不会自动关闭的摘要中。\r\n\r\n" + ChangelogVersion129Text();
+            return "OfficeTranslate " + CurrentVersion + "\r\n• Word 对无裁剪、翻转、旋转及效果的内嵌位图只读提取原图，按长边 2560px 及容量规则限幅；不可靠时回退现有渲染捕获并记录原因，不改原文档。\r\n• 图片请求强化整图逐行扫描，OpenAI-compatible/Ollama 显式设置 8192 输出 Token 预算；截断结果不作完整译文写回。普通文本翻译不变。\r\n• 图片解析返回区域统计；空译文或坏坐标有可用文字时保留为待检查旁注。摘要分开说明 OCR 与文本检查，零区域也记录元数据诊断。\r\n\r\n" + ChangelogVersion130Text();
+        }
+
+        private string ChangelogVersion130Text()
+        {
+            return "OfficeTranslate 2.1.30\r\n• Word、Excel、PowerPoint 的图片旁注按条目及行分段，单条过长继续切分，真实排版仍溢出则进一步拆分；每框仍不超过 1400pt。\r\n• 各段带同一图片归属标记并向下堆叠，重译一并清理；单段失败不删除已成功的译文，完整未放置内容显示在可复制且不会自动关闭的摘要中。\r\n\r\n" + ChangelogVersion129Text();
         }
 
         private string ChangelogVersion129Text()

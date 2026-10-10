@@ -229,9 +229,9 @@ namespace OfficeTranslate.WordAddIn
             return await ui.InvokeAsync(() =>
             {
                 ui.LogProbe("capture_before");
-                // Clipboard round-trip is the only way to rasterize a Word shape.
-                // CapturePng saves/restores the user's clipboard and clears stale
-                // content first so a leftover image is never mistaken for the shape.
+                // Prefer proven, untransformed inline original pixels. Other
+                // shapes use the existing rendered clipboard round-trip, which
+                // saves/restores the clipboard and rejects stale data.
                 // S1: pump the UI message loop while capturing (like the Excel
                 // host): Office delayed clipboard rendering may need its
                 // messages dispatched, and a transiently busy clipboard is
@@ -239,10 +239,31 @@ namespace OfficeTranslate.WordAddIn
                 byte[] captured;
                 try
                 {
-                    captured = ClipboardImageCapture.CapturePng(
-                        image.CopyAsPicture,
-                        () => System.Windows.Forms.Application.DoEvents(),
-                        token, maxPngBytes);
+                    token.ThrowIfCancellationRequested();
+                    var sourceWidth = 0; var sourceHeight = 0;
+                    var fallbackReason = "floating-or-unsupported-kind";
+                    var originalCaptured = false;
+                    captured = Array.Empty<byte>();
+                    if (image.Kind == "Inline")
+                    {
+                        try
+                        {
+                            // Read only: no resize, clipboard or source-document
+                            // mutation. XML proves the original pixels are not
+                            // cropped/flipped/rotated before using this path.
+                            originalCaptured = WordOriginalImageCapture.TryCapture(image.Anchor.WordOpenXML,
+                                image.Width, image.Height, maxPngBytes, out captured,
+                                out fallbackReason, out sourceWidth, out sourceHeight);
+                        }
+                        catch (ImageCaptureLimitException) { throw; }
+                        catch (Exception ex) { fallbackReason = "word-xml-" + ex.GetType().Name; }
+                    }
+                    if (!originalCaptured)
+                        captured = ClipboardImageCapture.CapturePng(image.CopyAsPicture,
+                            () => System.Windows.Forms.Application.DoEvents(), token, maxPngBytes);
+                    token.ThrowIfCancellationRequested();
+                    ImageOverlayDiagnostics.LogOcrCapture("Word", originalCaptured ? "original-raster" : "copy-as-picture",
+                        fallbackReason, sourceWidth, sourceHeight, captured);
                 }
                 catch (Exception ex) when (!(ex is OperationCanceledException))
                 {
@@ -304,9 +325,10 @@ namespace OfficeTranslate.WordAddIn
             var ownerId = resolved.Item1;
             var inlineResolution = resolved.Item2;
             var hasPixels = PngDimensions.TryRead(bytes, out var pixelWidth, out var pixelHeight);
-            var regions = await client.TranslateImageAsync(bytes, settings, token);
-            if (regions.Count == 0) { summary.RecordImage(false); return; }
-            summary.RecordImage(true);
+            var recognition = await client.TranslateImageAsync(bytes, settings, token, "Word");
+            summary.RecordImageRecognition(recognition);
+            var regions = recognition.Regions;
+            if (regions.Count == 0) return;
 
             // R4: a floating picture positioned by alignment (center/right/...)
             // reports a WdShapePosition sentinel (e.g. -999995) as Left/Top,
@@ -321,10 +343,11 @@ namespace OfficeTranslate.WordAddIn
             var plans = new List<Tuple<ImageTranslationRegion, PlannedOverlay, string>>();
             foreach (var region in regions)
             {
-                var bilingualImage = settings.BilingualMode && !string.IsNullOrWhiteSpace(region.Source);
-                var overlayText = bilingualImage ? region.Source + "\r" + region.Translation : region.Translation;
+                var overlayText = region.DisplayText(settings.BilingualMode);
                 PlannedOverlay plan;
-                if (originIsSentinel)
+                if (region.RequiresReview)
+                    plan = new PlannedOverlay(ImageOverlayVerdict.SideNote, region.ReviewReason, 0F, 0F, 0F, 0F, 0F);
+                else if (originIsSentinel)
                     plan = new PlannedOverlay(ImageOverlayVerdict.SideNote, sentinelReason, 0F, 0F, 0F, 0F, 0F);
                 else if (hasPixels)
                     plan = ImageOverlayPlanner.Plan(

@@ -77,8 +77,12 @@ namespace OfficeTranslate.WordAddIn
                 Text = string.Format(UiText.Get(uiLanguage, "SummaryDetails"), summary.Translated,
                     summary.CacheHits, summary.SkippedNoSource, summary.NeedsReview, summary.OcrNoText)
             };
-            if (summary.NeedsReview > 0)
-                details.Text += "\r\n\r\n" + string.Format(UiText.Get(uiLanguage, "SummaryReviewHint"), summary.NeedsReview);
+            if (summary.TextNeedsReview > 0)
+                details.Text += "\r\n\r\n" + string.Format(UiText.Get(uiLanguage, "SummaryReviewHint"), summary.TextNeedsReview);
+            if (summary.OcrImages > 0)
+                details.Text += "\r\n\r\n" + string.Format(UiText.Get(uiLanguage, "OcrRegionDetails"),
+                    summary.OcrImages, summary.OcrRawRegions, summary.OcrKeptRegions, summary.OcrDroppedRegions,
+                    summary.OcrBboxNotes, summary.OcrEmptyTranslations, summary.ImageNeedsReview);
             if (_hasUnplacedNotes)
                 details.Text += "\r\n\r\n" + UiText.Get(uiLanguage, "UnplacedNoteDetails") + "\r\n\r\n"
                     + string.Join("\r\n\r\n", summary.UnplacedImageNotes);
