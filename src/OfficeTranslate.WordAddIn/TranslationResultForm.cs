@@ -11,11 +11,13 @@ namespace OfficeTranslate.WordAddIn
         private readonly Button _close = new Button();
         private readonly Timer _timer = new Timer();
         private readonly string _uiLanguage;
+        private readonly bool _hasUnplacedNotes;
         private int _remainingSeconds = 5;
 
         private TranslationResultForm(string uiLanguage, TranslationTaskSummary summary)
         {
             _uiLanguage = uiLanguage;
+            _hasUnplacedNotes = summary.UnplacedImageNotes.Count > 0;
             Text = UiText.Get(uiLanguage, "SummaryTitle");
             Width = 520; Height = 300; MinimumSize = new Size(480, 280);
             MaximizeBox = false; MinimizeBox = false; ShowInTaskbar = false;
@@ -39,19 +41,21 @@ namespace OfficeTranslate.WordAddIn
 
             var icon = new Label
             {
-                Text = "✓",
+                Text = _hasUnplacedNotes ? "!" : "✓",
                 AutoSize = false,
                 Width = 42,
                 Height = 42,
                 TextAlign = ContentAlignment.MiddleCenter,
                 Font = new Font("Segoe UI", 22F, FontStyle.Bold),
                 ForeColor = Color.White,
-                BackColor = Color.FromArgb(38, 166, 91),
+                BackColor = _hasUnplacedNotes ? Color.DarkOrange : Color.FromArgb(38, 166, 91),
                 Margin = new Padding(0, 0, 10, 12)
             };
             var heading = new Label
             {
-                Text = string.Format(UiText.Get(uiLanguage, "SummaryCompleted"), summary.Total),
+                Text = _hasUnplacedNotes
+                    ? string.Format(UiText.Get(uiLanguage, "SummaryUnplaced"), summary.UnplacedImageNotes.Count)
+                    : string.Format(UiText.Get(uiLanguage, "SummaryCompleted"), summary.Total),
                 AutoSize = true,
                 Font = new Font(Font.FontFamily, 14F, FontStyle.Bold),
                 ForeColor = Color.FromArgb(32, 55, 88),
@@ -60,20 +64,25 @@ namespace OfficeTranslate.WordAddIn
             root.Controls.Add(icon, 0, 0);
             root.Controls.Add(heading, 1, 0);
 
-            var details = new Label
+            var details = new TextBox
             {
-                AutoSize = false,
+                Multiline = true,
+                ReadOnly = true,
+                MaxLength = 0,
+                ScrollBars = ScrollBars.Vertical,
                 Dock = DockStyle.Fill,
-                TextAlign = ContentAlignment.TopLeft,
                 ForeColor = Color.FromArgb(42, 58, 78),
                 BackColor = Color.White,
                 BorderStyle = BorderStyle.FixedSingle,
-                Padding = new Padding(14),
                 Text = string.Format(UiText.Get(uiLanguage, "SummaryDetails"), summary.Translated,
                     summary.CacheHits, summary.SkippedNoSource, summary.NeedsReview, summary.OcrNoText)
             };
             if (summary.NeedsReview > 0)
                 details.Text += "\r\n\r\n" + string.Format(UiText.Get(uiLanguage, "SummaryReviewHint"), summary.NeedsReview);
+            if (_hasUnplacedNotes)
+                details.Text += "\r\n\r\n" + UiText.Get(uiLanguage, "UnplacedNoteDetails") + "\r\n\r\n"
+                    + string.Join("\r\n\r\n", summary.UnplacedImageNotes);
+            details.Text = details.Text.Replace("\r\n", "\n").Replace('\r', '\n').Replace("\n", "\r\n");
             root.SetColumnSpan(details, 2);
             root.Controls.Add(details, 0, 1);
 
@@ -116,12 +125,15 @@ namespace OfficeTranslate.WordAddIn
                     rect.Top + Math.Max(0, (rect.Bottom - rect.Top - form.Height) / 2));
             form.Show(ownerHandle == IntPtr.Zero ? null : new WindowHandle(ownerHandle));
             form.Activate();
-            form._timer.Start();
+            // Failed text must remain copyable until acknowledged, not vanish
+            // after five seconds. Successful tasks keep the existing countdown.
+            if (!form._hasUnplacedNotes) form._timer.Start();
         }
 
         private void UpdateCloseText()
         {
-            _close.Text = string.Format(UiText.Get(_uiLanguage, "ResultCloseCountdown"), _remainingSeconds);
+            _close.Text = _hasUnplacedNotes ? UiText.Get(_uiLanguage, "Close")
+                : string.Format(UiText.Get(_uiLanguage, "ResultCloseCountdown"), _remainingSeconds);
         }
 
         [DllImport("user32.dll")] private static extern bool GetWindowRect(IntPtr hWnd, out NativeRect rect);

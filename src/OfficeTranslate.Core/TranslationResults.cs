@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -37,6 +38,7 @@ namespace OfficeTranslate.Core
 
     public sealed class TranslationTaskSummary
     {
+        private readonly List<string> _unplacedImageNotes = new List<string>();
         public TranslationTaskSummary(int total) => Total = total;
 
         public int Total { get; }
@@ -45,6 +47,7 @@ namespace OfficeTranslate.Core
         public int SkippedNoSource { get; private set; }
         public int NeedsReview { get; private set; }
         public int OcrNoText { get; private set; }
+        public IReadOnlyList<string> UnplacedImageNotes => _unplacedImageNotes.AsReadOnly();
 
         public void Record(TranslationResult result)
         {
@@ -64,6 +67,11 @@ namespace OfficeTranslate.Core
         }
 
         public void RecordImageNeedsReview() => NeedsReview++;
+
+        // Complete, recoverable text in the result window, never OCR text in
+        // metadata-only diagnostic logs or silently truncated content.
+        public void RecordImageNoteFailure(string ownerId, string noteText, string reason) =>
+            _unplacedImageNotes.Add("图片 " + ownerId + "\r\n" + reason + "\r\n" + noteText);
     }
 
     internal static class TranslationSessionCache

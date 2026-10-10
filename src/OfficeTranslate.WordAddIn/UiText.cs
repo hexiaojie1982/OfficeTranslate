@@ -25,6 +25,8 @@ namespace OfficeTranslate.WordAddIn
             ["CancelTranslation"] = new[] { "取消翻译", "取消翻譯", "번역 취소", "翻訳をキャンセル", "Cancel translation" },
             ["CancellingTranslation"] = new[] { "正在取消，已完成的内容将保留…", "正在取消，已完成的內容將保留…", "취소하는 중입니다. 완료된 내용은 유지됩니다…", "キャンセルしています。完了した内容は保持されます…", "Cancelling… Completed content will be kept." },
             ["SummaryTitle"] = new[] { "翻译摘要", "翻譯摘要", "번역 요약", "翻訳概要", "Translation summary" },
+            ["SummaryUnplaced"] = new[] { "需处理：{0} 条图片旁注未放置", "需處理：{0} 條圖片旁註未放置", "확인 필요: 이미지 주석 {0}개 미배치", "要確認：画像注記 {0} 件未配置", "Action needed: {0} image notes not placed" },
+            ["UnplacedNoteDetails"] = new[] { "以下旁注未放置；已成功的译文保留。完整内容可选中复制，本窗口不会自动关闭。", "以下旁註未放置；已成功的譯文保留。完整內容可選取複製，本視窗不會自動關閉。", "아래 주석을 배치하지 못했습니다. 완료된 번역은 유지됩니다. 전체 내용을 복사할 수 있으며 창은 자동으로 닫히지 않습니다.", "以下の注記は配置できませんでした。完了分は保持されます。全文をコピーできます。このウィンドウは自動で閉じません。", "The notes below were not placed. Successful translations remain. Select and copy the full text; this window will not close automatically." },
             ["SummaryCompleted"] = new[] { "翻译完成：共 {0} 项", "翻譯完成：共 {0} 項", "번역 완료: 총 {0}개", "翻訳完了：全 {0} 件", "Translation complete: {0} items" },
             ["SummaryDetails"] = new[] { "已翻译 {0}　缓存命中 {1}\r\n无源语言跳过 {2}　需要检查 {3}　OCR 未识别 {4}", "已翻譯 {0}　快取命中 {1}\r\n無來源語言而略過 {2}　需要檢查 {3}　OCR 未識別 {4}", "번역 {0}　캐시 적중 {1}\r\n원문 언어 없음 {2}　확인 필요 {3}　OCR 미인식 {4}", "翻訳済み {0}　キャッシュ命中 {1}\r\n原文言語なし {2}　要確認 {3}　OCR 未認識 {4}", "Translated {0}   Cache hits {1}\r\nNo source language {2}   Review {3}   OCR empty {4}" },
             ["SummaryReviewHint"] = new[] { "其中 {0} 项严格重试后仍未变化，已保留原文。", "其中 {0} 項嚴格重試後仍未變更，已保留原文。", "{0}개 항목은 재시도 후에도 변경되지 않아 원문을 유지했습니다.", "{0} 件は再試行後も変化しなかったため、原文を保持しました。", "{0} items were still unchanged after retry; the originals were kept." },
