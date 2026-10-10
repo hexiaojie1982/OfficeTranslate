@@ -9,13 +9,16 @@ namespace OfficeTranslate.Core
 {
     public sealed class TranslationResult
     {
-        internal TranslationResult(string text, bool changed, bool fromCache, bool skippedNoSource, bool needsReview)
+        internal TranslationResult(string text, bool changed, bool fromCache, bool skippedNoSource, bool needsReview,
+            int fallbackTranslatedParagraphs = 0, int fallbackReviewParagraphs = 0)
         {
             Text = text;
             Changed = changed;
             FromCache = fromCache;
             SkippedNoSource = skippedNoSource;
             NeedsReview = needsReview;
+            FallbackTranslatedParagraphs = fallbackTranslatedParagraphs;
+            FallbackReviewParagraphs = fallbackReviewParagraphs;
         }
 
         public string Text { get; }
@@ -23,9 +26,12 @@ namespace OfficeTranslate.Core
         public bool FromCache { get; }
         public bool SkippedNoSource { get; }
         public bool NeedsReview { get; }
+        public int FallbackTranslatedParagraphs { get; }
+        public int FallbackReviewParagraphs { get; }
 
-        internal static TranslationResult Translated(string text, bool needsReview = false) =>
-            new TranslationResult(text, true, false, false, needsReview);
+        internal static TranslationResult Translated(string text, bool needsReview = false,
+            int fallbackTranslatedParagraphs = 0, int fallbackReviewParagraphs = 0) =>
+            new TranslationResult(text, true, false, false, needsReview, fallbackTranslatedParagraphs, fallbackReviewParagraphs);
 
         internal static TranslationResult Cached(string text) =>
             new TranslationResult(text, true, true, false, false);
@@ -33,8 +39,8 @@ namespace OfficeTranslate.Core
         internal static TranslationResult Skipped(string text) =>
             new TranslationResult(text, false, false, true, false);
 
-        internal static TranslationResult Unchanged(string text) =>
-            new TranslationResult(text, false, false, false, true);
+        internal static TranslationResult Unchanged(string text, int fallbackReviewParagraphs = 0) =>
+            new TranslationResult(text, false, false, false, true, 0, fallbackReviewParagraphs);
     }
 
     public sealed class TranslationTaskSummary
@@ -49,6 +55,10 @@ namespace OfficeTranslate.Core
         public int NeedsReview { get; private set; }
         public int OcrNoText { get; private set; }
         public int TextNeedsReview { get; private set; }
+        public int TextUnchangedNeedsReview { get; private set; }
+        public int TextPartiallyTranslated { get; private set; }
+        public int FallbackTranslatedParagraphs { get; private set; }
+        public int FallbackReviewParagraphs { get; private set; }
         public int ImageNeedsReview { get; private set; }
         public int OcrImages { get; private set; }
         public int OcrRawRegions { get; private set; }
@@ -60,11 +70,18 @@ namespace OfficeTranslate.Core
 
         public void Record(TranslationResult result)
         {
+            FallbackTranslatedParagraphs += result.FallbackTranslatedParagraphs;
+            FallbackReviewParagraphs += result.FallbackReviewParagraphs;
             if (result.FromCache) CacheHits++;
             else if (result.SkippedNoSource) SkippedNoSource++;
-            else if (result.NeedsReview) { NeedsReview++; TextNeedsReview++; }
+            else if (result.NeedsReview)
+            {
+                NeedsReview++; TextNeedsReview++;
+                if (result.Changed) { Translated++; TextPartiallyTranslated++; }
+                else TextUnchangedNeedsReview++;
+            }
             else if (result.Changed) Translated++;
-            else { NeedsReview++; TextNeedsReview++; }
+            else { NeedsReview++; TextNeedsReview++; TextUnchangedNeedsReview++; }
         }
 
         public void RecordSkipped() => SkippedNoSource++;

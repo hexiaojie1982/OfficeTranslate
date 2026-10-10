@@ -5,7 +5,7 @@
 - 基线：`8b8b252f8b061e289a397ffdfa3808dc35cff2fe`（2.1.31）。候选分支：`fix/ocr-original-image-all-hosts`。
 - VERSION.txt = 2.1.32，三宿主 AssemblyVersion/AssemblyFileVersion = 2.1.32.0；共用 About 增加独立 2.1.32 条目，保留 2.1.31 与更早历史。
 - 完整 Release 重建通过：0 错误，7 个既有 nullable 警告，新增代码无警告。
-- 原图阶段全量单测：238/238 通过；本轮超时补充后的最新全量结果为 258/258（详见文末新增章节）。基线 189 项全部保留；原图阶段新增 20 个测试方法、49 个参数化执行用例。
+- 原图阶段全量单测：238/238 通过；超时补充 258/258；本轮混合语言逐段降级补充后的最新全量结果为 278/278（详见文末各补充章节）。基线 189 项全部保留；原图阶段新增 20 个测试方法、49 个参数化执行用例。
 - 仅本地候选提交。不 push、不合并、不打 tag、不安装、不生成 MSI、不发布；没有改动 main、2.1.30/2.1.31 分支或 review-image-overlay 工作区。
 - 没有启动/操纵真实 Office、没有公司服务器/Qwen/公司照片测试。以下包与像素结果不能等同于公司环境 OCR 召回率或速度验收。
 
@@ -216,7 +216,7 @@ $env:DOTNET_CLI_TELEMETRY_OPTOUT='1'
 
 最新完整 Rebuild：退出 0，1.87 秒，0 错误/7 个原有警告，新增代码无警告。全量单测：退出 0，258/258，失败/跳过 0，约 43 秒。TRX：`TestResults/ocr-original-image/2.1.32-timeout-final.trx`；此前专项初轮 18/18 通过，最终新增 20 项全部纳入全量。既有 238 项（含原图提取与 EXIF）全部通过。
 
-当前补充后 Release DLL SHA-256：
+超时提交 `376b27d` 的 Release DLL SHA-256（历史证据；混合语言补充后的最新哈希见下一节）：
 
 | DLL | SHA-256 |
 | --- | --- |
@@ -246,3 +246,81 @@ $env:DOTNET_CLI_TELEMETRY_OPTOUT='1'
 - 普通文本 120 秒默认保持，用户自定义 TimeoutSeconds 的实际值可能不同；本轮没有修改 settings.json。
 - 原图捕获、覆盖框/旁注、已保存/dirty 回退边界不改；上节列出的实际 Office/公司验收缺口仍然存在。
 - 同一 fix/ocr-original-image-all-hosts 分支追加独立本地提交，仍为 2.1.32；不 push/合并/tag/安装/发布/生成 MSI。
+
+## 2.1.32 补充：混合语言整块失败后逐段降级（第三项独立本地提交）
+
+### 最终采用的判定点
+
+- 基线为 `376b27dd92f10d18ee9068b22f5689368854849c`，仍在 `fix/ocr-original-image-all-hosts`，VERSION/三宿主 Assembly 保持 2.1.32/2.1.32.0。
+- 仅在 `TranslateMixedLanguageChunkAsync` 中，整块直译未通过非截断、`IsCompleteTranslation`、`PreservesProtectedSegmentsInOrder`，且整块占位重试也未通过非截断、`Restore`、`IsCompleteTranslation` 后，尝试逐段降级。不改上述校验实现，不放宽英文逐字顺序或 token 恢复规则。
+- 降级还要求源语言为明确指定而非自动，且原块有至少两段非空内容。自动模式事实上会经 `ProtectLayoutSeparators` 保护换行，因此不能仅靠 `HasProtectedSegments` 判断是否应降级；新增明确的 `IsAutomatic` 护栏，保持自动模式原有调用次数及失败处理。
+- 按捕获分隔符的 Regex 拆分 CRLF、CR、LF、VT（Office 手动换行）、FF、U+2028、U+2029；分隔符、空段落及各段首尾空白原样拼回。非空内容再次走同一 `TranslateChunkAsync`，不通过 `TranslateDetailedAsync` 重复分块或误缓存。
+- 单段没有下一层拆分，所以最多仍是直译一次 + 占位重试一次（不含既有网络/HTTP 重试）。合规段写入译文，不合规段原文不动；纯英文/无源语言段按既有 Skipped 分支原样保留，不误标复核。
+- 部分成功返回 `Changed=true, NeedsReview=true`，带 `FallbackTranslatedParagraphs/FallbackReviewParagraphs`；所有段失败才返回 Unchanged。外层字符分块聚合会累加段落计数；只有全部合规结果进入会话缓存，部分成功不缓存。
+- 不记录文本正文/Prompt/密钥；本补充没有新增诊断正文、没有改 OCR 捕获或图片请求路径。
+
+### 汇总与复核呈现
+
+- 三宿主现有写回以 Changed 判定，因此部分成功可正常写回。共享 `TranslationResultForm/UiText` 提供五种 UI 语言的部分成功及逐段计数提示，不再用整项“严格重试后仍未变化”描述部分成功。
+- 三段中第二段仍失败的离线实例：结果为“第一段译文 + 原 CRLF + 第二段原文 + 原 CRLF + 第三段译文”；NeedsReview=true，段落计数 2/1。
+- 项目摘要为：已翻译 1、需要检查 1（同一项有成功内容且需复核，计数可重叠）；提示“其中 1 项已部分翻译；未通过校验的部分保留原文，需要检查。”及“逐段降级：已翻译 2 段，保留原文待检查 1 段。”
+- 复核标记为返回结果的 NeedsReview、任务需要检查计数和保留原文段数；不向原文插入附加标签或改变其字符。不声称已提供逐段着色/批注/定位导航。
+- 全部失败仍显示原来的未变化提示，另有保留原文段数；全部成功 NeedsReview=false，显示逐段成功数。
+
+### 新增测试及效率边界
+
+`MixedParagraphFallbackTests.cs` 新增 12 个方法、20 个执行用例，全部使用现有假 HttpMessageHandler，不访问真实模型：
+
+- WholeProtectionFailure_ThreeParagraphsTranslateWithoutReview（OpenAI-compatible/Ollama）
+- OneParagraphStillFails_PreservesOnlyItsOriginalAndMarksPartialReview（两服务；含不缓存部分失败、摘要 2/1 断言）
+- Fallback_PreservesSeparatorsBlankParagraphsAndEdgeWhitespace（7 种分隔符）
+- AutomaticSource_MultilineSuccessStillUsesOneRequest
+- AutomaticSource_UnchangedMultilineDoesNotEnterMixedFallback
+- ValidWholeProtectedRetry_DoesNotAddParagraphRequests
+- ValidWholeMixedTranslation_DoesNotAddParagraphRequests
+- SingleMixedParagraph_SuccessStillUsesOneRequest
+- SingleMixedParagraph_FailureIsStillBoundedToTwoRequests
+- AllParagraphsFail_LeavesWholeOriginalAndReportsUnchanged
+- FullyProtectedParagraph_RemainsExactWithoutRequestOrReview
+- UserCancelDuringParagraphFallback_StopsBeforeFollowingParagraphs
+
+正常整块直译仍 1 次；整块占位重试成功仍 2 次；三段整块失败后逐段均成功共 5 次；中段仍失败共 6 次；三段全部失败共 8 次。新增成本只在明确指定源语言的失败路径产生，上限为原有整块 2 次 + 每个可翻译段最多 2 次（不含既有 HTTP/network 重试）。没有真实服务 usage 数据，不声称降低该失败路径的 Token 或耗时；目标是避免整块失败丢弃合规段。成功降级结果可再次命中已有会话缓存。
+
+### 构建与全量单测
+
+实际目录 `D:\pythonProject\office-translate\native-word`，SDK 8.0.423，net48：
+
+```powershell
+$env:DOTNET_CLI_HOME=Join-Path (Get-Location) 'dotnet-home'
+$env:NUGET_PACKAGES=Join-Path (Get-Location) 'packages'
+$env:DOTNET_SKIP_FIRST_TIME_EXPERIENCE='1'
+$env:DOTNET_CLI_TELEMETRY_OPTOUT='1'
+& 'C:\Program Files\dotnet\dotnet.exe' build OfficeTranslate.Word.sln -c Release --no-restore -t:Rebuild
+& 'C:\Program Files\dotnet\dotnet.exe' test tests\OfficeTranslate.Tests\OfficeTranslate.Tests.csproj -c Release --no-build --no-restore --logger 'trx;LogFileName=2.1.32-mixed-final2.trx' --results-directory TestResults\ocr-original-image
+```
+
+完整最终 Rebuild：退出 0，1.36 秒，0 错误/7 个既有 nullable 警告；新增代码无警告。全量最终单测 278/278，失败/跳过 0；之前 258 项全部保留通过。TRX 为 `TestResults/ocr-original-image/2.1.32-mixed-final2.trx`（忽略的本地测试产物）。
+
+过程证据：初轮专项 18/18 通过；新增自动模式失败回归后第一次全量 277/278，暴露自动模式的换行保护也进入混合管线，已加入明确源语言护栏后重建并全量重测。失败 TRX `2.1.32-mixed-final.trx` 保留，不将该轮当成最终通过结果。
+
+当前 Release DLL SHA-256：
+
+| DLL | SHA-256 |
+| --- | --- |
+| Core | FE8200E59E14F79044FB0F4454AA2F408B49E793141694DF4C860B7CBE7B1ABB |
+| Word | EB761B316716AE706E417DA66800C1CC73CAB0A072F8503FDE6CE8FD2482ED5D |
+| Excel | 7BCA22E39AC2C25E5A9E2D845FBCD8854A3D25D8690E6BE006991703ECC7F0F2 |
+| PowerPoint | EC398B3CD9D1A451E3CEC635A7CAA7F6B1F8F9F854E8FA0B9BDF68B074546E28 |
+
+### 本补充文件清单与未覆盖项
+
+- src/OfficeTranslate.Core/TranslationClient.cs
+- src/OfficeTranslate.Core/TranslationResults.cs
+- src/OfficeTranslate.WordAddIn/TranslationResultForm.cs（Excel/PPT 链接共用）
+- src/OfficeTranslate.WordAddIn/UiText.cs（Excel/PPT 链接共用）
+- tests/OfficeTranslate.Tests/MixedParagraphFallbackTests.cs（新增）
+- tests/VALIDATION-2.1.32-ORIGINAL-IMAGE.md
+
+没有公司三段原文/同一 Qwen 服务的在线测试，没有真实 Word 选区/PPT 文本框/Excel 单元格菜单写回及结果窗验收；完成的是三宿主编译、共享接线核对、Core 管线及摘要数据测试。不能以离线用例宣称公司效果/速度已验收。现有宿主格式写回逻辑未改；本补充保证降级拼回的字符串分隔符，不保证 Word 富文本字体等格式自动修复。超时配置仍是文本默认 120 秒（用户值可不同）、图片每次独立 600 秒，无冲突或调整。
+
+提交仅在同一候选分支追加一次，仍为 2.1.32；不 push/合并/tag/生成 MSI/安装/发布，不触碰 main、2.1.30 分支或 review-image-overlay 工作区。

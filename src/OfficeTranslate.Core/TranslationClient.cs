@@ -64,6 +64,8 @@ namespace OfficeTranslate.Core
             var anyTranslated = false;
             var anySkipped = false;
             var needsReview = false;
+            var fallbackTranslated = 0;
+            var fallbackReview = 0;
             foreach (var chunk in chunks)
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -73,16 +75,18 @@ namespace OfficeTranslate.Core
                 anyTranslated |= !result.SkippedNoSource;
                 anySkipped |= result.SkippedNoSource;
                 needsReview |= result.NeedsReview;
+                fallbackTranslated += result.FallbackTranslatedParagraphs;
+                fallbackReview += result.FallbackReviewParagraphs;
             }
             var completed = output.ToString();
             if (anyChanged && !needsReview)
             {
                 TranslationSessionCache.Store(cacheKey, completed);
-                return TranslationResult.Translated(completed);
+                return TranslationResult.Translated(completed, false, fallbackTranslated, fallbackReview);
             }
-            if (anyChanged) return TranslationResult.Translated(completed, true);
+            if (anyChanged) return TranslationResult.Translated(completed, true, fallbackTranslated, fallbackReview);
             if (!anyTranslated && anySkipped) return TranslationResult.Skipped(text);
-            return TranslationResult.Unchanged(text);
+            return TranslationResult.Unchanged(text, fallbackReview);
         }
 
         public async Task<IReadOnlyList<string>> GetModelsAsync(TranslationSettings settings, CancellationToken cancellationToken)
@@ -305,9 +309,45 @@ namespace OfficeTranslate.Core
                 catch (ProtectedContentException) { }
             }
 
-            // A single stubborn paragraph must not abort the whole task. Keep the
-            // original text and let the task summary flag it for manual review.
-            return TranslationResult.Unchanged(original);
+            // Only after BOTH whole-chunk checks fail, reduce the all-or-nothing
+            // protection scope for an explicit source language. Automatic mode
+            // also protects layout separators, but its behavior must not change.
+            // Single paragraphs keep the existing two calls.
+            if (SourceLanguageProtector.IsAutomatic(settings.SourceLanguage)) return TranslationResult.Unchanged(original);
+            return await TranslateMixedParagraphFallbackAsync(original, settings, token).ConfigureAwait(false);
+        }
+
+        private async Task<TranslationResult> TranslateMixedParagraphFallbackAsync(string original,
+            TranslationSettings settings, CancellationToken token)
+        {
+            // Captured separators are appended verbatim (including CRLF, blank
+            // paragraphs and Office's manual line break). Do not normalize them.
+            var parts = System.Text.RegularExpressions.Regex.Split(original, "(\\r\\n|[\\r\\n\\v\\f\\u2028\\u2029])");
+            if (parts.Where((part, index) => index % 2 == 0).Count(part => !string.IsNullOrWhiteSpace(part)) < 2)
+                return TranslationResult.Unchanged(original);
+
+            var output = new StringBuilder();
+            var translated = 0;
+            var review = 0;
+            for (var i = 0; i < parts.Length; i++)
+            {
+                token.ThrowIfCancellationRequested();
+                var part = parts[i];
+                if (i % 2 != 0 || string.IsNullOrWhiteSpace(part)) { output.Append(part); continue; }
+                var start = 0;
+                var end = part.Length;
+                while (start < end && char.IsWhiteSpace(part[start])) start++;
+                while (end > start && char.IsWhiteSpace(part[end - 1])) end--;
+                var result = await TranslateChunkAsync(part.Substring(start, end - start), settings, token).ConfigureAwait(false);
+                if (result.Changed) translated++;
+                if (result.NeedsReview) review++;
+                output.Append(part.Substring(0, start));
+                output.Append(result.Text);
+                output.Append(part.Substring(end));
+            }
+            return translated > 0
+                ? TranslationResult.Translated(output.ToString(), review > 0, translated, review)
+                : TranslationResult.Unchanged(original, review);
         }
 
         private async Task<TranslationResult> RetryUnchangedChunkAsync(string original, ProtectedTranslationText protectedText, TranslationSettings settings, CancellationToken token)
