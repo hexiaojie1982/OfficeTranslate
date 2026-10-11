@@ -15,9 +15,11 @@ namespace OfficeTranslate.PowerPointAddIn
     {
         private readonly PowerPoint.Application _powerPoint;
         public PowerPointTranslationService(PowerPoint.Application powerPoint) => _powerPoint = powerPoint;
+        public TranslationTaskSummary? Summary { get; private set; }
 
         public async Task<TranslationTaskSummary> TranslateAsync(bool wholePresentation, TranslationSettings settings, CancellationToken token, Action<string> progress, OfficeUiDispatcher ui)
         {
+            Summary = null;
             // Menu acceptance must prove which DLL served the request: record
             // this add-in's assembly version so the reviewer can verify it in
             // the diagnostics log instead of inferring from registry keys.
@@ -36,14 +38,13 @@ namespace OfficeTranslate.PowerPointAddIn
             using (var client = new TranslationClient())
             {
                 var total = targets.Count + images.Count;
-                var summary = new TranslationTaskSummary(total);
+                var summary = Summary = new TranslationTaskSummary(total);
                 ui.LogProbe("text_loop_before");
                 for (var i = 0; i < targets.Count; i++)
                 {
                     token.ThrowIfCancellationRequested();
                     progress($"OfficeTranslate：正在翻译 {i + 1}/{total}");
                     var result = await client.TranslateDetailedAsync(targets[i].Text, settings, token);
-                    summary.Record(result);
                     token.ThrowIfCancellationRequested();
                     if (result.Changed)
                     {
@@ -62,6 +63,7 @@ namespace OfficeTranslate.PowerPointAddIn
                             target.Write(settings.BilingualMode ? target.Text + "\r" + translated : translated);
                         });
                     }
+                    summary.Record(result);
                     progress($"OfficeTranslate：已完成 {i + 1}/{total}");
                 }
                 ui.LogProbe("text_loop_after");
@@ -167,9 +169,8 @@ namespace OfficeTranslate.PowerPointAddIn
                 var ownerId = preNetwork.Owner;
                 var hasPixels = PngDimensions.TryRead(imageBytes, out var pixelWidth, out var pixelHeight);
                 var recognition = await client.TranslateImageAsync(imageBytes, settings, token, "PowerPoint", preNetwork.CaptureSource, preNetwork.CaptureReason);
-                summary.RecordImageRecognition(recognition);
                 var regions = recognition.Regions;
-                if (regions.Count == 0) return;
+                if (regions.Count == 0) { summary.RecordImageRecognition(recognition); return; }
                 var slide = preNetwork.Slide;
                 var imageLeft = preNetwork.Left; var imageTop = preNetwork.Top;
                 var imageWidth = preNetwork.Width; var imageHeight = preNetwork.Height;
@@ -225,22 +226,31 @@ namespace OfficeTranslate.PowerPointAddIn
                         // Exact region rect with an opaque cover: in non-bilingual
                         // mode the source text must not show through (the old 8%
                         // transparency did), and the box no longer grows downward.
-                        var overlay = slide.Shapes.AddTextbox(Office.MsoTextOrientation.msoTextOrientationHorizontal,
-                            imageLeft + plan.Left, imageTop + plan.Top, plan.Width, plan.Height);
-                        overlay.Tags.Add("OfficeTranslateOCR", ownerId);
-                        // D2: the host must never resize the cover by itself. New
-                        // textboxes default to auto-size-to-fit-text on some
-                        // builds, which would let the box grow beyond the validated
-                        // region and make the fit check measure the grown box. The
-                        // box keeps the planner's fixed geometry; only the font
-                        // size adapts.
-                        overlay.TextFrame2.AutoSize = Office.MsoAutoSize.msoAutoSizeNone;
-                        overlay.Fill.Visible = Office.MsoTriState.msoTrue; overlay.Fill.ForeColor.RGB = 0xFFFFFF; overlay.Fill.Transparency = 0F;
-                        overlay.Line.Visible = Office.MsoTriState.msoFalse;
-                        overlay.TextFrame2.MarginLeft = 2; overlay.TextFrame2.MarginRight = 2; overlay.TextFrame2.MarginTop = 1; overlay.TextFrame2.MarginBottom = 1;
-                        overlay.TextFrame2.WordWrap = Office.MsoTriState.msoTrue;
-                        overlay.TextFrame2.TextRange.Text = overlayText;
-                        overlay.TextFrame2.TextRange.Font.Size = plan.FontSize;
+                        var created = ImageOverlayWriteback.TryCreate(
+                            () => slide.Shapes.AddTextbox(Office.MsoTextOrientation.msoTextOrientationHorizontal,
+                                imageLeft + plan.Left, imageTop + plan.Top, plan.Width, plan.Height),
+                            (PowerPoint.Shape newOverlay) =>
+                        {
+                            newOverlay.Tags.Add("OfficeTranslateOCR", ownerId);
+                            // D2: the host must never resize the cover by itself. New
+                            // textboxes default to auto-size-to-fit-text on some
+                            // builds, which would let the box grow beyond the validated
+                            // region and make the fit check measure the grown box. The
+                            // box keeps the planner's fixed geometry; only the font
+                            // size adapts.
+                            newOverlay.TextFrame2.AutoSize = Office.MsoAutoSize.msoAutoSizeNone;
+                            newOverlay.Fill.Visible = Office.MsoTriState.msoTrue; newOverlay.Fill.ForeColor.RGB = 0xFFFFFF; newOverlay.Fill.Transparency = 0F;
+                            newOverlay.Line.Visible = Office.MsoTriState.msoFalse;
+                            newOverlay.TextFrame2.MarginLeft = 2; newOverlay.TextFrame2.MarginRight = 2; newOverlay.TextFrame2.MarginTop = 1; newOverlay.TextFrame2.MarginBottom = 1;
+                            newOverlay.TextFrame2.WordWrap = Office.MsoTriState.msoTrue;
+                            newOverlay.TextFrame2.TextRange.Text = overlayText;
+                            newOverlay.TextFrame2.TextRange.Font.Size = plan.FontSize;
+                        }, overlay => overlay.Delete(), out var overlay, out var createFailure);
+                        if (!created || overlay == null)
+                        {
+                            noteEntries.Add(createFailure + "\r" + overlayText);
+                            continue;
+                        }
                         // W1: shrink the font (never the box) until the real
                         // laid-out text height fits the fixed box; a box that still
                         // overflows at the floor is deleted and the region degrades
@@ -270,6 +280,7 @@ namespace OfficeTranslate.PowerPointAddIn
                             (chunk, error) => summary.RecordImageNoteFailure(ownerId, chunk.Text, error.Message));
                     }
                 });
+                summary.RecordImageRecognition(recognition);
             }
             finally { try { if (File.Exists(path)) File.Delete(path); } catch { } }
         }

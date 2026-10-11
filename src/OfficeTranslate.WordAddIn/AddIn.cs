@@ -121,9 +121,11 @@ namespace OfficeTranslate.WordAddIn
             // S1: hoisted so the finally can run the final selection
             // restore after the UI teardown.
             WordTranslationService? service = null;
+            var taskLanguage = _settings.UiLanguage;
             try
             {
                 var settings = LoadForTranslation();
+                taskLanguage = settings.UiLanguage;
                 settings.Validate();
                 _progressForm = new TranslationProgressForm(settings.UiLanguage, () => _cancellation?.Cancel());
                 _progressForm.ShowFor(taskWindow);
@@ -135,7 +137,15 @@ namespace OfficeTranslate.WordAddIn
                 _progressForm = null;
             }
             catch (OperationCanceledException ex) when (TranslationFailurePolicy.IsUserCancellation(ex, _cancellation.Token))
-            { _progressForm?.SetStatus("OfficeTranslate：已取消"); }
+            {
+                ui.Invoke(() =>
+                {
+                    _progressForm?.CloseSafely(); _progressForm = null;
+                    var window = ResolveErrorDialogOwner(taskWindow);
+                    TranslationErrorDialog.ShowTaskFailure(ex, service?.Summary, _cancellation.Token,
+                        taskLanguage, window != IntPtr.Zero ? new TranslationProgressForm.WindowHandle(window) : null);
+                });
+            }
             // N1: error presentation is UI work and must enter the same UI
             // dispatch boundary; the ambient SynchronizationContext cannot
             // be trusted to bring the post-await continuation back to STA.
@@ -174,10 +184,12 @@ namespace OfficeTranslate.WordAddIn
                     // S1: the old bare markers could not answer what the
                     // selection was when the dialog appeared or was
                     // dismissed; the probe snapshots it at both points.
-                    WordSelectionProbe.Log(_word, "error_dialog_shown", window);
+                    var recoveringNotes = service?.Summary?.UnplacedImageNotes.Count > 0;
+                    WordSelectionProbe.Log(_word, recoveringNotes ? "recovery_summary_show" : "error_dialog_shown", window);
                     try
                     {
-                        TranslationErrorDialog.Show(ex, window != IntPtr.Zero ? new TranslationProgressForm.WindowHandle(window) : null);
+                        TranslationErrorDialog.ShowTaskFailure(ex, service?.Summary, _cancellation.Token,
+                            taskLanguage, window != IntPtr.Zero ? new TranslationProgressForm.WindowHandle(window) : null);
                     }
                     finally
                     {
@@ -189,7 +201,9 @@ namespace OfficeTranslate.WordAddIn
                         // finally never runs either -- the only real fix is
                         // never giving it a bad owner in the first place
                         // (see ResolveErrorDialogOwner above).
-                        WordSelectionProbe.Log(_word, "error_dialog_dismissed", window);
+                        // Recovery is modeless. Returning from Show does not
+                        // mean the user dismissed/saved that recovery window.
+                        WordSelectionProbe.Log(_word, recoveringNotes ? "recovery_summary_returned" : "error_dialog_dismissed", window);
                     }
                 });
             }

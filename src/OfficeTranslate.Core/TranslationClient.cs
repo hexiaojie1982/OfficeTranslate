@@ -338,7 +338,17 @@ namespace OfficeTranslate.Core
                 var end = part.Length;
                 while (start < end && char.IsWhiteSpace(part[start])) start++;
                 while (end > start && char.IsWhiteSpace(part[end - 1])) end--;
-                var result = await TranslateChunkAsync(part.Substring(start, end - start), settings, token).ConfigureAwait(false);
+                var paragraph = part.Substring(start, end - start);
+                TranslationResult result;
+                try { result = await TranslateChunkAsync(paragraph, settings, token).ConfigureAwait(false); }
+                catch (EmptyTranslationResponseException)
+                {
+                    // Keep a locally invalid paragraph, not an entire otherwise
+                    // usable block. Never absorb a user cancellation or an HTTP
+                    // / authentication / parsing error as a successful fallback.
+                    token.ThrowIfCancellationRequested();
+                    result = TranslationResult.Unchanged(paragraph);
+                }
                 if (result.Changed) translated++;
                 if (result.NeedsReview) review++;
                 output.Append(part.Substring(0, start));
@@ -356,7 +366,7 @@ namespace OfficeTranslate.Core
             var response = await SendTranslationRequestAsync(protectedText.Text, strictPrompt, settings, token, true).ConfigureAwait(false);
             var retried = response.Content;
             if (string.IsNullOrWhiteSpace(retried))
-                throw new InvalidOperationException("翻译模型连续返回空内容，已停止写回。");
+                throw new EmptyTranslationResponseException();
             string restored;
             try
             {

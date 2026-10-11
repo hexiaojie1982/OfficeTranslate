@@ -90,8 +90,19 @@ namespace OfficeTranslate.PowerPointAddIn
             // The host window handle is a COM property; read it here on the
             // UI thread instead of after the network awaits.
             var hostWindow = GetHostWindow();
-            try { var settings = LoadForTranslation(); settings.Validate(); _progressForm = new TranslationProgressForm(settings.UiLanguage, () => _cancellation?.Cancel()); _progressForm.ShowFor(hostWindow); var service = new HostService(_host); SetStatus("OfficeTranslate：正在准备翻译…"); var summary = await service.TranslateAsync(whole, settings, _cancellation.Token, SetStatus, ui); _progressForm.CloseAndShowResult(summary, hostWindow); _progressForm = null; }
-            catch (OperationCanceledException ex) when (TranslationFailurePolicy.IsUserCancellation(ex, _cancellation.Token)) { SetStatus("OfficeTranslate：已取消"); }
+            HostService? service = null;
+            var taskLanguage = _settings.UiLanguage;
+            try { var settings = LoadForTranslation(); taskLanguage = settings.UiLanguage; settings.Validate(); _progressForm = new TranslationProgressForm(settings.UiLanguage, () => _cancellation?.Cancel()); _progressForm.ShowFor(hostWindow); service = new HostService(_host); SetStatus("OfficeTranslate：正在准备翻译…"); var summary = await service.TranslateAsync(whole, settings, _cancellation.Token, SetStatus, ui); _progressForm.CloseAndShowResult(summary, hostWindow); _progressForm = null; }
+            catch (OperationCanceledException ex) when (TranslationFailurePolicy.IsUserCancellation(ex, _cancellation.Token))
+            {
+                ui.Invoke(() =>
+                {
+                    CloseProgress();
+                    var window = ResolveErrorDialogOwner(hostWindow);
+                    TranslationErrorDialog.ShowTaskFailure(ex, service?.Summary, _cancellation.Token,
+                        taskLanguage, window != IntPtr.Zero ? new HostWindow(window) : null);
+                });
+            }
             catch (Exception ex)
             {
                 CloseProgress();
@@ -106,7 +117,8 @@ namespace OfficeTranslate.PowerPointAddIn
                 ui.Invoke(() =>
                 {
                     var window = ResolveErrorDialogOwner(hostWindow);
-                    TranslationErrorDialog.Show(ex, window != IntPtr.Zero ? new HostWindow(window) : null);
+                    TranslationErrorDialog.ShowTaskFailure(ex, service?.Summary, _cancellation.Token,
+                        taskLanguage, window != IntPtr.Zero ? new HostWindow(window) : null);
                 });
             }
             finally { CloseProgress(); _cancellation.Dispose(); _cancellation = null; }
