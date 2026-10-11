@@ -67,7 +67,12 @@ namespace OfficeTranslate.WordAddIn
 
         private string ChangelogText()
         {
-            return "OfficeTranslate " + CurrentVersion + "\r\n• 图片覆盖框宽高独立放大，每维最多 5 倍，按最小覆盖面积选择组合，始终保持在图片内；可能遮住邻近原文。\r\n• 小框信任门下调为 3 个坐标单位；最小字号由 8pt 下调为 6pt，宿主真实排版失败仍回退旁注。逐区诊断 grow 分别显示宽高倍数。\r\n\r\n" + ChangelogVersion133Text();
+            return "OfficeTranslate " + CurrentVersion + "\r\n• 逐段回退时，单段连续空回复只保留该段原文并标记检查，不再丢掉同块其他成功译文；取消和服务错误仍正常终止。\r\n• 任务后续失败或取消时，三宿主仍提供完整未放置旁注，明确显示未全部完成，窗口不会自动关闭；成功计数在写回后记录。\r\n• Excel/PowerPoint 创建覆盖框的 COM 错误逐区降级为旁注，仅清理失败框，不中断其他区域；清理失败会明确提示。\r\n\r\n" + ChangelogVersion134Text();
+        }
+
+        private string ChangelogVersion134Text()
+        {
+            return "OfficeTranslate 2.1.34\r\n• 图片覆盖框宽高独立放大，每维最多 5 倍，按最小覆盖面积选择组合，始终保持在图片内；可能遮住邻近原文。\r\n• 小框信任门下调为 3 个坐标单位；最小字号由 8pt 下调为 6pt，宿主真实排版失败仍回退旁注。逐区诊断 grow 分别显示宽高倍数。\r\n\r\n" + ChangelogVersion133Text();
         }
 
         private string ChangelogVersion133Text()

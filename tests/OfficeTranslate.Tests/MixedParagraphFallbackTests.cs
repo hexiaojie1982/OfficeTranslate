@@ -23,6 +23,7 @@ namespace OfficeTranslate.Tests
         {
             private readonly Func<string, int, string> _reply;
             private readonly ProviderKind _provider;
+            public Func<string, HttpStatusCode>? StatusForInput;
             public readonly List<string> Inputs = new List<string>();
             public Handler(ProviderKind provider, Func<string, int, string> reply) { _provider = provider; _reply = reply; }
             protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
@@ -34,7 +35,7 @@ namespace OfficeTranslate.Tests
                 var input = (string)((Dictionary<string, object>)messages[1])["content"];
                 Inputs.Add(input);
                 var response = _reply(input, Inputs.Count);
-                return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(json.Serialize(
+                return new HttpResponseMessage(StatusForInput?.Invoke(input) ?? HttpStatusCode.OK) { Content = new StringContent(json.Serialize(
                     _provider == ProviderKind.Ollama ? (object)new { message = new { content = response }, done_reason = "stop" }
                     : new { choices = new[] { new { message = new { content = response }, finish_reason = "stop" } } })) };
             }
@@ -233,6 +234,95 @@ namespace OfficeTranslate.Tests
                 using (var client = new TranslationClient(handler))
                     await Assert.ThrowsExceptionAsync<OperationCanceledException>(() => client.TranslateDetailedAsync(string.Join("\r", Sources), Settings(), cancellation.Token));
                 Assert.AreEqual(3, handler.Inputs.Count);
+            }
+        }
+
+        private const string PureMiddle = "장비는 정상적으로 동작하며 모든 검사가 완료되었습니다.";
+
+        [DataTestMethod]
+        [DataRow(ProviderKind.OpenAiCompatible)]
+        [DataRow(ProviderKind.Ollama)]
+        public async Task EmptyPureMiddleTwice_PreservesThatParagraphContinuesAndDoesNotCache(ProviderKind provider)
+        {
+            var source = Sources[0] + "\r\n  " + PureMiddle + "\t\r\n" + Sources[2];
+            var handler = new Handler(provider, (input, call) => input.Contains("\r\n") ? WholeFailure(input)
+                : input == PureMiddle ? " \t" : ParagraphOutput(input));
+            using (var client = new TranslationClient(handler))
+            {
+                var settings = Settings(provider);
+                for (var run = 1; run <= 2; run++)
+                {
+                    var result = await client.TranslateDetailedAsync(source, settings, CancellationToken.None);
+                    Assert.AreEqual(Outputs[0] + "\r\n  " + PureMiddle + "\t\r\n" + Outputs[2], result.Text);
+                    Assert.IsTrue(result.Changed); Assert.IsTrue(result.NeedsReview); Assert.IsFalse(result.FromCache);
+                    Assert.AreEqual(2, result.FallbackTranslatedParagraphs); Assert.AreEqual(1, result.FallbackReviewParagraphs);
+                    Assert.AreEqual(6 * run, handler.Inputs.Count);
+                    var summary = new TranslationTaskSummary(1); summary.Record(result);
+                    Assert.AreEqual(1, summary.Translated); Assert.AreEqual(1, summary.TextPartiallyTranslated);
+                }
+            }
+        }
+
+        [DataTestMethod]
+        [DataRow(ProviderKind.OpenAiCompatible)]
+        [DataRow(ProviderKind.Ollama)]
+        public async Task EmptyStandaloneParagraphTwice_StillFailsRatherThanClaimingSuccess(ProviderKind provider)
+        {
+            var handler = new Handler(provider, (input, call) => "");
+            using (var client = new TranslationClient(handler))
+                await Assert.ThrowsExceptionAsync<EmptyTranslationResponseException>(() =>
+                    client.TranslateDetailedAsync(PureMiddle, Settings(provider), CancellationToken.None));
+            Assert.AreEqual(2, handler.Inputs.Count);
+        }
+
+        [DataTestMethod]
+        [DataRow(ProviderKind.OpenAiCompatible)]
+        [DataRow(ProviderKind.Ollama)]
+        public async Task Fallback_UnauthorizedMiddleIsNotConvertedToReview(ProviderKind provider)
+        {
+            var source = Sources[0] + "\r" + PureMiddle + "\r" + Sources[2];
+            var handler = new Handler(provider, (input, call) => call <= 2 ? (call == 1 ? "未保留英文缩写。" : BrokenTokens)
+                : input == PureMiddle ? "unauthorized" : ParagraphOutput(input));
+            handler.StatusForInput = input => input == PureMiddle ? HttpStatusCode.Unauthorized : HttpStatusCode.OK;
+            using (var client = new TranslationClient(handler))
+            {
+                var error = await Assert.ThrowsExceptionAsync<InvalidOperationException>(() =>
+                    client.TranslateDetailedAsync(source, Settings(provider), CancellationToken.None));
+                StringAssert.Contains(error.Message, "401");
+            }
+            Assert.AreEqual(4, handler.Inputs.Count); Assert.IsFalse(handler.Inputs.Contains(Sources[2]));
+        }
+
+        [DataTestMethod]
+        [DataRow(ProviderKind.OpenAiCompatible)]
+        [DataRow(ProviderKind.Ollama)]
+        public async Task Fallback_NetworkFailureMiddlePropagatesAfterExistingRetries(ProviderKind provider)
+        {
+            var failure = new HttpRequestException("synthetic network failure");
+            var handler = new Handler(provider, (input, call) => call <= 2 ? (call == 1 ? "未保留英文缩写。" : BrokenTokens)
+                : input == PureMiddle ? throw failure : ParagraphOutput(input));
+            using (var client = new TranslationClient(handler))
+                Assert.AreSame(failure, await Assert.ThrowsExceptionAsync<HttpRequestException>(() =>
+                    client.TranslateDetailedAsync(Sources[0] + "\r" + PureMiddle + "\r" + Sources[2], Settings(provider), CancellationToken.None)));
+            Assert.AreEqual(6, handler.Inputs.Count); Assert.IsFalse(handler.Inputs.Contains(Sources[2]));
+        }
+
+        [DataTestMethod]
+        [DataRow(ProviderKind.OpenAiCompatible)]
+        [DataRow(ProviderKind.Ollama)]
+        public async Task Fallback_CancelDuringEmptyRetryDoesNotContinue(ProviderKind provider)
+        {
+            using (var cancellation = new CancellationTokenSource())
+            {
+                var handler = new Handler(provider, (input, call) => {
+                    if (call <= 2) return call == 1 ? "未保留英文缩写。" : BrokenTokens;
+                    if (input == PureMiddle) { if (call == 5) cancellation.Cancel(); return ""; }
+                    return ParagraphOutput(input);
+                });
+                using (var client = new TranslationClient(handler))
+                    await Assert.ThrowsExceptionAsync<OperationCanceledException>(() => client.TranslateDetailedAsync(
+                        Sources[0] + "\r" + PureMiddle + "\r" + Sources[2], Settings(provider), cancellation.Token));
+                Assert.AreEqual(5, handler.Inputs.Count); Assert.IsFalse(handler.Inputs.Contains(Sources[2]));
             }
         }
     }

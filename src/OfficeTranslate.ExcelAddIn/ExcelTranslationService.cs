@@ -18,9 +18,11 @@ namespace OfficeTranslate.ExcelAddIn
     {
         private readonly Excel.Application _excel;
         public ExcelTranslationService(Excel.Application excel) => _excel = excel;
+        public TranslationTaskSummary? Summary { get; private set; }
 
         public async Task<TranslationTaskSummary> TranslateAsync(bool wholeSheet, TranslationSettings settings, CancellationToken token, Action<string> progress, OfficeUiDispatcher ui)
         {
+            Summary = null;
             // Menu acceptance must prove which DLL served the request: record
             // this add-in's assembly version so the reviewer can verify it in
             // the diagnostics log instead of inferring from registry keys.
@@ -40,14 +42,13 @@ namespace OfficeTranslate.ExcelAddIn
             using (var client = new TranslationClient())
             {
                 var total = targets.Count + images.Count;
-                var summary = new TranslationTaskSummary(total);
+                var summary = Summary = new TranslationTaskSummary(total);
                 ui.LogProbe("text_loop_before");
                 for (var i = 0; i < targets.Count; i++)
                 {
                     token.ThrowIfCancellationRequested();
                     progress($"OfficeTranslate：正在翻译 {i + 1}/{total}");
                     var result = await client.TranslateDetailedAsync(targets[i].Text, settings, token);
-                    summary.Record(result);
                     token.ThrowIfCancellationRequested();
                     if (result.Changed)
                     {
@@ -65,6 +66,7 @@ namespace OfficeTranslate.ExcelAddIn
                             targets[i].Write(settings.BilingualMode ? targets[i].Text + Environment.NewLine + translated : translated, settings.BilingualMode);
                         });
                     }
+                    summary.Record(result);
                     progress($"OfficeTranslate：已完成 {i + 1}/{total}");
                 }
                 ui.LogProbe("text_loop_after");
@@ -176,9 +178,8 @@ namespace OfficeTranslate.ExcelAddIn
 
             var hasPixels = PngDimensions.TryRead(imageBytes, out var pixelWidth, out var pixelHeight);
             var recognition = await client.TranslateImageAsync(imageBytes, settings, token, "Excel", preNetwork.CaptureSource, preNetwork.CaptureReason);
-            summary.RecordImageRecognition(recognition);
             var regions = recognition.Regions;
-            if (regions.Count == 0) return;
+            if (regions.Count == 0) { summary.RecordImageRecognition(recognition); return; }
 
             // M2: every shape access below runs on the Office UI (STA) thread.
             // The sheet is resolved here (not earlier) so the "no sheet"
@@ -236,32 +237,32 @@ namespace OfficeTranslate.ExcelAddIn
                         noteEntries.Add(plan.Reason + "\r" + overlayText);
                         continue;
                     }
-                    Excel.Shape? overlay = null;
-                    try
+                    var created = ImageOverlayWriteback.TryCreate(
+                        () => sheet.Shapes.AddTextbox(Office.MsoTextOrientation.msoTextOrientationHorizontal,
+                            imageLeft + plan.Left, imageTop + plan.Top, plan.Width, plan.Height),
+                        (Excel.Shape newOverlay) =>
                     {
                         // Exact region rect with an opaque cover: in non-bilingual
                         // mode the source text must not show through (the old 8%
                         // transparency did), and the box no longer grows downward.
-                        overlay = sheet.Shapes.AddTextbox(Office.MsoTextOrientation.msoTextOrientationHorizontal,
-                            imageLeft + plan.Left, imageTop + plan.Top, plan.Width, plan.Height);
-                        overlay.AlternativeText = ImageOverlayTags.OverlayFor(ownerId);
+                        newOverlay.AlternativeText = ImageOverlayTags.OverlayFor(ownerId);
                         // D2: the host must never resize the cover by itself. Some
                         // builds default a new textbox to auto-size-to-fit-text,
                         // which would let the box grow beyond the validated region
                         // and make the fit check measure the grown box. The box
                         // keeps the planner's fixed geometry; only the font adapts.
-                        overlay.TextFrame2.AutoSize = Office.MsoAutoSize.msoAutoSizeNone;
-                        overlay.Fill.Visible = Office.MsoTriState.msoTrue; overlay.Fill.ForeColor.RGB = 0xFFFFFF; overlay.Fill.Transparency = 0F;
-                        overlay.Line.Visible = Office.MsoTriState.msoFalse;
-                        overlay.TextFrame2.MarginLeft = 2; overlay.TextFrame2.MarginRight = 2; overlay.TextFrame2.MarginTop = 1; overlay.TextFrame2.MarginBottom = 1;
-                        overlay.TextFrame2.WordWrap = Office.MsoTriState.msoTrue;
-                        overlay.TextFrame2.TextRange.Text = overlayText;
-                        overlay.TextFrame2.TextRange.Font.Size = plan.FontSize;
-                    }
-                    catch (COMException ex)
+                        newOverlay.TextFrame2.AutoSize = Office.MsoAutoSize.msoAutoSizeNone;
+                        newOverlay.Fill.Visible = Office.MsoTriState.msoTrue; newOverlay.Fill.ForeColor.RGB = 0xFFFFFF; newOverlay.Fill.Transparency = 0F;
+                        newOverlay.Line.Visible = Office.MsoTriState.msoFalse;
+                        newOverlay.TextFrame2.MarginLeft = 2; newOverlay.TextFrame2.MarginRight = 2; newOverlay.TextFrame2.MarginTop = 1; newOverlay.TextFrame2.MarginBottom = 1;
+                        newOverlay.TextFrame2.WordWrap = Office.MsoTriState.msoTrue;
+                        newOverlay.TextFrame2.TextRange.Text = overlayText;
+                        newOverlay.TextFrame2.TextRange.Font.Size = plan.FontSize;
+                    }, overlay => overlay.Delete(), out var overlay, out var createFailure);
+                    if (!created)
                     {
-                        try { overlay?.Delete(); } catch { }
-                        throw new InvalidOperationException("Excel 已完成图片识别，但创建译文覆盖框失败：" + ex.Message, ex);
+                        noteEntries.Add(createFailure + "\r" + overlayText);
+                        continue;
                     }
                     // W1: Excel's TextFrame has no Overflowing property; the Office
                     // TextRange2.BoundHeight reports the real laid-out text height.
@@ -299,6 +300,7 @@ namespace OfficeTranslate.ExcelAddIn
                         (chunk, error) => summary.RecordImageNoteFailure(ownerId, chunk.Text, error.Message));
                 }
             });
+            summary.RecordImageRecognition(recognition);
         }
 
         private float PlaceCombinedNote(Excel.Worksheet sheet, string ownerId, string noteText, float noteLeft, float noteTop, float imageWidth)

@@ -18,5 +18,13 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\OfficeTranslate.Core\OfficeTranslate.Core.csproj" />
+    <!-- Build real host DLLs for presentation-boundary tests without importing
+         Office COM types into the tests' compile-time references. -->
+    <ProjectReference Include="..\..\src\OfficeTranslate.WordAddIn\OfficeTranslate.WordAddIn.csproj" ReferenceOutputAssembly="false" />
+    <ProjectReference Include="..\..\src\OfficeTranslate.ExcelAddIn\OfficeTranslate.ExcelAddIn.csproj" ReferenceOutputAssembly="false" />
+    <ProjectReference Include="..\..\src\OfficeTranslate.PowerPointAddIn\OfficeTranslate.PowerPointAddIn.csproj" ReferenceOutputAssembly="false" />
+    <Compile Include="..\..\src\OfficeTranslate.WordAddIn\TranslationResultForm.cs" Link="Shared\TranslationResultForm.cs" />
+    <Compile Include="..\..\src\OfficeTranslate.WordAddIn\TranslationErrorDialog.cs" Link="Shared\TranslationErrorDialog.cs" />
+    <Compile Include="..\..\src\OfficeTranslate.WordAddIn\UiText.cs" Link="Shared\UiText.cs" />
   </ItemGroup>
 </Project>

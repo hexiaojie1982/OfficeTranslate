@@ -17,9 +17,11 @@ namespace OfficeTranslate.WordAddIn
     {
         private readonly WordApplication _word;
         public WordTranslationService(WordApplication word) => _word = word;
+        public TranslationTaskSummary? Summary { get; private set; }
 
         public async Task<TranslationTaskSummary> TranslateAsync(bool wholeDocument, bool bilingual, TranslationSettings settings, CancellationToken token, Action<string> progress, OfficeUiDispatcher ui)
         {
+            Summary = null;
             // Menu acceptance must prove which DLL served the request: record
             // this add-in's assembly version so the reviewer can verify it in
             // the diagnostics log instead of inferring from registry keys.
@@ -86,7 +88,7 @@ namespace OfficeTranslate.WordAddIn
             using (var client = new TranslationClient())
             {
                 var total = targets.Count + images.Count;
-                var summary = new TranslationTaskSummary(total);
+                var summary = Summary = new TranslationTaskSummary(total);
                 // Word represents a selected inline picture with a non-printing object
                 // character. Image-only selections are filtered below, and images are
                 // handled before ordinary text so OCR is always the first real request.
@@ -140,11 +142,11 @@ namespace OfficeTranslate.WordAddIn
                         continue;
                     }
                     var result = await client.TranslateDetailedAsync(sourceText, settings, token);
-                    summary.Record(result);
                     token.ThrowIfCancellationRequested();
 
                     if (!result.Changed)
                     {
+                        summary.Record(result);
                         progress($"OfficeTranslate：已完成 {current}/{total}");
                         continue;
                     }
@@ -179,6 +181,7 @@ namespace OfficeTranslate.WordAddIn
                         }
                         finally { undo.EndCustomRecord(); }
                     });
+                    summary.Record(result);
                     progress($"OfficeTranslate：已完成 {current}/{total}");
                 }
                 ui.LogProbe("text_loop_after");
@@ -328,9 +331,8 @@ namespace OfficeTranslate.WordAddIn
             var inlineResolution = resolved.Item2;
             var hasPixels = PngDimensions.TryRead(bytes, out var pixelWidth, out var pixelHeight);
             var recognition = await client.TranslateImageAsync(bytes, settings, token, "Word", image.CaptureSource, image.CaptureReason);
-            summary.RecordImageRecognition(recognition);
             var regions = recognition.Regions;
-            if (regions.Count == 0) return;
+            if (regions.Count == 0) { summary.RecordImageRecognition(recognition); return; }
 
             // R4: a floating picture positioned by alignment (center/right/...)
             // reports a WdShapePosition sentinel (e.g. -999995) as Left/Top,
@@ -445,6 +447,9 @@ namespace OfficeTranslate.WordAddIn
                         (chunk, error) => summary.RecordImageNoteFailure(ownerId, chunk.Text, error.Message));
                 }
             });
+            // A queued write may be cancelled. Do not label that image as
+            // translated merely because its network request succeeded.
+            summary.RecordImageRecognition(recognition);
         }
 
         // Word reports WdShapePosition alignment constants (wdShapeCenter =

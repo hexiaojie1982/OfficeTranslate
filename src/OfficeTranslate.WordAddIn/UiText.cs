@@ -25,6 +25,9 @@ namespace OfficeTranslate.WordAddIn
             ["CancelTranslation"] = new[] { "取消翻译", "取消翻譯", "번역 취소", "翻訳をキャンセル", "Cancel translation" },
             ["CancellingTranslation"] = new[] { "正在取消，已完成的内容将保留…", "正在取消，已完成的內容將保留…", "취소하는 중입니다. 완료된 내용은 유지됩니다…", "キャンセルしています。完了した内容は保持されます…", "Cancelling… Completed content will be kept." },
             ["SummaryTitle"] = new[] { "翻译摘要", "翻譯摘要", "번역 요약", "翻訳概要", "Translation summary" },
+            ["SummaryCancelled"] = new[] { "翻译已取消：有旁注待保存", "翻譯已取消：有旁註待儲存", "번역 취소: 저장할 주석이 있습니다", "翻訳をキャンセル：注記の保存が必要です", "Translation cancelled: notes to save" },
+            ["SummaryFailed"] = new[] { "翻译已中止：有旁注待保存", "翻譯已中止：有旁註待儲存", "번역 중단: 저장할 주석이 있습니다", "翻訳を中断：注記の保存が必要です", "Translation stopped: notes to save" },
+            ["SummaryInterruptedHint"] = new[] { "任务未全部完成。已写回的内容保留；未放置旁注全文如下，可复制保存，窗口不会自动关闭。", "工作未全部完成。已寫回內容保留；未放置旁註全文如下，可複製儲存，視窗不會自動關閉。", "작업이 완료되지 않았습니다. 기록된 내용은 유지됩니다. 아래 미배치 주석 전문을 복사해 저장하세요. 창은 자동으로 닫히지 않습니다.", "処理は未完了です。書き込み済みの内容は保持されます。以下の未配置注記をコピーして保存してください。自動では閉じません。", "The task did not finish. Written content remains. Copy and save the full unplaced notes below; this window will not close automatically." },
             ["OcrRegionDetails"] = new[] {
                 "图片 OCR：{0} 张；模型条目 {1}，保留 {2}，无可用内容丢弃 {3}\r\n坏坐标转旁注 {4}，空译文 {5}；图片待检查 {6} 项（含排版降级，不代表文本严格重试失败）。",
                 "圖片 OCR：{0} 張；模型條目 {1}，保留 {2}，無可用內容捨棄 {3}\r\n壞座標轉旁註 {4}，空譯文 {5}；圖片待檢查 {6} 項（含排版降級，並非文字重試失敗）。",

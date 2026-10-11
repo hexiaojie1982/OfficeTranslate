@@ -14,7 +14,7 @@ namespace OfficeTranslate.WordAddIn
         private readonly bool _hasUnplacedNotes;
         private int _remainingSeconds = 5;
 
-        private TranslationResultForm(string uiLanguage, TranslationTaskSummary summary)
+        internal TranslationResultForm(string uiLanguage, TranslationTaskSummary summary, TranslationTaskFailure? failure = null)
         {
             _uiLanguage = uiLanguage;
             _hasUnplacedNotes = summary.UnplacedImageNotes.Count > 0;
@@ -53,7 +53,7 @@ namespace OfficeTranslate.WordAddIn
             };
             var heading = new Label
             {
-                Text = _hasUnplacedNotes
+                Text = failure != null ? UiText.Get(uiLanguage, failure.HeadingKey) : _hasUnplacedNotes
                     ? string.Format(UiText.Get(uiLanguage, "SummaryUnplaced"), summary.UnplacedImageNotes.Count)
                     : string.Format(UiText.Get(uiLanguage, "SummaryCompleted"), summary.Total),
                 AutoSize = true,
@@ -91,6 +91,10 @@ namespace OfficeTranslate.WordAddIn
             if (_hasUnplacedNotes)
                 details.Text += "\r\n\r\n" + UiText.Get(uiLanguage, "UnplacedNoteDetails") + "\r\n\r\n"
                     + string.Join("\r\n\r\n", summary.UnplacedImageNotes);
+            if (failure != null)
+                details.Text = UiText.Get(uiLanguage, "SummaryInterruptedHint")
+                    + (failure.IsUserCancellation ? string.Empty : "\r\n" + failure.Error.Message)
+                    + "\r\n\r\n" + details.Text;
             details.Text = details.Text.Replace("\r\n", "\n").Replace('\r', '\n').Replace("\n", "\r\n");
             root.SetColumnSpan(details, 2);
             root.Controls.Add(details, 0, 1);
@@ -126,9 +130,9 @@ namespace OfficeTranslate.WordAddIn
             };
         }
 
-        public static void ShowResult(string uiLanguage, TranslationTaskSummary summary, IntPtr ownerHandle)
+        public static void ShowResult(string uiLanguage, TranslationTaskSummary summary, IntPtr ownerHandle, TranslationTaskFailure? failure = null)
         {
-            var form = new TranslationResultForm(uiLanguage, summary);
+            var form = new TranslationResultForm(uiLanguage, summary, failure);
             if (GetWindowRect(ownerHandle, out var rect))
                 form.Location = new Point(rect.Left + Math.Max(0, (rect.Right - rect.Left - form.Width) / 2),
                     rect.Top + Math.Max(0, (rect.Bottom - rect.Top - form.Height) / 2));
