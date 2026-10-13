@@ -159,11 +159,22 @@ namespace OfficeTranslate.Tests
         }
 
         [TestMethod]
-        public void Plan_TextTooLong_GoesToSideNote()
+        public void Plan_PreviousSixPointFailure_NowPlacesBelowSixPoints()
         {
-            // A wall of text can never fit the small region: no fake overlay.
             var plan = ImageOverlayPlanner.Plan(100F, 200F, 300F, 260F,
                 1000, 800, 500F, 400F, new string('中', 2000), 0F);
+
+            Assert.AreEqual(ImageOverlayVerdict.Place, plan.Verdict);
+            Assert.IsTrue(plan.FontSize >= 1 && plan.FontSize < 6);
+            Assert.IsTrue(plan.WidthGrowthFactor <= 5 && plan.HeightGrowthFactor <= 5);
+        }
+
+        [TestMethod]
+        public void Plan_TextTooLongEvenAtOnePoint_GoesToSideNote()
+        {
+            // More than the capped rectangle can hold even at 1pt.
+            var plan = ImageOverlayPlanner.Plan(100F, 200F, 300F, 260F,
+                1000, 800, 500F, 400F, new string('中', 60000), 0F);
 
             Assert.AreEqual(ImageOverlayVerdict.SideNote, plan.Verdict);
             Assert.IsTrue(plan.Reason.Contains("放不下"));

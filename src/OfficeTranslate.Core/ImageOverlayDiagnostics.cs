@@ -42,6 +42,7 @@ namespace OfficeTranslate.Core
         public string Reason = string.Empty;
         public int TextLength;
         public string OwnerId = string.Empty;
+        public string Stage = "plan";
     }
 
     public static class ImageOverlayDiagnostics
@@ -116,6 +117,16 @@ namespace OfficeTranslate.Core
             AppendLine(line);
         }
 
+        // Host paragraph metrics can keep a frame overflowing even at 1pt.
+        // Only numeric layout properties are recorded, never range content.
+        public static void LogWordLayoutFailure(float fontSize, int lineRule, float linePoints, int grid) =>
+            AppendLine(FormatWordLayoutFailure(fontSize, lineRule, linePoints, grid));
+
+        internal static string FormatWordLayoutFailure(float fontSize, int lineRule, float linePoints, int grid) =>
+            string.Format(CultureInfo.InvariantCulture,
+                "{0:O} host=Word event=overlay_layout_failure font={1} line_rule={2} line_pt={3} disable_line_height_grid={4}",
+                DateTime.UtcNow, F(fontSize), lineRule, F(linePoints), grid);
+
         // S2/D1: capture failures must reach the diagnostics log file, not
         // just the popup. detail carries the phase/NoImage result, attempt,
         // thread, HResult (when there is one), clipboard sequence numbers,
@@ -186,7 +197,7 @@ namespace OfficeTranslate.Core
         {
             var culture = CultureInfo.InvariantCulture;
             return string.Format(culture,
-                "{0:O} host={1} kind={2} png={3}x{4} bbox=[{5},{6},{7},{8}] shape=[{9},{10},{11},{12}]pt frame={13} rot={14} flipH={15} flipV={16} out=[{17},{18},{19},{20}] font={21} textLen={22} verdict={23} reason={24} owner={25} grow={26}",
+                "{0:O} host={1} kind={2} png={3}x{4} bbox=[{5},{6},{7},{8}] shape=[{9},{10},{11},{12}]pt frame={13} rot={14} flipH={15} flipV={16} out=[{17},{18},{19},{20}] font={21} textLen={22} verdict={23} reason={24} owner={25} grow={26} stage={27} min_font={28}",
                 DateTime.UtcNow, e.Host, e.ImageKind, e.PixelWidth, e.PixelHeight,
                 F(e.BboxX1), F(e.BboxY1), F(e.BboxX2), F(e.BboxY2),
                 F(e.ShapeLeft), F(e.ShapeTop), F(e.ShapeWidth), F(e.ShapeHeight), e.FrameNote,
@@ -194,7 +205,8 @@ namespace OfficeTranslate.Core
                 F(e.OutLeft), F(e.OutTop), F(e.OutWidth), F(e.OutHeight),
                 F(e.FontSize), e.TextLength, e.Verdict, e.Reason ?? string.Empty, e.OwnerId ?? string.Empty,
                 e.Verdict == ImageOverlayVerdict.SideNote.ToString() ? "0.0"
-                    : e.WidthGrowthFactor.ToString("0.0", culture) + "x" + e.HeightGrowthFactor.ToString("0.0", culture));
+                    : e.WidthGrowthFactor.ToString("0.0", culture) + "x" + e.HeightGrowthFactor.ToString("0.0", culture),
+                e.Stage == "writeback" ? "writeback" : "plan", F(ImageOverlayLayout.MinFontSize));
         }
 
         private static string F(float value)

@@ -72,7 +72,7 @@ namespace OfficeTranslate.PowerPointAddIn
         public void ImageOcrModeChanged(Microsoft.Office.Core.IRibbonControl c, bool pressed) { _settings.ImageOcrEnabled = pressed; }
         public async void TranslateSelection(Microsoft.Office.Core.IRibbonControl c) => await RunAsync(false);
         public async void TranslateDocument(Microsoft.Office.Core.IRibbonControl c) => await RunAsync(true);
-        public void OpenSettings(Microsoft.Office.Core.IRibbonControl c) { using (var form = new SettingsForm(_store)) if (form.ShowDialog() == DialogResult.OK) { ReloadPersistentSettings(); _ribbon?.Invalidate(); } }
+        public void OpenSettings(Microsoft.Office.Core.IRibbonControl c) { using (var form = new SettingsForm(_store)) if (form.ShowFor(ResolveErrorDialogOwner(IntPtr.Zero)) == DialogResult.OK) { ReloadPersistentSettings(); _ribbon?.Invalidate(); } }
         private async Task RunAsync(bool whole)
         {
             if (_host == null || _cancellation != null) return; _cancellation = new CancellationTokenSource();
