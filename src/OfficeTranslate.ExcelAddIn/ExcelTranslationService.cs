@@ -15,7 +15,7 @@ using System.Windows.Forms;
 
 namespace OfficeTranslate.ExcelAddIn
 {
-    internal sealed class ExcelTranslationService
+    internal sealed partial class ExcelTranslationService
     {
         private readonly Excel.Application _excel;
         public ExcelTranslationService(Excel.Application excel) => _excel = excel;

@@ -268,6 +268,7 @@ namespace OfficeTranslate.WordAddIn
                 else if (id.EndsWith("Selection", StringComparison.Ordinal)) DrawSelection(g);
                 else if (id.EndsWith("Document", StringComparison.Ordinal)) DrawDocument(g);
                 else if (id.EndsWith("Bilingual", StringComparison.Ordinal)) DrawBilingual(g);
+                else if (id.EndsWith("RecognizeImage", StringComparison.Ordinal)) DrawRecognizeImage(g);
                 else if (id.EndsWith("ImageOcr", StringComparison.Ordinal)) DrawImageOcr(g);
                 else if (id.EndsWith("Cancel", StringComparison.Ordinal)) DrawCancel(g);
                 else if (id.EndsWith("Settings", StringComparison.Ordinal)) DrawSettings(g);
@@ -340,6 +341,24 @@ namespace OfficeTranslate.WordAddIn
                 g.DrawLine(pen, 8, 13, 17, 13);
                 g.DrawLine(bluePen, 8, 20, 24, 20);
                 g.DrawLine(bluePen, 8, 24, 21, 24);
+            }
+        }
+
+        private static void DrawRecognizeImage(Graphics g)
+        {
+            using (var pen = new Pen(Dark, 1.8F))
+            using (var accent = new Pen(Blue, 2F) { StartCap = LineCap.Round, EndCap = LineCap.Round })
+            using (var paper = new SolidBrush(Color.White))
+            {
+                g.DrawRectangle(pen, 4, 3, 18, 25);
+                g.DrawLine(accent, 8, 9, 18, 9);
+                g.DrawLine(accent, 8, 14, 16, 14);
+                g.DrawLine(accent, 8, 19, 12, 19);
+                g.FillEllipse(paper, 14, 16, 12, 12);
+                g.DrawEllipse(accent, 14, 16, 12, 12);
+                g.DrawLine(accent, 24.5F, 26.5F, 29, 31);
+                g.DrawLine(pen, 17, 20, 23, 20);
+                g.DrawLine(pen, 17, 24, 21, 24);
             }
         }
 

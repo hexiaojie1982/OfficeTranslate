@@ -73,6 +73,62 @@ namespace OfficeTranslate.PowerPointAddIn
         public async void TranslateSelection(Microsoft.Office.Core.IRibbonControl c) => await RunAsync(false);
         public async void TranslateDocument(Microsoft.Office.Core.IRibbonControl c) => await RunAsync(true);
         public void OpenSettings(Microsoft.Office.Core.IRibbonControl c) { using (var form = new SettingsForm(_store)) if (form.ShowFor(ResolveErrorDialogOwner(IntPtr.Zero)) == DialogResult.OK) { ReloadPersistentSettings(); _ribbon?.Invalidate(); } }
+        public async void RecognizeImage(Microsoft.Office.Core.IRibbonControl c) => await RunOcrAsync();
+
+        private async Task RunOcrAsync()
+        {
+            if (_host == null || _cancellation != null) return; _cancellation = new CancellationTokenSource();
+            var ui = OfficeUiDispatcher.Capture(
+#if EXCEL
+                "Excel"
+#else
+                "PowerPoint"
+#endif
+                );
+            var hostWindow = GetHostWindow();
+            HostService? service = null;
+            try
+            {
+                var settings = LoadForTranslation();
+                service = new HostService(_host);
+                if (!service.HasSelectedOcrImage())
+                {
+                    MessageBox.Show(new HostWindow(hostWindow), "请先选中一张图片", "OCR 识别");
+                    return;
+                }
+                _progressForm = new TranslationProgressForm(settings.UiLanguage, () => _cancellation?.Cancel());
+                _progressForm.ConfigureForRecognition();
+                _progressForm.ShowFor(hostWindow);
+                SetStatus("OfficeTranslate：正在准备 OCR 识别…");
+                var summary = await service.RecognizeSelectionAsync(settings, _cancellation.Token, SetStatus, ui);
+                ui.Invoke(() =>
+                {
+                    _progressForm.CloseSafely();
+                    OcrResultForm.ShowResult(summary, ResolveErrorDialogOwner(hostWindow));
+                });
+                _progressForm = null;
+            }
+            catch (OperationCanceledException ex) when (TranslationFailurePolicy.IsUserCancellation(ex, _cancellation.Token))
+            {
+                ui.Invoke(() =>
+                {
+                    CloseProgress();
+                    var window = ResolveErrorDialogOwner(hostWindow);
+                    OcrResultForm.ShowResult(service?.Summary, window, ex);
+                });
+            }
+            catch (Exception ex)
+            {
+                CloseProgress();
+                ui.Invoke(() =>
+                {
+                    var window = ResolveErrorDialogOwner(hostWindow);
+                    OcrResultForm.ShowResult(service?.Summary, window, ex);
+                });
+            }
+            finally { CloseProgress(); _cancellation.Dispose(); _cancellation = null; }
+        }
+
         private async Task RunAsync(bool whole)
         {
             if (_host == null || _cancellation != null) return; _cancellation = new CancellationTokenSource();

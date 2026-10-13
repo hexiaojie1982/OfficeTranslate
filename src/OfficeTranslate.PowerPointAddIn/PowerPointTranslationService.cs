@@ -11,7 +11,7 @@ using System.Threading.Tasks;
 
 namespace OfficeTranslate.PowerPointAddIn
 {
-    internal sealed class PowerPointTranslationService
+    internal sealed partial class PowerPointTranslationService
     {
         private readonly PowerPoint.Application _powerPoint;
         public PowerPointTranslationService(PowerPoint.Application powerPoint) => _powerPoint = powerPoint;

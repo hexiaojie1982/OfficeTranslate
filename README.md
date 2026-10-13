@@ -1,7 +1,8 @@
 # OfficeTranslate for Microsoft Office（原生 COM 加载项）
 
-当前候选版本：**2.1.38.0**。Excel 文本翻译默认最多 4 项并发，每项完成后通过 UI 线程独立写回。
-保持双语/单语、重试校验和图片 OCR 路径，验证见 [2.1.38 验证记录](tests/VALIDATION-2.1.38-EXCEL-PARALLEL.md)。
+当前版本：**2.2.0.0**。Word / Excel / PowerPoint 新增「OCR」识别按钮：仅处理选中图片，检测文字区域并转录原文，不执行翻译。
+识别结果复用现有不透明覆盖框、固定几何和旁注降级；与图片翻译分别标记和清理。无需打开「图片」翻译开关，双语、源/目标语言、术语表和翻译风格不影响纯 OCR。
+未选中图片时提示「请先选中一张图片」；选中整页幻灯片不会触发扫描。验证见 [2.2.0 验证记录](tests/VALIDATION-2.2.0-OCR.md)。
 
 Excel 文本并发度可在 `%LOCALAPPDATA%\OfficeTranslate\settings.json` 设置 `"MaxParallelCells": 4`（整数 1–32，旧配置缺省为 4；1 为串行）。任务开始前修改，下一次加载配置生效；设置窗口保存会保留该值。此配置也适用于 Excel 图形文本，Word、PowerPoint 和图片 OCR 不使用此并发度。进度表示已处理的文本目标数，取消/失败时等待在途任务收尾后报告已写回结果。
 

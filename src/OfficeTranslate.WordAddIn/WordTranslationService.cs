@@ -13,7 +13,7 @@ using WordApplication = Microsoft.Office.Interop.Word.Application;
 
 namespace OfficeTranslate.WordAddIn
 {
-    internal sealed class WordTranslationService
+    internal sealed partial class WordTranslationService
     {
         private readonly WordApplication _word;
         public WordTranslationService(WordApplication word) => _word = word;

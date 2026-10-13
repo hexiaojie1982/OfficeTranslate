@@ -39,6 +39,13 @@ namespace OfficeTranslate.WordAddIn
             root.Controls.Add(_status, 0, 0); root.Controls.Add(_progress, 0, 1); root.Controls.Add(_cancel, 0, 2); Controls.Add(root);
         }
 
+        public void ConfigureForRecognition()
+        {
+            Text = "OCR 识别";
+            _status.Text = "正在准备 OCR 识别…";
+            _cancel.Text = UiText.Get(_uiLanguage, "Cancel");
+        }
+
         public void ShowFor(IntPtr ownerHandle)
         {
             if (GetWindowRect(ownerHandle, out var rect))
