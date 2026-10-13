@@ -20,6 +20,11 @@ namespace OfficeTranslate.Core
         private readonly TimeSpan _imageRequestTimeout;
         internal const int ImageRequestTimeoutSeconds = 600;
         public TranslationClient() : this(new HttpClient(), new HttpClient(), TimeSpan.FromSeconds(ImageRequestTimeoutSeconds)) { }
+        // Excel's text lane has an explicit per-server limit so .NET Framework's
+        // default connection limit cannot silently serialize the bounded batch.
+        internal static TranslationClient CreateForParallelCells(int maxParallelCells) =>
+            new TranslationClient(new HttpClient(new HttpClientHandler { MaxConnectionsPerServer = maxParallelCells }),
+                  new HttpClient(), TimeSpan.FromSeconds(ImageRequestTimeoutSeconds));
         // A shared fake handler is owned exactly once (by the image client).
         internal TranslationClient(HttpMessageHandler handler, TimeSpan? imageRequestTimeout = null)
             : this(new HttpClient(handler, false), new HttpClient(handler), imageRequestTimeout ?? TimeSpan.FromSeconds(ImageRequestTimeoutSeconds)) { }
@@ -43,6 +48,17 @@ namespace OfficeTranslate.Core
         private static readonly ConcurrentDictionary<string, bool> PromptCacheKeySupport =
             new ConcurrentDictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
         private bool _configured;
+        private readonly object _configureLock = new object();
+
+        private object DeserializeJson(string raw)
+        {
+            lock (_json) return _json.DeserializeObject(raw);
+        }
+
+        private string SerializeJson(object value)
+        {
+            lock (_json) return _json.Serialize(value);
+        }
 
         public async Task<string> TranslateAsync(string text, TranslationSettings settings, CancellationToken cancellationToken)
         {
@@ -103,7 +119,7 @@ namespace OfficeTranslate.Core
                 {
                     var raw = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
                     if (!response.IsSuccessStatusCode) throw new InvalidOperationException($"获取模型列表失败 {(int)response.StatusCode}: {raw}");
-                    var root = _json.DeserializeObject(raw) as Dictionary<string, object>;
+                    var root = DeserializeJson(raw) as Dictionary<string, object>;
                     var arrayKey = settings.Provider == ProviderKind.Ollama ? "models" : "data";
                     var nameKey = settings.Provider == ProviderKind.Ollama ? "name" : "id";
                     if (root == null || !root.TryGetValue(arrayKey, out var value) || !(value is object[] items)) throw new InvalidOperationException("模型服务返回了无法识别的数据。");
@@ -222,7 +238,7 @@ namespace OfficeTranslate.Core
                         throw new ImageFormatNotSupportedException($"图片识别服务不支持结构化输出参数，已回退为纯提示词模式: {raw}");
                     throw new InvalidOperationException($"图片识别服务返回 {(int)response.StatusCode}: {raw}");
                 }
-                var root = _json.DeserializeObject(raw) as Dictionary<string, object>;
+                var root = DeserializeJson(raw) as Dictionary<string, object>;
                 var imageResponse = settings.Provider == ProviderKind.Ollama ? ReadOllama(root) : ReadOpenAi(root);
                 var finish = ReadImageFinishReason(root, settings.Provider);
                 try
@@ -258,9 +274,12 @@ namespace OfficeTranslate.Core
 
         private void Configure(TranslationSettings settings)
         {
-            if (_configured) return;
-            _http.Timeout = TimeSpan.FromSeconds(settings.TimeoutSeconds);
-            _configured = true;
+            lock (_configureLock)
+            {
+                if (_configured) return;
+                _http.Timeout = TimeSpan.FromSeconds(settings.TimeoutSeconds);
+                _configured = true;
+            }
         }
 
         private async Task<TranslationResult> TranslateChunkAsync(string text, TranslationSettings settings, CancellationToken token)
@@ -401,7 +420,7 @@ namespace OfficeTranslate.Core
                 {
                     var raw = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
                     if (!response.IsSuccessStatusCode) throw new InvalidOperationException($"翻译服务返回 {(int)response.StatusCode}: {raw}");
-                    return ReadOllama(_json.DeserializeObject(raw) as Dictionary<string, object>);
+                    return ReadOllama(DeserializeJson(raw) as Dictionary<string, object>);
                 }
             }
 
@@ -426,7 +445,7 @@ namespace OfficeTranslate.Core
                     if (response.IsSuccessStatusCode)
                     {
                         if (useCacheKey) PromptCacheKeySupport[capabilityKey] = true;
-                        return ReadOpenAi(_json.DeserializeObject(raw) as Dictionary<string, object>);
+                        return ReadOpenAi(DeserializeJson(raw) as Dictionary<string, object>);
                     }
                     if (useCacheKey && IsUnsupportedCacheKey(response.StatusCode, raw))
                     {
@@ -563,7 +582,7 @@ namespace OfficeTranslate.Core
         private HttpRequestMessage CreateRequest(string endpoint, object body, string apiKey)
         {
             var request = new HttpRequestMessage(HttpMethod.Post, endpoint) {
-                Content = new StringContent(_json.Serialize(body), Encoding.UTF8, "application/json")
+                Content = new StringContent(SerializeJson(body), Encoding.UTF8, "application/json")
             };
             if (!string.IsNullOrWhiteSpace(apiKey)) request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
             return request;

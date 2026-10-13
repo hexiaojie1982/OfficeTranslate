@@ -1,7 +1,9 @@
 # OfficeTranslate for Microsoft Office（原生 COM 加载项）
 
-当前候选版本：**2.1.37.0**。Word 图片 OCR 覆盖框使用紧凑段落格式，消除继承段距、行距和文档网格导致的写回溢出。
-保留不透明底色、固定框高、1pt 下限、坐标信任门、每维 5 倍扩展和真实排版检查，验证见 [2.1.37 验证记录](tests/VALIDATION-2.1.37-OCR-WRITEBACK.md)。
+当前候选版本：**2.1.38.0**。Excel 文本翻译默认最多 4 项并发，每项完成后通过 UI 线程独立写回。
+保持双语/单语、重试校验和图片 OCR 路径，验证见 [2.1.38 验证记录](tests/VALIDATION-2.1.38-EXCEL-PARALLEL.md)。
+
+Excel 文本并发度可在 `%LOCALAPPDATA%\OfficeTranslate\settings.json` 设置 `"MaxParallelCells": 4`（整数 1–32，旧配置缺省为 4；1 为串行）。任务开始前修改，下一次加载配置生效；设置窗口保存会保留该值。此配置也适用于 Excel 图形文本，Word、PowerPoint 和图片 OCR 不使用此并发度。进度表示已处理的文本目标数，取消/失败时等待在途任务收尾后报告已写回结果。
 
 面向完全禁止 Office Web Add-in 的 Windows 企业环境。该版本不使用 `manifest.xml`，通过 MSI 注册原生 Word COM 加载项。
 

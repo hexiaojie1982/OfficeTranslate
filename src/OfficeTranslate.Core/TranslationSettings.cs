@@ -32,6 +32,7 @@ namespace OfficeTranslate.Core
         public string Glossary { get; set; } = string.Empty;
         public int MaxCharactersPerChunk { get; set; } = 5000;
         public int TimeoutSeconds { get; set; } = 120;
+        public int MaxParallelCells { get; set; } = 4;
 
         public void Validate()
         {
@@ -39,6 +40,13 @@ namespace OfficeTranslate.Core
             if (string.IsNullOrWhiteSpace(Model)) throw new InvalidOperationException("模型名称不能为空。");
             if (string.IsNullOrWhiteSpace(TargetLanguage)) throw new InvalidOperationException("目标语言不能为空。");
             if (MaxCharactersPerChunk < 500 || MaxCharactersPerChunk > 30000) throw new InvalidOperationException("分块字符数必须在 500–30000 之间。");
+            ValidateParallelCells();
+        }
+
+        internal void ValidateParallelCells()
+        {
+            if (MaxParallelCells < 1 || MaxParallelCells > 32)
+                throw new InvalidOperationException("Excel 文本并发数必须在 1–32 之间。");
         }
 
         public void ValidateEndpoint()
