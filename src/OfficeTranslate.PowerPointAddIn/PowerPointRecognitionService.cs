@@ -21,9 +21,18 @@ namespace OfficeTranslate.PowerPointAddIn
             catch (COMException) { return false; }
         }
 
-        private List<PowerPoint.Shape> ReadSelectedOcrImages() => _powerPoint.ActiveWindow != null &&
-                _powerPoint.ActiveWindow.Selection.Type == PowerPoint.PpSelectionType.ppSelectionShapes
-                    ? ReadSelectionImages() : new List<PowerPoint.Shape>();
+        private List<PowerPoint.Shape> ReadSelectedOcrImages()
+        {
+            var result = new List<PowerPoint.Shape>();
+            if (_powerPoint.ActiveWindow == null) return result;
+            var selection = _powerPoint.ActiveWindow.Selection;
+            if (selection.Type == PowerPoint.PpSelectionType.ppSelectionShapes)
+                foreach (PowerPoint.Shape shape in selection.ShapeRange) AddImageShape(shape, result);
+            else if (selection.Type == PowerPoint.PpSelectionType.ppSelectionSlides)
+                foreach (PowerPoint.Slide slide in selection.SlideRange)
+                    foreach (PowerPoint.Shape shape in slide.Shapes) AddImageShape(shape, result);
+            return result;
+        }
 
         public async Task<TranslationTaskSummary> RecognizeSelectionAsync(TranslationSettings settings,
             CancellationToken token, Action<string> progress, OfficeUiDispatcher ui)
