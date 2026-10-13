@@ -19,9 +19,9 @@ namespace OfficeTranslate.Tests
         [TestMethod]
         public void FitFontSize_LongText_ShrinksInsteadOfGrowing()
         {
-            // 100 CJK chars on a 100x12 region cannot fit even at 6pt:
+            // 1000 CJK chars on a 100x12 region cannot fit even at 1pt:
             // no downward growth is allowed anymore, so this must NOT fit.
-            var metrics = ImageOverlayLayout.FitFontSize(100F, 12F, new string('中', 100));
+            var metrics = ImageOverlayLayout.FitFontSize(100F, 12F, new string('中', 1000));
 
             Assert.IsFalse(metrics.Fits);
         }
@@ -39,12 +39,12 @@ namespace OfficeTranslate.Tests
         [TestMethod]
         public void FitFontSize_InvalidDimensions_FallsBackToSafeDefaults()
         {
-            // Defaults are 24x12: 10pt usable height fits one line at 6pt,
+            // Defaults are 24x12: 10pt usable height fits one line at 1pt,
             // with the largest fitting font approaching 10 / 1.3.
             var metrics = ImageOverlayLayout.FitFontSize(0F, -5F, "x");
 
             Assert.IsTrue(metrics.Fits);
-            Assert.AreEqual(7.685697F, metrics.FontSize, 0.001);
+            Assert.AreEqual(10F / 1.3F, metrics.FontSize, 0.03);
         }
 
         [TestMethod]
@@ -68,14 +68,14 @@ namespace OfficeTranslate.Tests
         }
 
         [TestMethod]
-        public void FitFontSize_SixPointFloor_FitsWhereEightPointWouldOverflow()
+        public void FitFontSize_OnePointFloor_FitsWhereSixPointWouldOverflow()
         {
-            var metrics = ImageOverlayLayout.FitFontSize(10F, 9.8F, "A");
+            var metrics = ImageOverlayLayout.FitFontSize(10F, 3.3F, "A");
 
-            Assert.AreEqual(6F, ImageOverlayLayout.MinFontSize);
+            Assert.AreEqual(1F, ImageOverlayLayout.MinFontSize);
             Assert.IsTrue(metrics.Fits);
-            Assert.AreEqual(6F, metrics.FontSize, 0.001);
-            Assert.IsFalse(ImageOverlayLayout.FitFontSize(10F, 9.79F, "A").Fits);
+            Assert.AreEqual(1F, metrics.FontSize, 0.001);
+            Assert.IsFalse(ImageOverlayLayout.FitFontSize(10F, 3.29F, "A").Fits);
         }
 
         [TestMethod]

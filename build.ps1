@@ -1,4 +1,4 @@
-param([ValidateSet('Debug','Release')][string]$Configuration = 'Release', [switch]$SkipInstaller)
+﻿param([ValidateSet('Debug','Release')][string]$Configuration = 'Release', [switch]$SkipInstaller)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $solution = Join-Path $root 'OfficeTranslate.Word.sln'
@@ -48,19 +48,19 @@ if ($missing.Count -gt 0) {
 $versionFile = Join-Path $root 'VERSION.txt'
 if (-not (Test-Path $versionFile)) { throw "VERSION.txt not found at $versionFile" }
 $productVersion = (Get-Content $versionFile -Raw).Trim()
-if ($productVersion -notmatch '^\d+\.\d+\.\d+$') { throw "VERSION.txt must contain a version like 2.1.22, got: '$productVersion'" }
+if ($productVersion -notmatch '^\d+\.\d+\.\d+\.0$') { throw "VERSION.txt must contain a version like 2.1.36.0, got: '$productVersion'" }
 
 $assemblyInfos = Get-ChildItem (Join-Path $root 'src') -Recurse -Filter AssemblyInfo.cs
 if ($assemblyInfos.Count -eq 0) { throw 'No AssemblyInfo.cs found under src\ - version check cannot run.' }
 foreach ($info in $assemblyInfos) {
     $content = Get-Content $info.FullName -Raw
-    $pattern = '*`[assembly: AssemblyVersion("' + $productVersion + '.0`")]*'
+    $pattern = '*`[assembly: AssemblyVersion("' + $productVersion + '`")]*'
     if ($content -notlike $pattern) {
-        throw "Version mismatch: $($info.FullName) does not declare [assembly: AssemblyVersion(`"$productVersion.0`")]. Update it to match VERSION.txt ($productVersion)."
+        throw "Version mismatch: $($info.FullName) does not declare [assembly: AssemblyVersion(`"$productVersion`")]. Update it to match VERSION.txt ($productVersion)."
     }
-    $filePattern = '*`[assembly: AssemblyFileVersion("' + $productVersion + '.0`")]*'
+    $filePattern = '*`[assembly: AssemblyFileVersion("' + $productVersion + '`")]*'
     if ($content -notlike $filePattern) {
-        throw "Version mismatch: $($info.FullName) does not declare [assembly: AssemblyFileVersion(`"$productVersion.0`")]. Update it to match VERSION.txt ($productVersion)."
+        throw "Version mismatch: $($info.FullName) does not declare [assembly: AssemblyFileVersion(`"$productVersion`")]. Update it to match VERSION.txt ($productVersion)."
     }
 }
 Write-Host "Version check OK: $productVersion (from VERSION.txt)"

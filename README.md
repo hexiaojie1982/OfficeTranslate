@@ -1,5 +1,8 @@
 # OfficeTranslate for Microsoft Office（原生 COM 加载项）
 
+当前候选版本：**2.1.36.0**。设置窗口绑定 Office 宿主；图片 OCR 覆盖译文最低字号为 1pt。
+坐标信任门、每维 5 倍扩展上限和真实排版检查仍可触发旁注，具体边界见 [2.1.36 验证记录](tests/VALIDATION-2.1.36-SETTINGS-OCR.md)。
+
 面向完全禁止 Office Web Add-in 的 Windows 企业环境。该版本不使用 `manifest.xml`，通过 MSI 注册原生 Word COM 加载项。
 
 ## 当前功能

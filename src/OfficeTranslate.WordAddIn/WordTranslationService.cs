@@ -402,7 +402,16 @@ namespace OfficeTranslate.WordAddIn
                     }
                     string frameFailure;
                     if (!PlaceOverlay(image, plan, overlayText, ownerId, out frameFailure))
+                    {
+                        // The planning verdict alone cannot explain a later
+                        // Word layout/frame failure. Log only the fixed local
+                        // reason, geometry and length; never the OCR text.
+                        LogOverlay(image, item.Item1, pixelWidth, pixelHeight,
+                            new PlannedOverlay(ImageOverlayVerdict.SideNote, frameFailure,
+                                plan.Left, plan.Top, plan.Width, plan.Height, plan.FontSize),
+                            overlayText, ownerId, "writeback");
                         noteEntries.Add(frameFailure + "\r" + overlayText);
+                    }
                 }
                 // Collect all degraded regions, then stack owner-tagged chunks.
                 if (noteEntries.Count > 0)
@@ -975,10 +984,9 @@ namespace OfficeTranslate.WordAddIn
             // until the text actually fits; if it still overflows at the
             // floor, the box is deleted and the caller degrades the region
             // to a side-note instead of showing clipped text as success.
-            if (!ShrinkFontToFit(overlay, plan.FontSize))
+            if (!ShrinkFontToFit(overlay, plan.FontSize, out failureReason))
             {
                 try { overlay.Delete(); } catch { }
-                failureReason = "覆盖框内译文按真实排版在最小字号下仍溢出，已降级为旁注。";
                 return false;
             }
             // D2: re-read the geometry and confirm the host did not move or
@@ -1011,14 +1019,15 @@ namespace OfficeTranslate.WordAddIn
 
         // W1: real-layout overflow check. TextFrame.Overflowing reports whether
         // the current text actually fits the fixed box (after Repaginate).
-        // The font shrinks stepwise from the planned size to the shared 6pt floor
+        // The font shrinks stepwise from the planned size to the shared 1pt floor
         // (the planner's minimum); the box geometry is never expanded.
-        private bool ShrinkFontToFit(Shape box, float startSize)
+        private bool ShrinkFontToFit(Shape box, float startSize, out string failureReason)
         {
+            failureReason = "覆盖框内译文按真实排版在最小字号下仍溢出，已降级为旁注。";
             const float floorSize = ImageOverlayLayout.MinFontSize;
             var size = Math.Min(startSize, 18F);
             try { box.TextFrame.TextRange.Font.Size = size; }
-            catch { return false; }
+            catch { failureReason = "无法设置覆盖框字号，已降级为旁注。"; return false; }
             for (var i = 0; i < (int)Math.Ceiling(ImageOverlayLayout.MaxFontSize - floorSize) + 2; i++)
             {
                 bool overflowing;
@@ -1030,12 +1039,19 @@ namespace OfficeTranslate.WordAddIn
                     // assembly, not MsoTriState; read it directly.
                     overflowing = box.TextFrame.Overflowing;
                 }
-                catch { return false; }
+                catch { failureReason = "无法读取覆盖框真实排版，已降级为旁注。"; return false; }
                 if (!overflowing) return true;
-                if (size <= floorSize) return false;
+                if (size <= floorSize)
+                {
+                    ImageOverlayDiagnostics.LogWordLayoutFailure(size,
+                        SafeGet(() => (int)box.TextFrame.TextRange.ParagraphFormat.LineSpacingRule, -1),
+                        SafeGet(() => box.TextFrame.TextRange.ParagraphFormat.LineSpacing, float.NaN),
+                        SafeGet(() => box.TextFrame.TextRange.ParagraphFormat.DisableLineHeightGrid, int.MinValue));
+                    return false;
+                }
                 size = Math.Max(floorSize, size - 1F);
                 try { box.TextFrame.TextRange.Font.Size = size; }
-                catch { return false; }
+                catch { failureReason = "无法设置覆盖框字号，已降级为旁注。"; return false; }
             }
             return false;
         }
@@ -1201,11 +1217,12 @@ namespace OfficeTranslate.WordAddIn
         }
 
         private void LogOverlay(ImageTarget image, ImageTranslationRegion region,
-            int pixelWidth, int pixelHeight, PlannedOverlay plan, string text, string ownerId)
+            int pixelWidth, int pixelHeight, PlannedOverlay plan, string text, string ownerId, string stage = "plan")
         {
             ImageOverlayDiagnostics.Log(new ImageOverlayDiagnosticEntry
             {
                 Host = "Word",
+                Stage = stage,
                 ImageKind = image.Kind,
                 PixelWidth = pixelWidth,
                 PixelHeight = pixelHeight,

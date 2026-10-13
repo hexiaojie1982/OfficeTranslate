@@ -23,42 +23,42 @@ namespace OfficeTranslate.Tests
         [TestMethod]
         public void Plan_SmallTrustedBox_GrowsMinimallyAroundCenter()
         {
-            var plan = ImageOverlayPlanner.Plan(500, 500, 506, 506, 1000, 1000, 1000, 1000, "A", 0);
+            var plan = ImageOverlayPlanner.Plan(500, 500, 503, 503, 1000, 1000, 1000, 1000, "A", 0);
             InBounds(plan, 1000, 1000);
             Assert.IsTrue(plan.WidthGrowthFactor > 1 && plan.HeightGrowthFactor < 5);
-            Assert.AreEqual(503F, plan.Left + plan.Width / 2, 0.001);
-            Assert.AreEqual(503F, plan.Top + plan.Height / 2, 0.001);
-            Assert.AreEqual(plan.Width / 6, plan.WidthGrowthFactor, 0.00001);
-            Assert.AreEqual(plan.Height / 6, plan.HeightGrowthFactor, 0.00001);
+            Assert.AreEqual(501.5F, plan.Left + plan.Width / 2, 0.001);
+            Assert.AreEqual(501.5F, plan.Top + plan.Height / 2, 0.001);
+            Assert.AreEqual(plan.Width / 3, plan.WidthGrowthFactor, 0.00001);
+            Assert.AreEqual(plan.Height / 3, plan.HeightGrowthFactor, 0.00001);
             // Existing MeasureUnits has a one-unit floor even for one ASCII
-            // letter: 4pt margins + 6pt = 10pt minimum width.
-            Assert.AreEqual(10F, plan.Width, 0.0001);
+            // letter: 4pt margins + 1pt = 5pt minimum width.
+            Assert.AreEqual(5F, plan.Width, 0.0001);
             Assert.IsTrue(ImageOverlayLayout.FitFontSize(plan.Width, plan.Height, "A").Fits);
-            // 6pt needs 6*1.3 + 2 = 9.8pt height, not the full 30pt cap.
-            Assert.AreEqual(9.8F, plan.Height, 0.0001);
+            // 1pt needs 1*1.3 + 2 = 3.3pt height, not the full 15pt cap.
+            Assert.AreEqual(3.3F, plan.Height, 0.0001);
             Assert.IsFalse(ImageOverlayLayout.FitFontSize(plan.Width - 0.0001F, plan.Height, "A").Fits);
             Assert.IsFalse(ImageOverlayLayout.FitFontSize(plan.Width, plan.Height - 0.0001F, "A").Fits);
         }
 
         [DataTestMethod]
         [DataRow(0F, 0F)]
-        [DataRow(994F, 0F)]
-        [DataRow(0F, 994F)]
-        [DataRow(994F, 994F)]
+        [DataRow(997F, 0F)]
+        [DataRow(0F, 997F)]
+        [DataRow(997F, 997F)]
         public void Plan_EdgeBox_TranslatesGrownFrameInsideImage(float x, float y)
         {
-            var plan = ImageOverlayPlanner.Plan(x, y, x + 6, y + 6, 1000, 1000, 1000, 1000, "A", 0);
+            var plan = ImageOverlayPlanner.Plan(x, y, x + 3, y + 3, 1000, 1000, 1000, 1000, "A", 0);
             InBounds(plan, 1000, 1000);
-            Assert.IsTrue(plan.Width > 6 && plan.Height > 6);
+            Assert.IsTrue(plan.Width > 3 && plan.Height > 3);
             Assert.AreEqual(x == 0 ? 0 : 1000 - plan.Width, plan.Left, 0.001);
             Assert.AreEqual(y == 0 ? 0 : 1000 - plan.Height, plan.Top, 0.001);
-            Assert.AreEqual(9.8F, plan.Height, 0.0001);
+            Assert.AreEqual(3.3F, plan.Height, 0.0001);
         }
 
         [TestMethod]
         public void Plan_ImageWidthCap_PreservesFitAndPerDimensionLimit()
         {
-            var text = new string('中', 400);
+            var text = new string('中', 15000);
             var plan = ImageOverlayPlanner.Plan(0, 490, 1000, 510, 1000, 1000, 1000, 1000, text, 0);
             InBounds(plan, 1000, 1000);
             Assert.AreEqual(0F, plan.Left); Assert.AreEqual(1000F, plan.Width);
@@ -71,7 +71,7 @@ namespace OfficeTranslate.Tests
         [TestMethod]
         public void Plan_FiveTimesStillTooSmall_UsesExistingSideNoteChannel()
         {
-            var plan = ImageOverlayPlanner.Plan(500, 500, 506, 506, 1000, 1000, 1000, 1000, new string('中', 20), 0);
+            var plan = ImageOverlayPlanner.Plan(500, 500, 503, 503, 1000, 1000, 1000, 1000, new string('中', 1000), 0);
             Assert.AreEqual(ImageOverlayVerdict.SideNote, plan.Verdict);
             StringAssert.Contains(plan.Reason, "放不下"); Assert.AreEqual(0F, plan.GrowthFactor);
             Assert.AreEqual(0F, plan.Width); Assert.AreEqual(0F, plan.Height);
@@ -146,12 +146,12 @@ namespace OfficeTranslate.Tests
             try
             {
                 Thread.CurrentThread.CurrentCulture = CultureInfo.GetCultureInfo("fr-FR");
-                var plan = ImageOverlayPlanner.Plan(500, 500, 506, 506, 1000, 1000, 1000, 1000, "A", 0);
+                var plan = ImageOverlayPlanner.Plan(500, 500, 503, 503, 1000, 1000, 1000, 1000, "A", 0);
                 var entry = new ImageOverlayDiagnosticEntry { Host = host, Verdict = plan.Verdict.ToString(),
                     WidthGrowthFactor = plan.WidthGrowthFactor, HeightGrowthFactor = plan.HeightGrowthFactor };
                 var line = ImageOverlayDiagnostics.Format(entry);
                 StringAssert.Contains(line, "host=" + host); StringAssert.Contains(line, "verdict=Place");
-                StringAssert.Contains(line, "grow=1.7x1.6"); Assert.IsFalse(line.Contains("PRIVATE_OCR_TEXT"));
+                StringAssert.Contains(line, "grow=1.7x1.1"); Assert.IsFalse(line.Contains("PRIVATE_OCR_TEXT"));
                 entry.WidthGrowthFactor = 1; entry.HeightGrowthFactor = 1;
                 StringAssert.Contains(ImageOverlayDiagnostics.Format(entry), "grow=1.0x1.0");
                 var note = new PlannedOverlay(ImageOverlayVerdict.SideNote, "reason", 0, 0, 0, 0, 0);
@@ -160,6 +160,25 @@ namespace OfficeTranslate.Tests
                 StringAssert.Contains(ImageOverlayDiagnostics.Format(entry), "grow=0.0");
             }
             finally { Thread.CurrentThread.CurrentCulture = previous; }
+        }
+
+        [TestMethod]
+        public void Diagnostics_WritebackStageAndFloor_AreExplicitAndStageIsAllowlisted()
+        {
+            var entry = new ImageOverlayDiagnosticEntry {
+                Host = "Word", Stage = "writeback", Verdict = "SideNote",
+                Reason = "无法读取覆盖框真实排版，已降级为旁注。", TextLength = 123
+            };
+            var line = ImageOverlayDiagnostics.Format(entry);
+            StringAssert.Contains(line, "stage=writeback min_font=1");
+            StringAssert.Contains(line, "textLen=123");
+            StringAssert.Contains(line, "reason=无法读取覆盖框真实排版");
+            entry.Stage = "PRIVATE_OCR_TEXT";
+            line = ImageOverlayDiagnostics.Format(entry);
+            StringAssert.Contains(line, "stage=plan");
+            Assert.IsFalse(line.Contains("PRIVATE_OCR_TEXT"));
+            var paragraph = ImageOverlayDiagnostics.FormatWordLayoutFailure(1F, 0, 12F, 0);
+            StringAssert.Contains(paragraph, "event=overlay_layout_failure font=1 line_rule=0 line_pt=12 disable_line_height_grid=0");
         }
     }
 }

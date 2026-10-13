@@ -94,7 +94,7 @@ namespace OfficeTranslate.WordAddIn
         {
             using (var form = new SettingsForm(_settingsStore))
             {
-                if (form.ShowDialog() == DialogResult.OK)
+                if (form.ShowFor(GetTaskWindow()) == DialogResult.OK)
                 {
                     ReloadPersistentSettings();
                     _ribbon?.Invalidate();

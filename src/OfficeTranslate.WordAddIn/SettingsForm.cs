@@ -1,6 +1,7 @@
 using OfficeTranslate.Core;
 using System;
 using System.Drawing;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Windows.Forms;
 
@@ -33,9 +34,34 @@ namespace OfficeTranslate.WordAddIn
             Text = T("SettingsTitle");
             Width = 680; Height = 760; MinimumSize = new Size(600, 680);
             StartPosition = FormStartPosition.CenterParent;
+            ShowInTaskbar = false;
             Font = new Font("Microsoft YaHei UI", 9F);
             BackColor = Color.FromArgb(247, 249, 252);
             BuildUi(); LoadValues();
+        }
+
+        // Ribbon callbacks run on the Office UI thread. Never let ShowDialog()
+        // implicitly adopt the active, short-lived translation summary. Its
+        // HWND may disappear while the modal window is being created/shown.
+        // Read the host HWND at the call site after constructing the settings.
+        public DialogResult ShowFor(IntPtr hostWindow)
+        {
+            var owner = IsWindow(hostWindow)
+                && GetWindowThreadProcessId(hostWindow, out _) == GetCurrentThreadId()
+                ? hostWindow : IntPtr.Zero;
+            // A non-null wrapper with HWND=0 deliberately suppresses the
+            // active-window fallback when the host document has already closed.
+            // Do not read Control.Handle here: that can recreate disposed UI.
+            return ShowDialog(new WindowHandle(owner));
+        }
+
+        [DllImport("user32.dll")] private static extern bool IsWindow(IntPtr hwnd);
+        [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint processId);
+        [DllImport("kernel32.dll")] private static extern uint GetCurrentThreadId();
+        private sealed class WindowHandle : IWin32Window
+        {
+            public WindowHandle(IntPtr handle) { Handle = handle; }
+            public IntPtr Handle { get; }
         }
 
         protected override void OnFormClosed(FormClosedEventArgs e)

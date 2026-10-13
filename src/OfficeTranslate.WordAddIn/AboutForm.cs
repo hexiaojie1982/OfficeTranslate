@@ -14,7 +14,7 @@ namespace OfficeTranslate.WordAddIn
             get
             {
                 var version = typeof(AboutForm).Assembly.GetName().Version;
-                return version == null ? string.Empty : version.Major + "." + version.Minor + "." + version.Build;
+                return version == null ? string.Empty : version.ToString(4);
             }
         }
         private readonly string _language;
@@ -67,7 +67,12 @@ namespace OfficeTranslate.WordAddIn
 
         private string ChangelogText()
         {
-            return "OfficeTranslate " + CurrentVersion + "\r\n• 逐段回退时，单段连续空回复只保留该段原文并标记检查，不再丢掉同块其他成功译文；取消和服务错误仍正常终止。\r\n• 任务后续失败或取消时，三宿主仍提供完整未放置旁注，明确显示未全部完成，窗口不会自动关闭；成功计数在写回后记录。\r\n• Excel/PowerPoint 创建覆盖框的 COM 错误逐区降级为旁注，仅清理失败框，不中断其他区域；清理失败会明确提示。\r\n\r\n" + ChangelogVersion134Text();
+            return "OfficeTranslate " + CurrentVersion + "\r\n• 设置窗口明确绑定当前 Office 窗口，避免依赖仍打开的翻译摘要；失效或其他线程的窗口句柄不作为 owner。\r\n• 图片 OCR 覆盖译文最小字号由 6pt 下调至 1pt，仍保留坐标信任门、每维最多 5 倍扩展和宿主真实排版检查。\r\n• Word 补充实际写回降级诊断，区分字号设置失败、真实排版读取失败与最小字号仍溢出；日志不记录图片或文字内容。\r\n\r\n" + ChangelogVersion135Text();
+        }
+
+        private string ChangelogVersion135Text()
+        {
+            return "OfficeTranslate 2.1.35\r\n• 逐段回退时，单段连续空回复只保留该段原文并标记检查，不再丢掉同块其他成功译文；取消和服务错误仍正常终止。\r\n• 任务后续失败或取消时，三宿主仍提供完整未放置旁注，明确显示未全部完成，窗口不会自动关闭；成功计数在写回后记录。\r\n• Excel/PowerPoint 创建覆盖框的 COM 错误逐区降级为旁注，仅清理失败框，不中断其他区域；清理失败会明确提示。\r\n\r\n" + ChangelogVersion134Text();
         }
 
         private string ChangelogVersion134Text()
