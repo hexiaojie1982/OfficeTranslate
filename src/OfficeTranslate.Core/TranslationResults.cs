@@ -45,6 +45,7 @@ namespace OfficeTranslate.Core
 
     public sealed class TranslationTaskSummary
     {
+        private readonly object _recordLock = new object();
         private readonly List<string> _unplacedImageNotes = new List<string>();
         public TranslationTaskSummary(int total) => Total = total;
 
@@ -70,18 +71,23 @@ namespace OfficeTranslate.Core
 
         public void Record(TranslationResult result)
         {
-            FallbackTranslatedParagraphs += result.FallbackTranslatedParagraphs;
-            FallbackReviewParagraphs += result.FallbackReviewParagraphs;
-            if (result.FromCache) CacheHits++;
-            else if (result.SkippedNoSource) SkippedNoSource++;
-            else if (result.NeedsReview)
+            // Text workers may complete concurrently. Image recording stays
+            // sequential and starts only after all text workers have drained.
+            lock (_recordLock)
             {
-                NeedsReview++; TextNeedsReview++;
-                if (result.Changed) { Translated++; TextPartiallyTranslated++; }
-                else TextUnchangedNeedsReview++;
+                FallbackTranslatedParagraphs += result.FallbackTranslatedParagraphs;
+                FallbackReviewParagraphs += result.FallbackReviewParagraphs;
+                if (result.FromCache) CacheHits++;
+                else if (result.SkippedNoSource) SkippedNoSource++;
+                else if (result.NeedsReview)
+                {
+                    NeedsReview++; TextNeedsReview++;
+                    if (result.Changed) { Translated++; TextPartiallyTranslated++; }
+                    else TextUnchangedNeedsReview++;
+                }
+                else if (result.Changed) Translated++;
+                else { NeedsReview++; TextNeedsReview++; TextUnchangedNeedsReview++; }
             }
-            else if (result.Changed) Translated++;
-            else { NeedsReview++; TextNeedsReview++; TextUnchangedNeedsReview++; }
         }
 
         public void RecordSkipped() => SkippedNoSource++;

@@ -67,7 +67,12 @@ namespace OfficeTranslate.WordAddIn
 
         private string ChangelogText()
         {
-            return "OfficeTranslate " + CurrentVersion + "\r\n• 修复 Word 图片 OCR 覆盖框继承段落网格、段距或大行距，导致译文缩至 1pt 仍误降级为旁注的问题。\r\n• 写回检查前，仅对覆盖框设置段前段后 0、关闭自动段距、单倍行距并取消对齐文档网格；仍以 Word 真实排版决定是否降级。\r\n• 保持不透明底色、固定框高、1pt 下限和每维 5 倍扩展限制；普通文字翻译不变。\r\n\r\n" + ChangelogVersion136Text();
+            return "OfficeTranslate " + CurrentVersion + "\r\n• Excel 文本翻译默认最多 4 项并发，可通过 MaxParallelCells 配置为 1–32；每项完成后在 UI 线程独立写回。\r\n• 并发任务安全统计进度，取消或失败后停止调度并等待在途任务收尾；保持双语、重试校验和图片 OCR 行为。\r\n\r\n" + ChangelogVersion137Text();
+        }
+
+        private string ChangelogVersion137Text()
+        {
+            return "OfficeTranslate 2.1.37.0\r\n• 修复 Word 图片 OCR 覆盖框继承段落网格、段距或大行距，导致译文缩至 1pt 仍误降级为旁注的问题。\r\n• 写回检查前，仅对覆盖框设置段前段后 0、关闭自动段距、单倍行距并取消对齐文档网格；仍以 Word 真实排版决定是否降级。\r\n• 保持不透明底色、固定框高、1pt 下限和每维 5 倍扩展限制；普通文字翻译不变。\r\n\r\n" + ChangelogVersion136Text();
         }
 
         private string ChangelogVersion136Text()

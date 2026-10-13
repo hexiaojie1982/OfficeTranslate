@@ -1,4 +1,5 @@
 using Excel = Microsoft.Office.Interop.Excel;
+using Target = OfficeTranslate.Core.ExcelTextTarget;
 using Office = Microsoft.Office.Core;
 using OfficeTranslate.Core;
 using System;
@@ -39,36 +40,15 @@ namespace OfficeTranslate.ExcelAddIn
             var images = settings.ImageOcrEnabled ? (wholeSheet ? ReadSheetImages(sheet) : ReadSelectionImages()) : new List<Excel.Shape>();
             if (targets.Count == 0 && images.Count == 0) throw new InvalidOperationException("没有找到可翻译的单元格、图形文本或图片。");
 
-            using (var client = new TranslationClient())
+            settings.ValidateParallelCells();
+            using (var client = TranslationClient.CreateForParallelCells(settings.MaxParallelCells))
             {
                 var total = targets.Count + images.Count;
                 var summary = Summary = new TranslationTaskSummary(total);
                 ui.LogProbe("text_loop_before");
-                for (var i = 0; i < targets.Count; i++)
-                {
-                    token.ThrowIfCancellationRequested();
-                    progress($"OfficeTranslate：正在翻译 {i + 1}/{total}");
-                    var result = await client.TranslateDetailedAsync(targets[i].Text, settings, token);
-                    token.ThrowIfCancellationRequested();
-                    if (result.Changed)
-                    {
-                        var translated = result.Text.TrimEnd('\r', '\n');
-                        // M2: the writeback touches the Excel object model, so
-                        // it runs on the Office UI (STA) thread explicitly
-                        // instead of on whatever thread the network await
-                        // resumed on.
-                        await ui.InvokeAsync(() =>
-                        {
-                            // N3: re-check inside the queued UI callback. The
-                            // token may have been cancelled after the
-                            // pre-queue check but before this callback ran.
-                            token.ThrowIfCancellationRequested();
-                            targets[i].Write(settings.BilingualMode ? targets[i].Text + Environment.NewLine + translated : translated, settings.BilingualMode);
-                        });
-                    }
-                    summary.Record(result);
-                    progress($"OfficeTranslate：已完成 {i + 1}/{total}");
-                }
+                await ExcelTextTranslation.RunAsync(targets, settings, summary,
+                    (text, cancellation) => client.TranslateDetailedAsync(text, settings, cancellation),
+                    token, progress, ui);
                 ui.LogProbe("text_loop_after");
                 ui.LogProbe("image_loop_before");
                 for (var i = 0; i < images.Count; i++)
@@ -685,12 +665,5 @@ namespace OfficeTranslate.ExcelAddIn
             catch (COMException) { }
         }
 
-        private sealed class Target
-        {
-            private readonly Action<string, bool> _write;
-            public Target(string text, Action<string, bool> write) { Text = text; _write = write; }
-            public string Text { get; }
-            public void Write(string value, bool bilingual) => _write(value, bilingual);
-        }
     }
 }

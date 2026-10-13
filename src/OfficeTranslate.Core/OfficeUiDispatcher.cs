@@ -98,7 +98,9 @@ namespace OfficeTranslate.Core
                 try { return Task.FromResult(func()); }
                 catch (Exception ex) { return Task.FromException<T>(ex); }
             }
-            var tcs = new TaskCompletionSource<T>();
+            // Each caller owns its completion source. WinForms Post queues all
+            // callbacks on the captured STA; continuations must not monopolize it.
+            var tcs = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
             _context.Post(_ =>
             {
                 try { tcs.SetResult(func()); }

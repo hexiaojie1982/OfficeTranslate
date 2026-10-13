@@ -226,7 +226,7 @@ namespace OfficeTranslate.Tests
                     () => throw new InvalidOperationException("test")).Wait(5000));
         }
 
-        private sealed class StaPump : IDisposable
+        internal sealed class StaPump : IDisposable
         {
             private readonly Thread _sta;
             public StaPump(OfficeUiDispatcher dispatcher, int staThreadId, Thread sta)
@@ -249,7 +249,7 @@ namespace OfficeTranslate.Tests
             }
         }
 
-        private static StaPump StartPumpingSta(Action? ambientSetup = null)
+        internal static StaPump StartPumpingSta(Action? ambientSetup = null)
         {
             Exception? staError = null;
             var ready = new ManualResetEventSlim(false);

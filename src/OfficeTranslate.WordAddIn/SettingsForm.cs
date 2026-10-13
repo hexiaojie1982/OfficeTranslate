@@ -222,6 +222,7 @@ namespace OfficeTranslate.WordAddIn
                 SourceLanguage = _existing.SourceLanguage, TargetLanguage = _existing.TargetLanguage,
                 UiLanguage = _uiLanguage.SelectedIndex >= 0 ? UiText.LanguageCodes[_uiLanguage.SelectedIndex] : _existing.UiLanguage,
                 BilingualMode = _existing.BilingualMode, MaxCharactersPerChunk = (int)_chunkSize.Value, TimeoutSeconds = _existing.TimeoutSeconds,
+                MaxParallelCells = _existing.MaxParallelCells,
                 TranslationStyle = _translationStyle.SelectedIndex >= 0 ? TranslationStyleCatalog.Ids[_translationStyle.SelectedIndex] : "Custom",
                 CustomInstructions = _instructions.Text.Trim(), Glossary = _glossary.Text.Trim(),
                 OllamaBaseUrl = _existing.OllamaBaseUrl, OllamaApiKey = _existing.OllamaApiKey, OllamaModel = _existing.OllamaModel,
