@@ -42,6 +42,7 @@
             <button id="OfficeTranslate.Selection" getLabel="GetRibbonLabel" size="large" getImage="GetRibbonImage" onAction="TranslateSelection" />
             <button id="OfficeTranslate.Document" getLabel="GetRibbonLabel" size="large" getImage="GetRibbonImage" onAction="TranslateDocument" />
             <toggleButton id="OfficeTranslate.Bilingual" getLabel="GetRibbonLabel" size="large" getImage="GetRibbonImage" getPressed="GetBilingualMode" onAction="BilingualModeChanged" />
+            <button id="OfficeTranslate.RecognizeImage" label="OCR" size="large" getImage="GetRibbonImage" screentip="仅识别选中图片中的原文，不翻译" onAction="RecognizeImage" />
             <toggleButton id="OfficeTranslate.ImageOcr" getLabel="GetRibbonLabel" size="large" getImage="GetRibbonImage" getPressed="GetImageOcrMode" getVisible="GetImageOcrVisible" onAction="ImageOcrModeChanged" />
           </box>
         </group>

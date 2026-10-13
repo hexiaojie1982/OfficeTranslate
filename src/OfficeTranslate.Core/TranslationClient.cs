@@ -13,7 +13,7 @@ using System.Web.Script.Serialization;
 
 namespace OfficeTranslate.Core
 {
-    public sealed class TranslationClient : IDisposable
+    public sealed partial class TranslationClient : IDisposable
     {
         private readonly HttpClient _http;
         private readonly HttpClient _imageHttp;

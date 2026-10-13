@@ -102,6 +102,68 @@ namespace OfficeTranslate.WordAddIn
             }
         }
 
+        public async void RecognizeImage(Microsoft.Office.Core.IRibbonControl c) => await RunOcrAsync();
+
+        private async Task RunOcrAsync()
+        {
+            if (_word == null || _cancellation != null) return;
+            _cancellation = new CancellationTokenSource();
+            var ui = OfficeUiDispatcher.Capture("Word");
+            var taskWindow = GetTaskWindow();
+            WordTranslationService? service = null;
+            try
+            {
+                var settings = LoadForTranslation();
+                service = new WordTranslationService(_word);
+                if (!service.HasSelectedOcrImage()) { MessageBox.Show(new TranslationProgressForm.WindowHandle(taskWindow), "请先选中一张图片", "OCR 识别"); return; }
+                _progressForm = new TranslationProgressForm(settings.UiLanguage, () => _cancellation?.Cancel());
+                _progressForm.ConfigureForRecognition();
+                _progressForm.ShowFor(taskWindow);
+                _progressForm.SetStatus("OfficeTranslate：正在读取选中图片…");
+                var summary = await service.RecognizeSelectionAsync(settings, _cancellation.Token, _progressForm.SetStatus, ui);
+                ui.Invoke(() => { _progressForm.CloseSafely(); OcrResultForm.ShowResult(summary, ResolveErrorDialogOwner(taskWindow)); });
+                _progressForm = null;
+            }
+            catch (OperationCanceledException ex) when (TranslationFailurePolicy.IsUserCancellation(ex, _cancellation.Token))
+            {
+                ui.Invoke(() =>
+                {
+                    _progressForm?.CloseSafely(); _progressForm = null;
+                    var window = ResolveErrorDialogOwner(taskWindow);
+                    OcrResultForm.ShowResult(service?.Summary, window, ex);
+                });
+            }
+            catch (Exception ex)
+            {
+                WordSelectionProbe.Log(_word, "before_progress_close", taskWindow);
+                try { _progressForm?.CloseSafely(); } catch { }
+                _progressForm = null;
+                WordSelectionProbe.Log(_word, "after_progress_close", taskWindow);
+                ui.Invoke(() =>
+                {
+                    var window = ResolveErrorDialogOwner(taskWindow);
+                    var recoveringNotes = service?.Summary?.UnplacedImageNotes.Count > 0;
+                    WordSelectionProbe.Log(_word, recoveringNotes ? "recovery_summary_show" : "error_dialog_shown", window);
+                    try
+                    {
+                        OcrResultForm.ShowResult(service?.Summary, window, ex);
+                    }
+                    finally
+                    {
+                        WordSelectionProbe.Log(_word, recoveringNotes ? "recovery_summary_returned" : "error_dialog_dismissed", window);
+                    }
+                });
+            }
+            finally
+            {
+                _progressForm?.CloseSafely(); _progressForm = null;
+                if (service != null) await service.RestoreTaskSelectionAsync(ui);
+                WordSelectionProbe.Log(_word, "after_final_restore", taskWindow);
+                StartPostRestoreWatch(ui, _word, taskWindow);
+                _cancellation.Dispose(); _cancellation = null;
+            }
+        }
+
         private async Task RunAsync(bool wholeDocument)
         {
             if (_word == null || _cancellation != null) return;
