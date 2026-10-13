@@ -48,7 +48,7 @@ if ($missing.Count -gt 0) {
 $versionFile = Join-Path $root 'VERSION.txt'
 if (-not (Test-Path $versionFile)) { throw "VERSION.txt not found at $versionFile" }
 $productVersion = (Get-Content $versionFile -Raw).Trim()
-if ($productVersion -notmatch '^\d+\.\d+\.\d+\.0$') { throw "VERSION.txt must contain a version like 2.1.36.0, got: '$productVersion'" }
+if ($productVersion -notmatch '^\d+\.\d+\.\d+\.0$') { throw "VERSION.txt must contain a version like 2.1.37.0, got: '$productVersion'" }
 
 $assemblyInfos = Get-ChildItem (Join-Path $root 'src') -Recurse -Filter AssemblyInfo.cs
 if ($assemblyInfos.Count -eq 0) { throw 'No AssemblyInfo.cs found under src\ - version check cannot run.' }

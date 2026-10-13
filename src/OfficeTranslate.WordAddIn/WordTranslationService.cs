@@ -1017,16 +1017,33 @@ namespace OfficeTranslate.WordAddIn
             catch { return false; }
         }
 
-        // W1: real-layout overflow check. TextFrame.Overflowing reports whether
-        // the current text actually fits the fixed box (after Repaginate).
+        // TextFrame.Overflowing checks the whole formatted text flow after
+        // Repaginate, not a glyph-only bounding height. Inherited paragraph
+        // spacing and document-grid snapping can overflow even at 1pt.
+        // Keep the overlay's paragraphs compact, matching the planner's lack
+        // of paragraph gaps/grid quantization. The planner is still only an
+        // estimate of font metrics/wrapping; Word remains the final fit gate.
         // The font shrinks stepwise from the planned size to the shared 1pt floor
         // (the planner's minimum); the box geometry is never expanded.
         private bool ShrinkFontToFit(Shape box, float startSize, out string failureReason)
         {
             failureReason = "覆盖框内译文按真实排版在最小字号下仍溢出，已降级为旁注。";
+            // A new overlay is unlinked. ContainingRange includes its overflow
+            // tail; TextRange can expose only a prefix when Word paginates it.
+            Range text;
+            try
+            {
+                text = box.TextFrame.ContainingRange;
+                ApplyCompactOverlayParagraphFormat(text);
+            }
+            catch (System.Runtime.InteropServices.COMException)
+            {
+                failureReason = "无法设置覆盖框紧凑段落格式，已降级为旁注。";
+                return false;
+            }
             const float floorSize = ImageOverlayLayout.MinFontSize;
             var size = Math.Min(startSize, 18F);
-            try { box.TextFrame.TextRange.Font.Size = size; }
+            try { text.Font.Size = size; }
             catch { failureReason = "无法设置覆盖框字号，已降级为旁注。"; return false; }
             for (var i = 0; i < (int)Math.Ceiling(ImageOverlayLayout.MaxFontSize - floorSize) + 2; i++)
             {
@@ -1044,16 +1061,32 @@ namespace OfficeTranslate.WordAddIn
                 if (size <= floorSize)
                 {
                     ImageOverlayDiagnostics.LogWordLayoutFailure(size,
-                        SafeGet(() => (int)box.TextFrame.TextRange.ParagraphFormat.LineSpacingRule, -1),
-                        SafeGet(() => box.TextFrame.TextRange.ParagraphFormat.LineSpacing, float.NaN),
-                        SafeGet(() => box.TextFrame.TextRange.ParagraphFormat.DisableLineHeightGrid, int.MinValue));
+                        SafeGet(() => (int)text.ParagraphFormat.LineSpacingRule, -1),
+                        SafeGet(() => text.ParagraphFormat.LineSpacing, float.NaN),
+                        SafeGet(() => text.ParagraphFormat.DisableLineHeightGrid, int.MinValue));
                     return false;
                 }
                 size = Math.Max(floorSize, size - 1F);
-                try { box.TextFrame.TextRange.Font.Size = size; }
+                try { text.Font.Size = size; }
                 catch { failureReason = "无法设置覆盖框字号，已降级为旁注。"; return false; }
             }
             return false;
+        }
+
+        // Apply only to the new OCR overlay's text story, including its final
+        // paragraph mark. Never change the anchor, body, styles or side-notes.
+        private static void ApplyCompactOverlayParagraphFormat(Range range)
+        {
+            var paragraph = range.ParagraphFormat;
+            // Auto spacing overrides the explicit SpaceBefore/After values.
+            paragraph.SpaceBeforeAuto = 0;
+            paragraph.SpaceAfterAuto = 0;
+            paragraph.SpaceBefore = 0F;
+            paragraph.SpaceAfter = 0F;
+            paragraph.LineSpacingRule = WdLineSpacing.wdLineSpaceSingle;
+            // Verified in real Word: -1 emits w:snapToGrid w:val="0".
+            // Do not infer the value from the ambiguous VBA documentation.
+            paragraph.DisableLineHeightGrid = -1;
         }
 
         private float PlaceCombinedNote(ImageTarget image, string ownerId, string noteText,

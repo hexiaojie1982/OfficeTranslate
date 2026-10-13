@@ -67,7 +67,12 @@ namespace OfficeTranslate.WordAddIn
 
         private string ChangelogText()
         {
-            return "OfficeTranslate " + CurrentVersion + "\r\n• 设置窗口明确绑定当前 Office 窗口，避免依赖仍打开的翻译摘要；失效或其他线程的窗口句柄不作为 owner。\r\n• 图片 OCR 覆盖译文最小字号由 6pt 下调至 1pt，仍保留坐标信任门、每维最多 5 倍扩展和宿主真实排版检查。\r\n• Word 补充实际写回降级诊断，区分字号设置失败、真实排版读取失败与最小字号仍溢出；日志不记录图片或文字内容。\r\n\r\n" + ChangelogVersion135Text();
+            return "OfficeTranslate " + CurrentVersion + "\r\n• 修复 Word 图片 OCR 覆盖框继承段落网格、段距或大行距，导致译文缩至 1pt 仍误降级为旁注的问题。\r\n• 写回检查前，仅对覆盖框设置段前段后 0、关闭自动段距、单倍行距并取消对齐文档网格；仍以 Word 真实排版决定是否降级。\r\n• 保持不透明底色、固定框高、1pt 下限和每维 5 倍扩展限制；普通文字翻译不变。\r\n\r\n" + ChangelogVersion136Text();
+        }
+
+        private string ChangelogVersion136Text()
+        {
+            return "OfficeTranslate 2.1.36.0\r\n• 设置窗口明确绑定当前 Office 窗口，避免依赖仍打开的翻译摘要；失效或其他线程的窗口句柄不作为 owner。\r\n• 图片 OCR 覆盖译文最小字号由 6pt 下调至 1pt，仍保留坐标信任门、每维最多 5 倍扩展和宿主真实排版检查。\r\n• Word 补充实际写回降级诊断，区分字号设置失败、真实排版读取失败与最小字号仍溢出；日志不记录图片或文字内容。\r\n\r\n" + ChangelogVersion135Text();
         }
 
         private string ChangelogVersion135Text()
