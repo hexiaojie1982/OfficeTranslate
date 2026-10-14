@@ -1,6 +1,8 @@
 # OfficeTranslate for Microsoft Office（原生 COM 加载项）
 
-当前版本：**2.2.2.0**。Word / Excel / PowerPoint 的「OCR」识别按钮检测图片文字区域并转录原文，不执行翻译。PowerPoint 支持选中图片或幻灯片（单页、多页），逐页识别其中的图片；Word / Excel 仍仅处理选中图片。
+当前版本：**2.2.3.0**。Word / Excel / PowerPoint 的「OCR」识别按钮检测图片文字区域并转录原文，不执行翻译。PowerPoint 支持选中图片或幻灯片（单页、多页），逐页识别其中的图片；Word / Excel 仍仅处理选中图片。
+
+Excel / PowerPoint 显式选中 OCR 生成的文本框（包括组合内文本框）后，可使用「选区」翻译。整表、选中幻灯片和全文扫描仍跳过 OCR 覆盖框，避免重复翻译。验证见 [2.2.3 Excel / PowerPoint 验证记录](tests/VALIDATION-2.2.3-EXCEL-PPT-OCR-SELECTION.md)。
 
 OCR 结果窗支持中英文（繁体中文另有译文，韩语/日语暂用英文），成功且无未放置旁注时显示 5 秒关闭倒计时；发生错误、取消或有未放置旁注时保持打开，供用户复制保存。验证见 [2.2.2 验证记录](tests/VALIDATION-2.2.2-OCR-DIALOG-PARITY.md)。
 识别结果复用现有不透明覆盖框、固定几何和旁注降级；与图片翻译分别标记和清理。无需打开「图片」翻译开关，双语、源/目标语言、术语表和翻译风格不影响纯 OCR。
