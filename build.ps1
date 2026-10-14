@@ -1,4 +1,4 @@
-﻿param([ValidateSet('Debug','Release')][string]$Configuration = 'Release', [switch]$SkipInstaller)
+param([ValidateSet('Debug','Release')][string]$Configuration = 'Release', [switch]$SkipInstaller)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $solution = Join-Path $root 'OfficeTranslate.Word.sln'
@@ -48,7 +48,7 @@ if ($missing.Count -gt 0) {
 $versionFile = Join-Path $root 'VERSION.txt'
 if (-not (Test-Path $versionFile)) { throw "VERSION.txt not found at $versionFile" }
 $productVersion = (Get-Content $versionFile -Raw).Trim()
-if ($productVersion -notmatch '^\d+\.\d+\.\d+\.0$') { throw "VERSION.txt must contain a version like 2.2.2.0, got: '$productVersion'" }
+if ($productVersion -notmatch '^\d+\.\d+\.\d+\.0$') { throw "VERSION.txt must contain a version like 2.2.3.0, got: '$productVersion'" }
 
 $assemblyInfos = Get-ChildItem (Join-Path $root 'src') -Recurse -Filter AssemblyInfo.cs
 if ($assemblyInfos.Count -eq 0) { throw 'No AssemblyInfo.cs found under src\ - version check cannot run.' }
