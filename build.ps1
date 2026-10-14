@@ -1,4 +1,4 @@
-﻿param([ValidateSet('Debug','Release')][string]$Configuration = 'Release', [switch]$SkipInstaller)
+param([ValidateSet('Debug','Release')][string]$Configuration = 'Release', [switch]$SkipInstaller)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $solution = Join-Path $root 'OfficeTranslate.Word.sln'

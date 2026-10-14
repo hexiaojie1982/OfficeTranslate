@@ -12,6 +12,8 @@ Excel 文本并发度可在 `%LOCALAPPDATA%\OfficeTranslate\settings.json` 设�
 
 面向完全禁止 Office Web Add-in 的 Windows 企业环境。该版本不使用 `manifest.xml`，通过 MSI 注册原生 Word COM 加载项。
 
+Word「选区」翻译支持选中的浮动文本框及带文字的图形，包括 OCR 生成的原文覆盖框；正文与文本框混选时分别写回，文本框保留基础字体、字号和段落格式。验证见 [2.2.3 Word 验证记录](tests/VALIDATION-2.2.3-WORD-SHAPE-TEXT-SELECTION.md)。
+
 ## 当前功能
 
 - 翻译并直接替换当前选区。
