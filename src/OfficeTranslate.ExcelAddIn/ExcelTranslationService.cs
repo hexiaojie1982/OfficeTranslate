@@ -581,7 +581,7 @@ namespace OfficeTranslate.ExcelAddIn
             {
                 var shapes = GetSelectedShapeRange(_excel.Selection);
                 if (shapes == null) return result;
-                for (var i = 1; i <= shapes.Count; i++) AddShape(shapes.Item(i), result);
+                for (var i = 1; i <= shapes.Count; i++) AddShape(shapes.Item(i), result, includeOcrOverlays: true);
             }
             catch (COMException) { }
             catch (InvalidCastException) { }
@@ -643,12 +643,13 @@ namespace OfficeTranslate.ExcelAddIn
             return result;
         }
 
-        private static void AddShape(Excel.Shape shape, List<Target> result)
+        private static void AddShape(Excel.Shape shape, List<Target> result, bool includeOcrOverlays = false)
         {
-            if (shape.AlternativeText != null && shape.AlternativeText.StartsWith("OfficeTranslateOCR", StringComparison.Ordinal)) return;
+            // Explicit shape selection can translate OCR text; sheet scans must avoid translating it again.
+            if (!includeOcrOverlays && shape.AlternativeText != null && shape.AlternativeText.StartsWith("OfficeTranslateOCR", StringComparison.Ordinal)) return;
             if (shape.Type == Office.MsoShapeType.msoGroup)
             {
-                for (var i = 1; i <= shape.GroupItems.Count; i++) AddShape(shape.GroupItems.Item(i), result);
+                for (var i = 1; i <= shape.GroupItems.Count; i++) AddShape(shape.GroupItems.Item(i), result, includeOcrOverlays);
                 return;
             }
             try

@@ -568,7 +568,7 @@ namespace OfficeTranslate.PowerPointAddIn
                 foreach (PowerPoint.Shape shape in selection.ShapeRange)
                 {
                     if (shape.HasTable == Office.MsoTriState.msoTrue && AddSelectedTableCells(shape, result) > 0) continue;
-                    AddShape(shape, result);
+                    AddShape(shape, result, includeOcrOverlays: true);
                 }
             }
             else if (selection.Type == PowerPoint.PpSelectionType.ppSelectionSlides)
@@ -604,13 +604,15 @@ namespace OfficeTranslate.PowerPointAddIn
             return selected;
         }
 
-        private static void AddShape(PowerPoint.Shape shape, List<Target> result)
+        private static void AddShape(PowerPoint.Shape shape, List<Target> result, bool includeOcrOverlays = false)
         {
-            try { var tag = shape.Tags["OfficeTranslateOCR"]; if (!string.IsNullOrEmpty(tag)) return; } catch (COMException) { }
+            // Explicit shape selection can translate OCR text; slide/presentation scans still skip it.
+            if (!includeOcrOverlays)
+                try { var tag = shape.Tags["OfficeTranslateOCR"]; if (!string.IsNullOrEmpty(tag)) return; } catch (COMException) { }
             if (shape.Type == Office.MsoShapeType.msoGroup)
             {
                 dynamic groupItems = shape.GroupItems;
-                for (var i = 1; i <= shape.GroupItems.Count; i++) AddShape((PowerPoint.Shape)groupItems.Item(i), result);
+                for (var i = 1; i <= shape.GroupItems.Count; i++) AddShape((PowerPoint.Shape)groupItems.Item(i), result, includeOcrOverlays);
                 return;
             }
             if (shape.HasTable == Office.MsoTriState.msoTrue)
