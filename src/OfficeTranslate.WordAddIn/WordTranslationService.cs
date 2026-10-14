@@ -170,14 +170,7 @@ namespace OfficeTranslate.WordAddIn
                         undo.StartCustomRecord(bilingual ? $"OfficeTranslate 双语排版 {i + 1}/{targets.Count}" : $"OfficeTranslate 翻译 {i + 1}/{targets.Count}");
                         try
                         {
-                            if (bilingual)
-                            {
-                                var insertion = targets[i].Range.Duplicate;
-                                insertion.Collapse(WdCollapseDirection.wdCollapseEnd);
-                                insertion.InsertAfter("\r" + translatedText);
-                            }
-                            else
-                                targets[i].Range.Text = translatedText;
+                            WriteTarget(targets[i], translatedText, bilingual);
                         }
                         finally { undo.EndCustomRecord(); }
                     });
@@ -1724,9 +1717,71 @@ namespace OfficeTranslate.WordAddIn
 
         private List<Target> ReadSelection()
         {
+            var result = new List<Target>();
             var selection = _word.Selection;
-            if (selection == null || selection.Range.Start == selection.Range.End || !HasTranslatableText(selection.Range.Text)) return new List<Target>();
-            return new List<Target> { ToTarget(selection.Range) };
+            if (selection == null) return result;
+            var range = selection.Range;
+            // In shape-selection mode Range is only the anchor, not selected
+            // body text. A mixed text selection can still contain both targets.
+            var hasSelectedText = selection.Type != WdSelectionType.wdSelectionShape
+                && range.Start != range.End && HasTranslatableText(range.Text);
+            if (hasSelectedText) result.Add(ToTarget(range));
+
+            ShapeRange shapes;
+            try { shapes = selection.ShapeRange; }
+            catch (COMException) { return result; } // Ordinary text has no ShapeRange.
+            if (shapes == null) return result;
+            foreach (Shape shape in shapes)
+            {
+                try
+                {
+                    var frame = shape.TextFrame;
+                    if (frame == null || frame.HasText == 0) continue;
+                    var textRange = frame.TextRange;
+                    // Editing text inside a box already supplied the selected
+                    // text range; don't also translate the entire box twice.
+                    if (hasSelectedText && range.StoryType == WdStoryType.wdTextFrameStory
+                        && range.InStory(textRange)) continue;
+                    var text = StripMarks(textRange.Text ?? string.Empty);
+                    if (HasTranslatableText(text)) result.Add(new Target(shape, text));
+                    // OCR ownership markers do not filter ordinary shape text.
+                }
+                catch (COMException) { } // Pictures/other shapes may not support TextFrame.
+            }
+            return result;
+        }
+
+        private static void WriteTarget(Target target, string translatedText, bool bilingual)
+        {
+            if (target.Shape != null)
+            {
+                var textRange = target.Shape.TextFrame.TextRange;
+                if (bilingual)
+                {
+                    var insertion = ToTarget(textRange).Range!.Duplicate;
+                    insertion.Collapse(WdCollapseDirection.wdCollapseEnd);
+                    insertion.InsertAfter("\r" + translatedText);
+                }
+                else
+                {
+                    // Preserve the box's base character/paragraph formatting;
+                    // translation cannot map arbitrary mixed runs one-to-one.
+                    var first = textRange.Characters[1];
+                    var font = first.Font.Duplicate;
+                    var paragraph = first.ParagraphFormat.Duplicate;
+                    textRange.Text = translatedText;
+                    textRange.Font = font;
+                    textRange.ParagraphFormat = paragraph;
+                }
+                return;
+            }
+            if (bilingual)
+            {
+                var insertion = target.Range!.Duplicate;
+                insertion.Collapse(WdCollapseDirection.wdCollapseEnd);
+                insertion.InsertAfter("\r" + translatedText);
+            }
+            else target.Range!.Text = translatedText;
         }
 
         private List<Target> ReadDocumentParagraphs()
@@ -1780,7 +1835,9 @@ namespace OfficeTranslate.WordAddIn
         private sealed class Target
         {
             public Target(Range range, string text) { Range = range; Text = text; }
-            public Range Range { get; }
+            public Target(Shape shape, string text) { Shape = shape; Text = text; }
+            public Range? Range { get; }
+            public Shape? Shape { get; }
             public string Text { get; }
         }
 

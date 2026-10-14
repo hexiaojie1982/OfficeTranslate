@@ -1,6 +1,6 @@
 # OfficeTranslate for Microsoft Office（原生 COM 加载项）
 
-当前版本：**2.2.2.0**。Word / Excel / PowerPoint 的「OCR」识别按钮检测图片文字区域并转录原文，不执行翻译。PowerPoint 支持选中图片或幻灯片（单页、多页），逐页识别其中的图片；Word / Excel 仍仅处理选中图片。
+当前版本：**2.2.3.0**。Word / Excel / PowerPoint 的「OCR」识别按钮检测图片文字区域并转录原文，不执行翻译。PowerPoint 支持选中图片或幻灯片（单页、多页），逐页识别其中的图片；Word / Excel 仍仅处理选中图片。
 
 OCR 结果窗支持中英文（繁体中文另有译文，韩语/日语暂用英文），成功且无未放置旁注时显示 5 秒关闭倒计时；发生错误、取消或有未放置旁注时保持打开，供用户复制保存。验证见 [2.2.2 验证记录](tests/VALIDATION-2.2.2-OCR-DIALOG-PARITY.md)。
 识别结果复用现有不透明覆盖框、固定几何和旁注降级；与图片翻译分别标记和清理。无需打开「图片」翻译开关，双语、源/目标语言、术语表和翻译风格不影响纯 OCR。
@@ -9,6 +9,8 @@ OCR 结果窗支持中英文（繁体中文另有译文，韩语/日语暂用英
 Excel 文本并发度可在 `%LOCALAPPDATA%\OfficeTranslate\settings.json` 设置 `"MaxParallelCells": 4`（整数 1–32，旧配置缺省为 4；1 为串行）。任务开始前修改，下一次加载配置生效；设置窗口保存会保留该值。此配置也适用于 Excel 图形文本，Word、PowerPoint 和图片 OCR 不使用此并发度。进度表示已处理的文本目标数，取消/失败时等待在途任务收尾后报告已写回结果。
 
 面向完全禁止 Office Web Add-in 的 Windows 企业环境。该版本不使用 `manifest.xml`，通过 MSI 注册原生 Word COM 加载项。
+
+Word「选区」翻译支持选中的浮动文本框及带文字的图形，包括 OCR 生成的原文覆盖框；正文与文本框混选时分别写回，文本框保留基础字体、字号和段落格式。验证见 [2.2.3 验证记录](tests/VALIDATION-2.2.3-WORD-SHAPE-TEXT-SELECTION.md)。
 
 ## 当前功能
 
