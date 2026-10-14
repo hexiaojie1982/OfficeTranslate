@@ -87,9 +87,11 @@ namespace OfficeTranslate.PowerPointAddIn
                 );
             var hostWindow = GetHostWindow();
             HostService? service = null;
+            var taskLanguage = _settings.UiLanguage;
             try
             {
                 var settings = LoadForTranslation();
+                taskLanguage = settings.UiLanguage;
                 service = new HostService(_host);
                 if (!service.HasSelectedOcrImage())
                 {
@@ -104,7 +106,7 @@ namespace OfficeTranslate.PowerPointAddIn
                 ui.Invoke(() =>
                 {
                     _progressForm.CloseSafely();
-                    OcrResultForm.ShowResult(summary, ResolveErrorDialogOwner(hostWindow));
+                    OcrResultForm.ShowResult(taskLanguage, summary, ResolveErrorDialogOwner(hostWindow));
                 });
                 _progressForm = null;
             }
@@ -114,7 +116,7 @@ namespace OfficeTranslate.PowerPointAddIn
                 {
                     CloseProgress();
                     var window = ResolveErrorDialogOwner(hostWindow);
-                    OcrResultForm.ShowResult(service?.Summary, window, ex);
+                    OcrResultForm.ShowResult(taskLanguage, service?.Summary, window, ex);
                 });
             }
             catch (Exception ex)
@@ -123,7 +125,7 @@ namespace OfficeTranslate.PowerPointAddIn
                 ui.Invoke(() =>
                 {
                     var window = ResolveErrorDialogOwner(hostWindow);
-                    OcrResultForm.ShowResult(service?.Summary, window, ex);
+                    OcrResultForm.ShowResult(taskLanguage, service?.Summary, window, ex);
                 });
             }
             finally { CloseProgress(); _cancellation.Dispose(); _cancellation = null; }

@@ -211,7 +211,7 @@ namespace OfficeTranslate.Core
 
         internal const int ImageMaxOutputTokens = 8192;
 
-        private async Task<ImageRecognitionResult> RequestImageRegionsAsync(string endpoint, string model, string prompt, string base64, TranslationSettings settings, CancellationToken token, bool structuredOutput)
+        private async Task<ImageRecognitionResult> RequestImageRegionsAsync(string endpoint, string model, string prompt, string base64, TranslationSettings settings, CancellationToken token, bool structuredOutput, Action<string>? captureContent = null)
         {
             object body;
             if (settings.Provider == ProviderKind.Ollama)
@@ -246,6 +246,7 @@ namespace OfficeTranslate.Core
                     var result = ImageRegionParser.Parse(imageResponse.Content);
                     result.FinishReason = finish;
                     result.Truncated = imageResponse.Truncated;
+                    captureContent?.Invoke(imageResponse.Content);
                     return result;
                 }
                 catch (Exception ex) { throw new ImageResponseParseException(finish, imageResponse.Truncated, ex); }

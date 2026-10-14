@@ -33,7 +33,7 @@ namespace OfficeTranslate.Tests
         { using (var b = new Bitmap(400, 200)) return ImageCaptureBudget.EncodePng(b, 102400); }
         private static TranslationSettings Settings(ProviderKind provider) => new TranslationSettings
         {
-            Provider = provider, BaseUrl = "http://ocr.invalid/v1", Model = "text-model", ImageModel = "vision-model",
+            Provider = provider, BaseUrl = "http://ocr-" + Guid.NewGuid().ToString("N") + ".invalid/v1", Model = "text-model", ImageModel = "vision-model",
             SourceLanguage = "SOURCE_SENTINEL", TargetLanguage = "TARGET_SENTINEL", BilingualMode = true,
             ImageOcrEnabled = false, Glossary = "GLOSSARY_SENTINEL", CustomInstructions = "CUSTOM_SENTINEL"
         };
