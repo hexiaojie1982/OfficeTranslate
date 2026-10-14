@@ -8,9 +8,17 @@ namespace OfficeTranslate.WordAddIn
     // Source-only wording and a copyable, persistent recovery view for unplaced notes.
     internal sealed class OcrResultForm : Form
     {
-        internal OcrResultForm(TranslationTaskSummary? summary, Exception? error)
+        private readonly Button _close = new Button();
+        private readonly Timer _timer = new Timer();
+        private readonly string _uiLanguage;
+        private readonly bool _keepOpen;
+        private int _remainingSeconds = 5;
+
+        internal OcrResultForm(string uiLanguage, TranslationTaskSummary? summary, Exception? error)
         {
-            Text = "OCR 识别结果";
+            _uiLanguage = uiLanguage;
+            _keepOpen = error != null || summary?.UnplacedImageNotes.Count > 0;
+            Text = UiText.Get(uiLanguage, "OcrResultTitle");
             Width = 520; Height = 300; MinimumSize = new Size(480, 280);
             MaximizeBox = false; MinimizeBox = false; ShowInTaskbar = false;
             FormBorderStyle = FormBorderStyle.FixedDialog;
@@ -31,7 +39,7 @@ namespace OfficeTranslate.WordAddIn
             root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
-            var needsAttention = error != null || summary?.UnplacedImageNotes.Count > 0;
+            var needsAttention = _keepOpen;
             var icon = new Label
             {
                 Text = needsAttention ? "!" : "✓",
@@ -46,8 +54,8 @@ namespace OfficeTranslate.WordAddIn
             };
             var heading = new Label
             {
-                Text = error == null ? "OCR 识别完成" : error is OperationCanceledException
-                    ? "OCR 识别已取消" : "OCR 识别未全部完成",
+                Text = UiText.Get(uiLanguage, error == null ? "OcrResultCompleted" : error is OperationCanceledException
+                    ? "OcrResultCancelled" : "OcrResultFailed"),
                 AutoSize = true,
                 Font = new Font(Font.FontFamily, 14F, FontStyle.Bold),
                 ForeColor = Color.FromArgb(32, 55, 88),
@@ -56,14 +64,15 @@ namespace OfficeTranslate.WordAddIn
             root.Controls.Add(icon, 0, 0);
             root.Controls.Add(heading, 1, 0);
 
-            var message = error == null ? "OCR 识别完成" : error is OperationCanceledException
-                ? "OCR 识别已取消；已写回的内容保留。" : "OCR 识别未全部完成：" + error.Message;
+            var message = error == null ? UiText.Get(uiLanguage, "OcrResultCompleted") : error is OperationCanceledException
+                ? UiText.Get(uiLanguage, "OcrResultCancelledDetails")
+                : string.Format(UiText.Get(uiLanguage, "OcrResultFailedDetails"), error.Message);
             if (summary != null)
             {
-                message += $"\r\n已处理图片 {summary.OcrImages} 张，保留原文区域 {summary.OcrKeptRegions} 个。" +
-                    $"\r\n未识别到文字 {summary.OcrNoText} 张；需要检查排版/旁注 {summary.ImageNeedsReview} 项。";
+                message += "\r\n" + string.Format(UiText.Get(uiLanguage, "OcrResultDetails"),
+                    summary.OcrImages, summary.OcrKeptRegions, summary.OcrNoText, summary.ImageNeedsReview);
                 if (summary.UnplacedImageNotes.Count > 0)
-                    message += "\r\n\r\n以下旁注未放置，请复制保存；本窗口不会自动关闭。\r\n\r\n" +
+                    message += "\r\n\r\n" + UiText.Get(uiLanguage, "OcrResultUnplacedNotes") + "\r\n\r\n" +
                         string.Join("\r\n\r\n", summary.UnplacedImageNotes);
             }
             message = message.Replace("\r\n", "\n").Replace('\r', '\n').Replace("\n", "\r\n");
@@ -82,28 +91,52 @@ namespace OfficeTranslate.WordAddIn
             root.SetColumnSpan(details, 2);
             root.Controls.Add(details, 0, 1);
 
-            var close = new Button
-            {
-                Text = "关闭",
-                AutoSize = true,
-                Height = 36,
-                Padding = new Padding(16, 4, 16, 4),
-                Anchor = AnchorStyles.Right,
-                FlatStyle = FlatStyle.Flat,
-                BackColor = Color.FromArgb(45, 108, 223),
-                ForeColor = Color.White,
-                DialogResult = DialogResult.OK
-            };
-            close.FlatAppearance.BorderSize = 0;
-            root.SetColumnSpan(close, 2);
-            root.Controls.Add(close, 0, 2);
+            _close.AutoSize = true;
+            _close.Height = 36;
+            _close.Padding = new Padding(16, 4, 16, 4);
+            _close.Anchor = AnchorStyles.Right;
+            _close.FlatStyle = FlatStyle.Flat;
+            _close.BackColor = Color.FromArgb(45, 108, 223);
+            _close.ForeColor = Color.White;
+            _close.DialogResult = DialogResult.OK;
+            _close.Click += (s, e) => Close();
+            _close.FlatAppearance.BorderSize = 0;
+            UpdateCloseText();
+            root.SetColumnSpan(_close, 2);
+            root.Controls.Add(_close, 0, 2);
             Controls.Add(root);
-            AcceptButton = close; CancelButton = close;
+            AcceptButton = _close; CancelButton = _close;
+            FormClosed += (s, e) => _timer.Stop();
+            _timer.Interval = 1000;
+            _timer.Tick += (s, e) =>
+            {
+                _remainingSeconds--;
+                if (_remainingSeconds <= 0) Close();
+                else UpdateCloseText();
+            };
         }
 
-        public static void ShowResult(TranslationTaskSummary? summary, IntPtr owner, Exception? error = null)
+        protected override void OnShown(EventArgs e)
         {
-            using (var form = new OcrResultForm(summary, error))
+            base.OnShown(e);
+            if (!_keepOpen && !IsDisposed) _timer.Start();
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing) _timer.Dispose();
+            base.Dispose(disposing);
+        }
+
+        private void UpdateCloseText()
+        {
+            _close.Text = _keepOpen ? UiText.Get(_uiLanguage, "Close")
+                : string.Format(UiText.Get(_uiLanguage, "OcrResultCloseCountdown"), _remainingSeconds);
+        }
+
+        public static void ShowResult(string uiLanguage, TranslationTaskSummary? summary, IntPtr owner, Exception? error = null)
+        {
+            using (var form = new OcrResultForm(uiLanguage, summary, error))
             {
                 if (owner == IntPtr.Zero) form.ShowDialog();
                 else form.ShowDialog(new TranslationProgressForm.WindowHandle(owner));

@@ -57,7 +57,7 @@ namespace OfficeTranslate.Tests
                     summary.RecordImageNoteFailure("owner", source, "layout failure");
                     var type = Host(host).GetType("OfficeTranslate.WordAddIn.OcrResultForm", true)!;
                     using (var form = (Form)Activator.CreateInstance(type, BindingFlags.Instance | BindingFlags.NonPublic,
-                        null, new object?[] { summary, interrupted ? new InvalidOperationException("next image failed") : null }, null)!)
+                        null, new object?[] { "zh-CN", summary, interrupted ? new InvalidOperationException("next image failed") : null }, null)!)
                     {
                         Assert.AreEqual("OCR 识别结果", form.Text);
                         var details = Descendants(form).OfType<TextBox>().Single();
@@ -90,7 +90,7 @@ namespace OfficeTranslate.Tests
                     var ocrType = assembly.GetType("OfficeTranslate.WordAddIn.OcrResultForm", true)!;
                     var translationType = assembly.GetType("OfficeTranslate.WordAddIn.TranslationResultForm", true)!;
                     using (var ocr = (Form)Activator.CreateInstance(ocrType, BindingFlags.Instance | BindingFlags.NonPublic,
-                        null, new object?[] { summary, null }, null)!)
+                        null, new object?[] { "zh-CN", summary, null }, null)!)
                     using (var translation = (Form)Activator.CreateInstance(translationType, BindingFlags.Instance | BindingFlags.NonPublic,
                         null, new object?[] { "zh-CN", summary, null }, null)!)
                     {
@@ -137,7 +137,7 @@ namespace OfficeTranslate.Tests
                         Assert.AreEqual(referenceClose.FlatAppearance.BorderSize, close.FlatAppearance.BorderSize);
                         Assert.AreEqual(referenceClose.Anchor, close.Anchor);
                         Assert.AreEqual(referenceClose.AutoSize, close.AutoSize);
-                        Assert.AreEqual("关闭", close.Text);
+                        Assert.AreEqual(unplaced ? "关闭" : "关闭（5s）", close.Text);
                         Assert.AreSame(close, ocr.AcceptButton);
                         Assert.AreSame(close, ocr.CancelButton);
                         Assert.AreEqual(DialogResult.OK, close.DialogResult);

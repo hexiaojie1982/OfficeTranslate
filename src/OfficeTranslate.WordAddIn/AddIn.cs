@@ -111,9 +111,11 @@ namespace OfficeTranslate.WordAddIn
             var ui = OfficeUiDispatcher.Capture("Word");
             var taskWindow = GetTaskWindow();
             WordTranslationService? service = null;
+            var taskLanguage = _settings.UiLanguage;
             try
             {
                 var settings = LoadForTranslation();
+                taskLanguage = settings.UiLanguage;
                 service = new WordTranslationService(_word);
                 if (!service.HasSelectedOcrImage()) { MessageBox.Show(new TranslationProgressForm.WindowHandle(taskWindow), "请先选中一张图片", "OCR 识别"); return; }
                 _progressForm = new TranslationProgressForm(settings.UiLanguage, () => _cancellation?.Cancel());
@@ -121,7 +123,7 @@ namespace OfficeTranslate.WordAddIn
                 _progressForm.ShowFor(taskWindow);
                 _progressForm.SetStatus("OfficeTranslate：正在读取选中图片…");
                 var summary = await service.RecognizeSelectionAsync(settings, _cancellation.Token, _progressForm.SetStatus, ui);
-                ui.Invoke(() => { _progressForm.CloseSafely(); OcrResultForm.ShowResult(summary, ResolveErrorDialogOwner(taskWindow)); });
+                ui.Invoke(() => { _progressForm.CloseSafely(); OcrResultForm.ShowResult(taskLanguage, summary, ResolveErrorDialogOwner(taskWindow)); });
                 _progressForm = null;
             }
             catch (OperationCanceledException ex) when (TranslationFailurePolicy.IsUserCancellation(ex, _cancellation.Token))
@@ -130,7 +132,7 @@ namespace OfficeTranslate.WordAddIn
                 {
                     _progressForm?.CloseSafely(); _progressForm = null;
                     var window = ResolveErrorDialogOwner(taskWindow);
-                    OcrResultForm.ShowResult(service?.Summary, window, ex);
+                    OcrResultForm.ShowResult(taskLanguage, service?.Summary, window, ex);
                 });
             }
             catch (Exception ex)
@@ -146,7 +148,7 @@ namespace OfficeTranslate.WordAddIn
                     WordSelectionProbe.Log(_word, recoveringNotes ? "recovery_summary_show" : "error_dialog_shown", window);
                     try
                     {
-                        OcrResultForm.ShowResult(service?.Summary, window, ex);
+                        OcrResultForm.ShowResult(taskLanguage, service?.Summary, window, ex);
                     }
                     finally
                     {
