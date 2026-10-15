@@ -221,6 +221,7 @@ namespace OfficeTranslate.PowerPointAddIn
             _settings = _store.Load();
             _settings.SourceLanguage = source; _settings.TargetLanguage = target; _settings.BilingualMode = bilingual;
             _settings.ImageOcrEnabled = imageOcr;
+            RefreshChatLanguage();
         }
         private void CloseProgress()
         {

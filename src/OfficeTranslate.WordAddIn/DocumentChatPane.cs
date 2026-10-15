@@ -1,6 +1,8 @@
 using OfficeTranslate.Core;
 using System;
+using System.Collections.Generic;
 using System.Drawing;
+using System.Text;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
@@ -20,110 +22,217 @@ namespace OfficeTranslate.WordAddIn
     public sealed class DocumentChatPane : UserControl
     {
         private readonly DocumentChatSession _session = new DocumentChatSession();
-        private readonly TextBox _transcript = new TextBox { Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, Dock = DockStyle.Fill, MaxLength = 0, BackColor = Color.White };
+        private readonly TextBox _transcript = new TextBox { Multiline = true, ScrollBars = ScrollBars.Vertical, AutoSize = false, ReadOnly = true, Dock = DockStyle.Fill, MaxLength = 0, BackColor = Color.White, BorderStyle = BorderStyle.FixedSingle };
         private readonly TextBox _input = new TextBox { Multiline = true, ScrollBars = ScrollBars.Vertical, Dock = DockStyle.Fill, MaxLength = 0 };
         private readonly Label _context = new Label { AutoSize = true, ForeColor = Color.FromArgb(90, 104, 122), MaximumSize = new Size(440, 0) };
         private readonly Label _status = new Label { AutoSize = true, MaximumSize = new Size(440, 0) };
-        private readonly FlowLayoutPanel _commands = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Fill };
+        private readonly TableLayoutPanel _commands = new TableLayoutPanel { AutoSize = true, Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2, Margin = Padding.Empty };
         private readonly FlowLayoutPanel _writes = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Fill };
         private readonly Button _cancel = new Button();
+        private readonly ToolTip _tips = new ToolTip();
+        private readonly System.Windows.Forms.Timer _streamTimer = new System.Windows.Forms.Timer { Interval = 50 };
+        private readonly object _streamSync = new object();
+        private string? _queuedOutput;
+        private string _renderedOutput = "", _statusKey = "";
+        private bool _recovering, _acceptingStream, _hasTurn;
+        private readonly List<string> _statusSuffixes = new List<string>();
+        private object[] _statusArgs = new object[0];
+        private ChatContext? _displayContext;
         private CancellationTokenSource? _pending;
         internal ChatTransport? Transport { get; set; }
         internal Func<ChatWriteAction, bool>? ConfirmWrite { get; set; }
         private Func<ChatContext>? _capture;
         private Func<TranslationSettings>? _settings;
-        private string _language = "zh-CN", _prefix = "", _result = "";
+        private string _language = "zh-CN", _result = "";
+        private string _turnQuestion = "", _errorDetails = "";
+        private IReadOnlyList<ChatMessage> _turnHistory = new ChatMessage[0];
         private ChatContext? _resultContext;
         private ChatMode _resultMode;
         private bool _written;
         public DocumentChatPane()
         {
             Font = new Font("Microsoft YaHei UI", 9F); BackColor = Color.FromArgb(247, 249, 252); Size = new Size(420, 650);
+            DoubleBuffered = true;
+            _streamTimer.Tick += (s, e) => FlushOutput();
         }
         internal void Initialize(Func<ChatContext> capture, Func<TranslationSettings> settings)
         {
             _capture = capture; _settings = settings; _language = settings().UiLanguage;
-            var root = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(12), ColumnCount = 1, RowCount = 8 };
+            var root = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(12), ColumnCount = 1, RowCount = 9 };
             root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            for (var i = 0; i < 8; i++) root.RowStyles.Add(new RowStyle(i == 3 ? SizeType.Percent : i == 6 ? SizeType.Absolute : SizeType.AutoSize, i == 3 ? 100 : i == 6 ? 90 : 0));
-            root.Controls.Add(new Label { Text = T("Chat"), AutoSize = true, ForeColor = Color.FromArgb(32, 55, 88), Font = new Font(Font.FontFamily, 14F, FontStyle.Bold) }, 0, 0);
+            for (var i = 0; i < 9; i++) root.RowStyles.Add(new RowStyle(i == 3 ? SizeType.Percent : i == 7 ? SizeType.Absolute : SizeType.AutoSize, i == 3 ? 100 : i == 7 ? 90 : 0));
+            root.Controls.Add(new Label { Tag = "Chat", Text = T("Chat"), AutoSize = true, ForeColor = Color.FromArgb(32, 55, 88), Font = new Font(Font.FontFamily, 14F, FontStyle.Bold) }, 0, 0);
             root.Controls.Add(_context, 0, 1);
-            AddButton(_commands, "ChatSummary", () => Start(ChatMode.Summarize)); AddButton(_commands, "ChatRewrite", () => Start(ChatMode.Rewrite));
-            AddButton(_commands, "ChatClear", Clear); AddButton(_commands, "ChatRefresh", RefreshContext);
-            AddButton(_commands, "ChatSettings", () => { using (var form = new ChatSettingsForm(new SettingsStore())) form.ShowDialog(this); });
+            var functions = ButtonRow(); var operations = ButtonRow();
+            _commands.Controls.Add(functions, 0, 0); _commands.Controls.Add(operations, 0, 1);
+            AddButton(functions, "ChatSummary", () => Start(ChatMode.Summarize), true); AddButton(functions, "ChatRewrite", () => Start(ChatMode.Rewrite), true);
+            AddButton(operations, "ChatClear", Clear); AddButton(operations, "ChatRefresh", RefreshContext);
+            AddButton(operations, "ChatSettings", () => { using (var form = new ChatSettingsForm(new SettingsStore())) form.ShowDialog(this); RefreshLanguage(); });
             root.Controls.Add(_commands, 0, 2); root.Controls.Add(_transcript, 0, 3); root.Controls.Add(_writes, 0, 4); root.Controls.Add(_status, 0, 5);
-            root.Controls.Add(_input, 0, 6);
-            var sendBar = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Fill };
-            AddButton(sendBar, "ChatSend", () => Start(ChatMode.Question));
-            Style(_cancel, T("Cancel")); _cancel.Click += (s, e) => _pending?.Cancel(); _cancel.Enabled = false; sendBar.Controls.Add(_cancel);
-            root.Controls.Add(sendBar, 0, 7); Controls.Add(root);
+            root.Controls.Add(new Label { Tag = "ChatInputHint", Text = T("ChatInputHint"), AutoSize = true }, 0, 6);
+            root.Controls.Add(_input, 0, 7);
+            var sendBar = ButtonRow();
+            AddButton(sendBar, "ChatSend", () => Start(ChatMode.Question), true);
+            _cancel.Tag = "Cancel"; Style(_cancel, T("Cancel")); _cancel.Click += (s, e) => _pending?.Cancel(); _cancel.Enabled = false; sendBar.Controls.Add(_cancel);
+            root.Controls.Add(sendBar, 0, 8); Controls.Add(root);
             _input.KeyDown += (s, e) => { if (e.Control && e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; Start(ChatMode.Question); } };
-            Enter += (s, e) => { if (_pending == null) RefreshContext(); };
-            VisibleChanged += (s, e) => { if (Visible && _pending == null) RefreshContext(); };
-            _transcript.Text = T("ChatEmpty"); RefreshContext();
+            Enter += (s, e) => { RefreshLanguage(); if (_pending == null) RefreshContext(); };
+            VisibleChanged += (s, e) => { if (Visible) { RefreshLanguage(); if (_pending == null) RefreshContext(); } };
+            RenderTranscript(); RefreshLanguage(); RefreshContext();
         }
         private string T(string key) => UiText.Get(_language, key);
-        private static void Style(Button b, string text)
-        { b.Text = text; b.AutoSize = true; b.FlatStyle = FlatStyle.Flat; b.FlatAppearance.BorderSize = 0; b.BackColor = Color.FromArgb(45, 108, 223); b.ForeColor = Color.White; b.UseVisualStyleBackColor = false; b.Padding = new Padding(8, 4, 8, 4); }
-        private Button AddButton(FlowLayoutPanel panel, string key, Action action)
-        { var b = new Button(); Style(b, T(key)); b.Click += (s, e) => action(); panel.Controls.Add(b); return b; }
+        private static FlowLayoutPanel ButtonRow() => new FlowLayoutPanel { AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Dock = DockStyle.Fill, Margin = Padding.Empty, Padding = Padding.Empty };
+        private static void Style(Button b, string text, bool primary = false)
+        {
+            b.Text = text; b.AutoSize = false; b.Height = 32;
+            b.Width = Math.Max(72, TextRenderer.MeasureText(text, b.Font).Width + 24);
+            b.Margin = new Padding(0, 0, 8, 8); b.FlatStyle = FlatStyle.Flat; b.FlatAppearance.BorderSize = 0;
+            b.BackColor = primary ? Color.FromArgb(45, 108, 223) : Color.FromArgb(231, 236, 243);
+            b.ForeColor = primary ? Color.White : Color.FromArgb(45, 60, 80);
+            b.UseVisualStyleBackColor = false; b.Cursor = Cursors.Hand;
+        }
+        private Button AddButton(FlowLayoutPanel panel, string key, Action action, bool primary = false)
+        { var b = new Button { Tag = key, Font = Font }; Style(b, T(key), primary); b.Click += (s, e) => action(); panel.Controls.Add(b); return b; }
+        internal void RefreshLanguage()
+        {
+            if (_settings == null) return;
+            var language = _settings().UiLanguage; var changed = language != _language; _language = language;
+            SuspendLayout();
+            try
+            {
+                Localize(Controls);
+                _input.AccessibleName = T("ChatInputHint"); _transcript.AccessibleName = T("ChatTranscript");
+                _tips.SetToolTip(_context, T("ChatContextTip")); _tips.SetToolTip(_input, T("ChatInputHint"));
+                ShowContext();
+                if (_statusKey.Length > 0) RenderStatus();
+                if (changed)
+                {
+                    if (_hasTurn || _pending == null) RenderTranscript();
+                }
+            }
+            finally { ResumeLayout(true); }
+        }
+        private void Localize(Control.ControlCollection controls)
+        {
+            foreach (Control control in controls)
+            {
+                if (control.Tag is string key)
+                {
+                    if (control is Button button) Style(button, T(key), key == "ChatSummary" || key == "ChatRewrite" || key == "ChatSend" || key == "ChatReplace" || key == "ChatInsertBelow" || key == "ChatInsertStart");
+                    else control.Text = T(key);
+                    if (key == "ChatRefresh") _tips.SetToolTip(control, T("ChatRefreshTip"));
+                }
+                Localize(control.Controls);
+            }
+        }
+        private string _prefix = "";
+        private void RenderTranscript()
+        {
+            var text = new StringBuilder();
+            foreach (var message in _hasTurn ? _turnHistory : _session.History)
+                text.Append(T(message.Role == "user" ? "ChatYou" : "ChatAssistant")).Append("\r\n").Append(message.Content).Append("\r\n\r\n");
+            if (_hasTurn) text.Append(T("ChatYou")).Append("\r\n").Append(_turnQuestion).Append("\r\n\r\n").Append(T("ChatAssistant")).Append("\r\n");
+            _prefix = text.ToString();
+            _transcript.Text = (_prefix.Length == 0 ? T("ChatEmpty") : _prefix) + (_hasTurn ? _renderedOutput : "") + ErrorText();
+        }
+        private string ErrorText() => _errorDetails.Length == 0 ? "" : "\r\n\r\n" + T("ChatErrorDetails") + "\r\n" + _errorDetails;
         private void SetStatus(string key, bool error = false)
-        { _status.Text = T(key); _status.ForeColor = error ? Color.FromArgb(190, 45, 45) : Color.FromArgb(90, 104, 122); }
+        { _statusKey = key; _statusArgs = new object[0]; _statusSuffixes.Clear(); RenderStatus(); _status.ForeColor = error ? Color.FromArgb(190, 45, 45) : Color.FromArgb(90, 104, 122); }
+        private void RenderStatus()
+        { _status.Text = string.Format(T(_statusKey), _statusArgs); foreach (var key in _statusSuffixes) _status.Text += " " + T(key); }
+        private void AppendStatus(string key) { _statusSuffixes.Add(key); RenderStatus(); }
         private void RefreshContext()
         {
-            try { var c = _capture!(); _context.Text = string.Format(T("ChatContext"), T(c.IsSelection ? "ChatSelected" : "ChatFull"), c.Text.Trim().Length); }
-            catch { _context.Text = T("ChatNoDocument"); }
+            RefreshLanguage();
+            try { _displayContext = _capture!(); }
+            catch { _displayContext = null; }
+            ShowContext();
+        }
+        private void ShowContext() => _context.Text = _displayContext == null ? T("ChatNoDocument") : string.Format(T("ChatContext"), T(_displayContext.IsSelection ? "ChatSelected" : "ChatFull"), _displayContext.Text.Trim().Length);
+        // Network callbacks only replace a snapshot. The UI timer batches tokens;
+        // no per-token dispatcher calls, layout or sibling invalidation occurs.
+        private void QueueOutput(string text, CancellationTokenSource request)
+        {
+            lock (_streamSync)
+            {
+                if (!_acceptingStream || _pending != request || request.IsCancellationRequested) return;
+                _queuedOutput = text; if (text.Length == 0) _recovering = true;
+            }
+        }
+        private void FlushOutput()
+        {
+            string? text; bool recovering;
+            lock (_streamSync) { text = _queuedOutput; _queuedOutput = null; recovering = _recovering; _recovering = false; }
+            if (IsDisposed || text == null) return;
+            if (recovering) SetStatus("ChatRecovering");
+            if (text.StartsWith(_renderedOutput, StringComparison.Ordinal)) _transcript.AppendText(text.Substring(_renderedOutput.Length));
+            else { _transcript.SelectionStart = _prefix.Length; _transcript.SelectionLength = _transcript.TextLength - _prefix.Length; _transcript.SelectedText = text; }
+            _renderedOutput = text;
+        }
+        private void EndStream(bool flush)
+        {
+            _streamTimer.Stop();
+            lock (_streamSync) { _acceptingStream = false; }
+            if (flush) FlushOutput();
+            lock (_streamSync) { _queuedOutput = null; _recovering = false; }
         }
         private void ClearWrites()
         { while (_writes.Controls.Count > 0) { var control = _writes.Controls[0]; _writes.Controls.RemoveAt(0); control.Dispose(); } }
         private void Clear()
-        { if (_pending != null) return; _session.Clear(); _transcript.Text = T("ChatEmpty"); _prefix = _result = ""; _resultContext = null; ClearWrites(); SetStatus("ChatCleared"); }
+        { if (_pending != null) return; _session.Clear(); _hasTurn = false; _renderedOutput = _result = _turnQuestion = _errorDetails = ""; _turnHistory = new ChatMessage[0]; _resultContext = null; RenderTranscript(); ClearWrites(); SetStatus("ChatCleared"); }
         private async void Start(ChatMode mode)
         {
             if (_pending != null || _capture == null || _settings == null) return;
+            RefreshLanguage();
             var question = mode == ChatMode.Question ? _input.Text.Trim() : T(mode == ChatMode.Summarize ? "ChatSummaryRequest" : "ChatRewriteRequest");
             if (string.IsNullOrWhiteSpace(question)) { SetStatus("ChatNeedInput", true); return; }
             var ui = OfficeUiDispatcher.Capture("Chat");
-            var cancellation = new CancellationTokenSource(); _pending = cancellation;
+            var cancellation = new CancellationTokenSource();
+            lock (_streamSync) { _pending = cancellation; _queuedOutput = null; _recovering = false; _acceptingStream = true; }
             TranslationSettings? diagnosticSettings = null; ChatContext? diagnosticContext = null;
             _commands.Enabled = false; _cancel.Enabled = true; ClearWrites(); _resultContext = null; _result = "";
             try
             {
-                var context = diagnosticContext = _capture(); var settings = diagnosticSettings = _settings();
-                _context.Text = string.Format(T("ChatContext"), T(context.IsSelection ? "ChatSelected" : "ChatFull"), context.Text.Trim().Length);
+                var settings = diagnosticSettings = _settings(); var context = diagnosticContext = _capture();
+                _displayContext = context; ShowContext();
                 if (string.IsNullOrWhiteSpace(context.Text)) { SetStatus("ChatNoText", true); return; }
-                _prefix = "";
-                foreach (var m in _session.History) _prefix += T(m.Role == "user" ? "ChatYou" : "ChatAssistant") + "\r\n" + m.Content + "\r\n\r\n";
-                _prefix += T("ChatYou") + "\r\n" + question + "\r\n\r\n" + T("ChatAssistant") + "\r\n";
-                _transcript.Text = _prefix; SetStatus("ChatLoading");
+                _turnHistory = _session.History; _turnQuestion = question; _errorDetails = ""; _hasTurn = true;
+                _renderedOutput = ""; RenderTranscript(); SetStatus("ChatLoading"); _streamTimer.Start();
                 using (var client = new TranslationClient())
                 {
                     // Office's ambient SynchronizationContext may dispatch to an MTA pool thread.
                     // Use the same explicit STA dispatcher as translation and OCR.
                     ChatTransport transport = Transport ?? client.ChatAsync;
                     var reply = await _session.SendAsync(context, question, mode, settings, transport,
-                        text => ui.Invoke(() => { if (!IsDisposed && _pending == cancellation) { if (text.Length == 0) SetStatus("ChatRecovering"); _transcript.Text = _prefix + text; _transcript.SelectionStart = _transcript.TextLength; _transcript.ScrollToCaret(); } }),
-                        (i, n) => ui.Invoke(() => { if (!IsDisposed && _pending == cancellation) { if (n == 0) SetStatus("ChatLoading"); else _status.Text = string.Format(T("ChatChunkProgress"), i, n); } }), cancellation.Token).ConfigureAwait(false);
+                        text => QueueOutput(text, cancellation),
+                        (i, n) => ui.Invoke(() => { if (!IsDisposed && _pending == cancellation) { if (n == 0) SetStatus("ChatLoading"); else { _statusKey = "ChatChunkProgress"; _statusArgs = new object[] { i, n }; _statusSuffixes.Clear(); RenderStatus(); } } }), cancellation.Token).ConfigureAwait(false);
                     ui.Invoke(() =>
                     {
                         if (IsDisposed || cancellation.IsCancellationRequested) return;
-                        _result = reply.Text; _transcript.Clear();
-                        foreach (var m in _session.History) _transcript.AppendText(T(m.Role == "user" ? "ChatYou" : "ChatAssistant") + "\r\n" + m.Content + "\r\n\r\n");
-                        _prefix = ""; _resultMode = mode; _resultContext = context; _written = false;
+                        EndStream(false); _result = reply.Text; _hasTurn = false; RenderTranscript();
+                        _turnQuestion = ""; _turnHistory = new ChatMessage[0]; _resultMode = mode; _resultContext = context; _written = false;
                         if (mode == ChatMode.Question) _input.Clear();
                         SetStatus(reply.UsedFallback ? "ChatFallback" : "ChatDone");
-                        if (reply.UsedSummaries) _status.Text += " " + T("ChatReduced");
+                        if (reply.UsedSummaries) AppendStatus("ChatReduced");
                         BuildWrites();
                     });
                 }
             }
-            catch (Exception) when (cancellation.IsCancellationRequested) { ui.Invoke(() => { if (!IsDisposed) SetStatus("ChatCancelled"); }); }
-            // Server bodies may echo private input or keys. Never display/log raw exception messages.
-            catch (Exception ex) { ui.Invoke(() => { if (!IsDisposed) {
-                SetStatus(ChatErrors.UiKey(ex), true);
-                _transcript.AppendText("\r\n\r\n" + T("ChatErrorDetails") + "\r\n" + ChatErrors.Describe(ex, diagnosticSettings, diagnosticContext?.Text ?? "", question));
-            } }); }
-            finally { ui.Invoke(() => { if (!IsDisposed) { _commands.Enabled = true; _cancel.Enabled = false; } _pending = null; }); cancellation.Dispose(); }
+            catch (Exception) when (cancellation.IsCancellationRequested) { ui.Invoke(() => { if (!IsDisposed) { EndStream(true); SetStatus("ChatCancelled"); } }); }
+            catch (Exception ex)
+            {
+                // Chat transport normalizes provider/parser errors before they reach the pane.
+                ui.Invoke(() =>
+                {
+                    if (!IsDisposed)
+                    {
+                        EndStream(true); SetStatus(ChatErrors.UiKey(ex), true);
+                        _errorDetails = ChatErrors.Describe(ex, diagnosticSettings, diagnosticContext?.Text ?? "", question);
+                        RenderTranscript();
+                    }
+                });
+            }
+            finally { ui.Invoke(() => { if (!IsDisposed) { EndStream(false); _commands.Enabled = true; _cancel.Enabled = false; } lock (_streamSync) { _pending = null; } }); cancellation.Dispose(); }
         }
         private void BuildWrites()
         {
@@ -140,13 +249,13 @@ namespace OfficeTranslate.WordAddIn
                     if (!confirmed) return;
                     try { _resultContext.Apply(_resultMode, action, _result); _written = true; _writes.Enabled = false; SetStatus("ChatWritten"); }
                     catch { SetStatus("ChatWriteError", true); }
-                });
+                }, true);
                 button.Enabled = allowed;
             }
             _writes.Enabled = true;
-            if (_resultMode == ChatMode.Rewrite && _resultContext?.CanReplace != true) _status.Text += " " + T("ChatReplaceUnavailable");
+            if (_resultMode == ChatMode.Rewrite && _resultContext?.CanReplace != true) AppendStatus("ChatReplaceUnavailable");
         }
-        internal void Stop() { _pending?.Cancel(); _session.Clear(); _prefix = _result = ""; _resultContext = null; }
+        internal void Stop() { _pending?.Cancel(); EndStream(false); _session.Clear(); _hasTurn = false; _renderedOutput = _result = _turnQuestion = _errorDetails = ""; _turnHistory = new ChatMessage[0]; _resultContext = null; }
         protected override void OnResize(EventArgs e)
         {
             base.OnResize(e);
@@ -154,7 +263,7 @@ namespace OfficeTranslate.WordAddIn
             _context.MaximumSize = new Size(width, 0); _status.MaximumSize = new Size(width, 0);
         }
         protected override void Dispose(bool disposing)
-        { if (disposing) { Stop(); _resultContext = null; _capture = null; _settings = null; } base.Dispose(disposing); }
+        { if (disposing) { Stop(); _streamTimer.Dispose(); _tips.Dispose(); _resultContext = _displayContext = null; _capture = null; _settings = null; } base.Dispose(disposing); }
     }
     internal sealed class ChatSettingsForm : Form
     {

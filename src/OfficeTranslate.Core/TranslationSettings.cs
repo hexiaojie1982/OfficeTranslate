@@ -32,9 +32,10 @@ namespace OfficeTranslate.Core
         public string Glossary { get; set; } = string.Empty;
         public int MaxCharactersPerChunk { get; set; } = 5000;
         public int TimeoutSeconds { get; set; } = 120;
-        public string ChatQuestionSystemPrompt { get; set; } = "Answer questions using the document. Distinguish facts from inference; say when the document does not contain the answer.";
-        public string ChatSummarySystemPrompt { get; set; } = "Summarize the document clearly and concisely. Preserve key facts, numbers, conclusions and caveats.";
-        public string ChatRewriteSystemPrompt { get; set; } = "Rewrite the supplied text for clarity while preserving its meaning, facts and language. Return only the rewritten text.";
+        private string? _chatQuestionPrompt, _chatSummaryPrompt, _chatRewritePrompt;
+        public string ChatQuestionSystemPrompt { get => ChatPrompts.Resolve(UiLanguage, ChatMode.Question, _chatQuestionPrompt); set => _chatQuestionPrompt = value; }
+        public string ChatSummarySystemPrompt { get => ChatPrompts.Resolve(UiLanguage, ChatMode.Summarize, _chatSummaryPrompt); set => _chatSummaryPrompt = value; }
+        public string ChatRewriteSystemPrompt { get => ChatPrompts.Resolve(UiLanguage, ChatMode.Rewrite, _chatRewritePrompt); set => _chatRewritePrompt = value; }
         public int ChatContextTokens { get; set; } = 8192;
         public int ChatOutputTokens { get; set; } = 1024;
         public int MaxParallelCells { get; set; } = 4;

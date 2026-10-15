@@ -114,6 +114,11 @@ namespace OfficeTranslate.PowerPointAddIn
         }
         [DllImport("user32.dll", EntryPoint = "IsWindow")] private static extern bool ChatWindowAlive(IntPtr hwnd);
         public string GetChatTip(Microsoft.Office.Core.IRibbonControl control) => UiText.Get(_settings.UiLanguage, "ChatRibbonTip");
+        private void RefreshChatLanguage()
+        {
+            foreach (var pane in _chatPanes.Values)
+                try { if (pane.ContentControl is DocumentChatPane content) content.RefreshLanguage(); } catch { }
+        }
         private static void DisposeChat(Microsoft.Office.Core.CustomTaskPane pane)
         {
             try { if (pane.ContentControl is DocumentChatPane content) { content.Stop(); content.Dispose(); } } catch { }

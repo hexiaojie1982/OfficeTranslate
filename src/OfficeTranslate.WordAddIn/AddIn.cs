@@ -406,6 +406,7 @@ namespace OfficeTranslate.WordAddIn
             _settings = _settingsStore.Load();
             _settings.SourceLanguage = source; _settings.TargetLanguage = target; _settings.BilingualMode = bilingual;
             _settings.ImageOcrEnabled = imageOcr;
+            RefreshChatLanguage();
         }
         public void OnDisconnection(Extensibility.ext_DisconnectMode removeMode, ref Array custom) { CloseChat(); _cancellation?.Cancel(); _progressForm?.CloseSafely(); _word = null; }
         public void OnAddInsUpdate(ref Array custom) { }
