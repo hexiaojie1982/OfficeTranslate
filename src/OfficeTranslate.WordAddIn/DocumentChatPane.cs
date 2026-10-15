@@ -24,7 +24,7 @@ namespace OfficeTranslate.WordAddIn
     public sealed class DocumentChatPane : UserControl
     {
         private readonly DocumentChatSession _session = new DocumentChatSession();
-        private readonly ChatTranscriptBox _transcript = new ChatTranscriptBox { Multiline = true, AutoSize = false, ReadOnly = true, Dock = DockStyle.Fill, MaxLength = 0, BackColor = Color.White, BorderStyle = BorderStyle.FixedSingle };
+        private readonly ChatConversationView _transcript = new ChatConversationView { Dock = DockStyle.Fill };
         private readonly TextBox _input = new TextBox { Multiline = true, ScrollBars = ScrollBars.Vertical, Dock = DockStyle.Fill, MaxLength = 0 };
         private readonly Label _context = new Label { AutoSize = true, ForeColor = Color.FromArgb(90, 104, 122), MaximumSize = new Size(440, 0) };
         private readonly Label _status = new Label { AutoSize = true, MaximumSize = new Size(440, 0) };
@@ -48,13 +48,14 @@ namespace OfficeTranslate.WordAddIn
         private Func<TranslationSettings>? _settings;
         private string _language = "zh-CN", _result = "";
         private string _turnQuestion = "", _errorDetails = "";
+        private DateTimeOffset _turnTime;
         private IReadOnlyList<ChatMessage> _turnHistory = new ChatMessage[0];
         private ChatContext? _resultContext;
         private ChatMode _resultMode;
         private bool _written;
         public DocumentChatPane()
         {
-            Font = new Font("Microsoft YaHei UI", 9F); BackColor = Color.FromArgb(247, 249, 252); Size = new Size(420, 650);
+            Font = new Font("Microsoft YaHei UI", 9F); BackColor = Color.FromArgb(240, 244, 250); ForeColor = Color.FromArgb(32, 55, 88); Size = new Size(420, 650);
             DoubleBuffered = true;
             _streamTimer.Tick += (s, e) => FlushOutput();
         }
@@ -131,7 +132,7 @@ namespace OfficeTranslate.WordAddIn
         }
         private void RenderTranscript() => _transcript.ShowConversation(_hasTurn ? _turnHistory : _session.History,
             T("ChatYou"), T("ChatAssistant"), T("ChatEmpty"), _hasTurn ? _turnQuestion : null,
-            _hasTurn ? _renderedOutput : "", ErrorText());
+            _hasTurn ? _renderedOutput : "", ErrorText(), T("ChatUserAvatar"), T("ChatAiAvatar"), _turnTime);
         private string ErrorText() => _errorDetails.Length == 0 ? "" : "\r\n\r\n" + T("ChatErrorDetails") + "\r\n" + _errorDetails;
         private void SetStatus(string key, bool error = false)
         { _statusKey = key; _statusArgs = new object[0]; _statusSuffixes.Clear(); RenderStatus(); _status.ForeColor = error ? Color.FromArgb(190, 45, 45) : Color.FromArgb(90, 104, 122); }
@@ -219,7 +220,7 @@ namespace OfficeTranslate.WordAddIn
                 var settings = diagnosticSettings = _settings(); var context = diagnosticContext = _capture();
                 _displayContext = context; ShowContext();
                 if (string.IsNullOrWhiteSpace(context.Text)) { SetStatus("ChatNoText", true); return; }
-                _turnHistory = _session.History; _turnQuestion = question; _errorDetails = ""; _hasTurn = true;
+                _turnHistory = _session.History; _turnQuestion = question; _turnTime = DateTimeOffset.Now; _errorDetails = ""; _hasTurn = true;
                 _renderedOutput = ""; RenderTranscript(); SetStatus("ChatLoading"); _streamTimer.Start();
                 using (var client = new TranslationClient())
                 {

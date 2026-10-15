@@ -5,6 +5,7 @@
     <Compile Include="..\OfficeTranslate.WordAddIn\DocumentChatPane.cs" Link="Shared\DocumentChatPane.cs" />
     <Compile Include="..\OfficeTranslate.WordAddIn\ChatMarkdown.cs" Link="Shared\ChatMarkdown.cs" />
     <Compile Include="..\OfficeTranslate.WordAddIn\ChatTranscriptBox.cs" Link="Shared\ChatTranscriptBox.cs" />
+    <Compile Include="..\OfficeTranslate.WordAddIn\ChatConversationView.cs" Link="Shared\ChatConversationView.cs" />
     <Compile Include="..\OfficeTranslate.WordAddIn\DocumentChatHost.cs" Link="Shared\DocumentChatHost.cs" />
     <Reference Include="Microsoft.CSharp" />
 

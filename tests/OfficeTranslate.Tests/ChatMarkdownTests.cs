@@ -18,6 +18,7 @@ namespace OfficeTranslate.Tests
         [DataRow("*italic **bold***", "italic bold")]
         [DataRow("`**literal**` and ``a ` b``", "**literal** and a ` b")]
         [DataRow(@"\*literal\* \\ path C:\test\file", @"*literal* \ path C:\test\file")]
+        [DataRow(@"\cf0 \cf3 {\rtf1}", @"\cf0 \cf3 {\rtf1}")]
         [DataRow("**unfinished", "**unfinished")]
         [DataRow("text * unfinished", "text * unfinished")]
         [DataRow("a\r\nb\r\n\r\nc\rd", "a\nb\n\nc\nd")]
@@ -73,38 +74,37 @@ namespace OfficeTranslate.Tests
             });
         }
         [TestMethod]
-        public void Transcript_UpdatesUnclosedMarkupInPlace_AndPreservesPlainQuestionsAndRawHistory()
+        public void Message_UpdatesUnclosedMarkupInPlace_AndPreservesPlainQuestionsAndRawHistory()
         {
             DocumentChatHostTests.Sta(() =>
             {
                 using (var box = new ChatTranscriptBox { Font = new Font("Microsoft YaHei UI", 9F) })
                 {
                     var question = "## user **plain** `code`\n- literal";
-                    box.ShowConversation(new ChatMessage[0], "You", "Assistant", "Empty", question, "", "");
-                    var prefix = box.Text;
+                    box.ShowMessage(question, false);
+                    Assert.AreEqual(question, box.Text);
+                    Select(box, "user **plain**"); Assert.IsFalse(box.SelectionFont!.Bold);
                     foreach (var snapshot in new[] { "## Heading\n**bo", "## Heading\n**bold**", "## Heading\n**bold**\n```cs\ncode", "## Heading\n**bold**\n```cs\ncode\n```\nnormal" })
                     {
-                        box.ShowOutput(snapshot);
-                        Assert.AreEqual(prefix + string.Concat(ChatMarkdown.Parse(snapshot, 18).Select(p => p.Text)), box.Text);
+                        box.ShowMessage(snapshot, true);
+                        Assert.AreEqual(string.Concat(ChatMarkdown.Parse(snapshot, 18).Select(p => p.Text)), box.Text);
                     }
-                    Select(box, "user **plain**"); Assert.IsFalse(box.SelectionFont!.Bold);
                     Select(box, "bold"); Assert.IsTrue(box.SelectionFont!.Bold);
-                    box.ShowOutput("recovered"); Assert.AreEqual(prefix + "recovered", box.Text);
+                    box.ShowMessage("recovered", true);
                     Select(box, "recovered"); Assert.IsFalse(box.SelectionFont!.Bold); Assert.AreEqual(0, box.SelectionIndent);
                     var changes = 0; box.TextChanged += (s, e) => changes++;
-                    box.ShowOutput("recovered"); Assert.AreEqual(0, changes);
-                    box.ShowOutput(""); Assert.AreEqual(prefix, box.Text);
-                    box.ShowOutput("> quote\n\nfinal 😀");
-                    var history = new[] { new ChatMessage("user", question), new ChatMessage("assistant", "**stored**") };
-                    box.ShowConversation(history, "You", "Assistant", "Empty", "next", "*answer*", "\nerror **plain**");
-                    Select(box, "stored"); Assert.IsTrue(box.SelectionFont!.Bold);
+                    box.ShowMessage("recovered", true); Assert.AreEqual(0, changes);
+                    box.ShowMessage("", true); Assert.AreEqual("", box.Text);
+                    var message = new ChatMessage("assistant", "*answer*");
+                    box.ShowMessage(message.Content, true, "\nerror **plain**");
                     Select(box, "answer"); Assert.IsTrue(box.SelectionFont!.Italic);
-                    StringAssert.Contains(box.Text, question); StringAssert.Contains(box.Text, "error **plain**");
-                    Assert.AreEqual("**stored**", history[1].Content);
-                    box.ShowConversation(new[] { new ChatMessage("assistant", "> last quote") }, "You", "Assistant", "Empty", null, "", "");
-                    Select(box, "last quote"); Assert.IsTrue(box.SelectionIndent > 0, "Conversation separators must preserve the final block's paragraph format.");
-                    box.ShowConversation(new ChatMessage[0], "You", "Assistant", "Empty", null, "", "");
-                    Assert.AreEqual("Empty", box.Text);
+                    Select(box, "error **plain**"); Assert.IsFalse(box.SelectionFont!.Bold);
+                    Assert.AreEqual("*answer*", message.Content);
+                    box.ShowMessage("> last quote", true);
+                    Select(box, "last quote"); Assert.IsTrue(box.SelectionIndent > 0);
+                    box.ShowMessage("normal\nplain", true);
+                    box.ShowMessage("normal\n> last quote", true);
+                    Select(box, "last quote"); Assert.IsTrue(box.SelectionIndent > 0);
                 }
             });
         }
@@ -113,10 +113,10 @@ namespace OfficeTranslate.Tests
         {
             DocumentChatHostTests.Sta(() =>
             {
-                const string raw = @"{\rtf1\b attack} <script>alert(1)</script> ![x](https://example.com/x)";
+                const string raw = @"{\rtf1\b attack} \cf0 \cf3 <script>alert(1)</script> ![x](https://example.com/x)";
                 using (var box = new ChatTranscriptBox())
                 {
-                    box.ShowConversation(new ChatMessage[0], "You", "Assistant", "Empty", "question", raw, "");
+                    box.ShowMessage(raw, true);
                     StringAssert.Contains(box.Text, raw); Select(box, "attack"); Assert.IsFalse(box.SelectionFont!.Bold); Assert.IsFalse(box.DetectUrls);
                 }
             });

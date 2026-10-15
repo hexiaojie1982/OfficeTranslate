@@ -1,8 +1,10 @@
 ﻿# OfficeTranslate for Microsoft Office（原生 COM 加载项）
 
-当前版本：**2.3.1.0**。Word / Excel / PowerPoint 的「OCR」识别按钮检测图片文字区域并转录原文，不执行翻译。PowerPoint 支持选中图片或幻灯片（单页、多页），逐页识别其中的图片；Word / Excel 仍仅处理选中图片。
+当前版本：**2.3.2.0**。Word / Excel / PowerPoint 的「OCR」识别按钮检测图片文字区域并转录原文，不执行翻译。PowerPoint 支持选中图片或幻灯片（单页、多页），逐页识别其中的图片；Word / Excel 仍仅处理选中图片。
 
-## 文档内 Chat（2.3.1.0）
+## 文档内 Chat（2.3.2.0）
+
+2.3.2 本地验收版：Word / Excel / PowerPoint 共用左右气泡聊天界面，用户提问为右侧蓝底白字纯文本，AI 回答为左侧白底深蓝 Markdown。每条消息带圆形文字头像与小字时间戳；气泡按内容收缩，最大为会话宽度的 80%，长文本自动换行。沿用 50ms 流式合批，完成的气泡不随 token 重排；翻看历史时不强制跳回底部。界面采用微软雅黑和 `#F0F4FA` 背景，头像文案支持五种 UI 语言。导出继续读取内存中的原始 Markdown。验证见 [聊天气泡验证记录](tests/VALIDATION-2.3.2-CHAT-BUBBLES.md)。
 
 2.3.1 修复：Chat 的 DeepSeek 官方请求与翻译保持一致，显式关闭思考模式；补齐 SSE 边界解析、配置超时与分类错误提示。聊天框显示可复制的安全诊断详情。DeepSeek 专用参数不发送给 vLLM；翻译/OCR 链路未修改。验证见 [2.3.1 修复记录](tests/VALIDATION-2.3.1-DEEPSEEK-CHAT.md)。
 
