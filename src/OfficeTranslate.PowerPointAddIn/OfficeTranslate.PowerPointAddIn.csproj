@@ -3,6 +3,8 @@
   <ItemGroup>
     <Compile Include="..\OfficeTranslate.AddInShared\AddIn.Chat.cs" Link="Shared\AddIn.Chat.cs" />
     <Compile Include="..\OfficeTranslate.WordAddIn\DocumentChatPane.cs" Link="Shared\DocumentChatPane.cs" />
+    <Compile Include="..\OfficeTranslate.WordAddIn\ChatMarkdown.cs" Link="Shared\ChatMarkdown.cs" />
+    <Compile Include="..\OfficeTranslate.WordAddIn\ChatTranscriptBox.cs" Link="Shared\ChatTranscriptBox.cs" />
     <Compile Include="..\OfficeTranslate.WordAddIn\DocumentChatHost.cs" Link="Shared\DocumentChatHost.cs" />
 
     <ProjectReference Include="..\OfficeTranslate.Core\OfficeTranslate.Core.csproj" />

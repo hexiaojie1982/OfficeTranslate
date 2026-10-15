@@ -11,9 +11,11 @@ namespace OfficeTranslate.Core
     public enum ChatWriteAction { ReplaceSelection, InsertBelow, InsertAtStart }
     public sealed class ChatMessage
     {
-        public ChatMessage(string role, string content) { Role = role; Content = content; }
+        public ChatMessage(string role, string content) : this(role, content, DateTimeOffset.Now) { }
+        public ChatMessage(string role, string content, DateTimeOffset timestamp) { Role = role; Content = content; Timestamp = timestamp; }
         public string Role { get; }
         public string Content { get; }
+        public DateTimeOffset Timestamp { get; }
     }
     // The host captures the target before any await. No document text is logged or persisted.
     public sealed class ChatContext
@@ -117,7 +119,8 @@ namespace OfficeTranslate.Core
             {
                 token.ThrowIfCancellationRequested();
                 if (generation != _generation) throw new OperationCanceledException("Chat session cleared.");
-                _history.Add(new ChatMessage("user", question)); _history.Add(new ChatMessage("assistant", reply.Text));
+                var timestamp = DateTimeOffset.Now;
+                _history.Add(new ChatMessage("user", question, timestamp)); _history.Add(new ChatMessage("assistant", reply.Text, timestamp));
                 if (_history.Count > 20) _history.RemoveRange(0, _history.Count - 20);
             }
             return new ChatReply(reply.Text, usedFallback || reply.UsedFallback, summarized);

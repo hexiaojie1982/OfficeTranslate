@@ -26,5 +26,7 @@
     <Compile Include="..\..\src\OfficeTranslate.WordAddIn\TranslationResultForm.cs" Link="Shared\TranslationResultForm.cs" />
     <Compile Include="..\..\src\OfficeTranslate.WordAddIn\TranslationErrorDialog.cs" Link="Shared\TranslationErrorDialog.cs" />
     <Compile Include="..\..\src\OfficeTranslate.WordAddIn\UiText.cs" Link="Shared\UiText.cs" />
+    <Compile Include="..\..\src\OfficeTranslate.WordAddIn\ChatMarkdown.cs" Link="Shared\ChatMarkdown.cs" />
+    <Compile Include="..\..\src\OfficeTranslate.WordAddIn\ChatTranscriptBox.cs" Link="Shared\ChatTranscriptBox.cs" />
   </ItemGroup>
 </Project>

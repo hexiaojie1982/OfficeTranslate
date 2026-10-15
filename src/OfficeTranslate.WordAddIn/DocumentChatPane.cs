@@ -2,6 +2,8 @@ using OfficeTranslate.Core;
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.Globalization;
+using System.IO;
 using System.Text;
 using System.Runtime.InteropServices;
 using System.Threading;
@@ -22,7 +24,7 @@ namespace OfficeTranslate.WordAddIn
     public sealed class DocumentChatPane : UserControl
     {
         private readonly DocumentChatSession _session = new DocumentChatSession();
-        private readonly TextBox _transcript = new TextBox { Multiline = true, ScrollBars = ScrollBars.Vertical, AutoSize = false, ReadOnly = true, Dock = DockStyle.Fill, MaxLength = 0, BackColor = Color.White, BorderStyle = BorderStyle.FixedSingle };
+        private readonly ChatTranscriptBox _transcript = new ChatTranscriptBox { Multiline = true, AutoSize = false, ReadOnly = true, Dock = DockStyle.Fill, MaxLength = 0, BackColor = Color.White, BorderStyle = BorderStyle.FixedSingle };
         private readonly TextBox _input = new TextBox { Multiline = true, ScrollBars = ScrollBars.Vertical, Dock = DockStyle.Fill, MaxLength = 0 };
         private readonly Label _context = new Label { AutoSize = true, ForeColor = Color.FromArgb(90, 104, 122), MaximumSize = new Size(440, 0) };
         private readonly Label _status = new Label { AutoSize = true, MaximumSize = new Size(440, 0) };
@@ -41,6 +43,7 @@ namespace OfficeTranslate.WordAddIn
         private CancellationTokenSource? _pending;
         internal ChatTransport? Transport { get; set; }
         internal Func<ChatWriteAction, bool>? ConfirmWrite { get; set; }
+        internal Func<SaveFileDialog, DialogResult>? ExportDialog { get; set; }
         private Func<ChatContext>? _capture;
         private Func<TranslationSettings>? _settings;
         private string _language = "zh-CN", _result = "";
@@ -67,6 +70,7 @@ namespace OfficeTranslate.WordAddIn
             _commands.Controls.Add(functions, 0, 0); _commands.Controls.Add(operations, 0, 1);
             AddButton(functions, "ChatSummary", () => Start(ChatMode.Summarize), true); AddButton(functions, "ChatRewrite", () => Start(ChatMode.Rewrite), true);
             AddButton(operations, "ChatClear", Clear); AddButton(operations, "ChatRefresh", RefreshContext);
+            AddButton(operations, "ChatExport", Export);
             AddButton(operations, "ChatSettings", () => { using (var form = new ChatSettingsForm(new SettingsStore())) form.ShowDialog(this); RefreshLanguage(); });
             root.Controls.Add(_commands, 0, 2); root.Controls.Add(_transcript, 0, 3); root.Controls.Add(_writes, 0, 4); root.Controls.Add(_status, 0, 5);
             root.Controls.Add(new Label { Tag = "ChatInputHint", Text = T("ChatInputHint"), AutoSize = true }, 0, 6);
@@ -125,16 +129,9 @@ namespace OfficeTranslate.WordAddIn
                 Localize(control.Controls);
             }
         }
-        private string _prefix = "";
-        private void RenderTranscript()
-        {
-            var text = new StringBuilder();
-            foreach (var message in _hasTurn ? _turnHistory : _session.History)
-                text.Append(T(message.Role == "user" ? "ChatYou" : "ChatAssistant")).Append("\r\n").Append(message.Content).Append("\r\n\r\n");
-            if (_hasTurn) text.Append(T("ChatYou")).Append("\r\n").Append(_turnQuestion).Append("\r\n\r\n").Append(T("ChatAssistant")).Append("\r\n");
-            _prefix = text.ToString();
-            _transcript.Text = (_prefix.Length == 0 ? T("ChatEmpty") : _prefix) + (_hasTurn ? _renderedOutput : "") + ErrorText();
-        }
+        private void RenderTranscript() => _transcript.ShowConversation(_hasTurn ? _turnHistory : _session.History,
+            T("ChatYou"), T("ChatAssistant"), T("ChatEmpty"), _hasTurn ? _turnQuestion : null,
+            _hasTurn ? _renderedOutput : "", ErrorText());
         private string ErrorText() => _errorDetails.Length == 0 ? "" : "\r\n\r\n" + T("ChatErrorDetails") + "\r\n" + _errorDetails;
         private void SetStatus(string key, bool error = false)
         { _statusKey = key; _statusArgs = new object[0]; _statusSuffixes.Clear(); RenderStatus(); _status.ForeColor = error ? Color.FromArgb(190, 45, 45) : Color.FromArgb(90, 104, 122); }
@@ -165,9 +162,7 @@ namespace OfficeTranslate.WordAddIn
             lock (_streamSync) { text = _queuedOutput; _queuedOutput = null; recovering = _recovering; _recovering = false; }
             if (IsDisposed || text == null) return;
             if (recovering) SetStatus("ChatRecovering");
-            if (text.StartsWith(_renderedOutput, StringComparison.Ordinal)) _transcript.AppendText(text.Substring(_renderedOutput.Length));
-            else { _transcript.SelectionStart = _prefix.Length; _transcript.SelectionLength = _transcript.TextLength - _prefix.Length; _transcript.SelectedText = text; }
-            _renderedOutput = text;
+            _transcript.ShowOutput(text); _renderedOutput = text;
         }
         private void EndStream(bool flush)
         {
@@ -180,6 +175,34 @@ namespace OfficeTranslate.WordAddIn
         { while (_writes.Controls.Count > 0) { var control = _writes.Controls[0]; _writes.Controls.RemoveAt(0); control.Dispose(); } }
         private void Clear()
         { if (_pending != null) return; _session.Clear(); _hasTurn = false; _renderedOutput = _result = _turnQuestion = _errorDetails = ""; _turnHistory = new ChatMessage[0]; _resultContext = null; RenderTranscript(); ClearWrites(); SetStatus("ChatCleared"); }
+        private void Export()
+        {
+            RefreshLanguage();
+            var history = _session.History;
+            if (history.Count == 0) { SetStatus("ChatExportEmpty"); return; }
+            try
+            {
+                using (var dialog = new SaveFileDialog
+                {
+                    Title = T("ChatExportTitle"), Filter = T("ChatExportFilter"), FilterIndex = 1,
+                    DefaultExt = "md", AddExtension = true, OverwritePrompt = true, RestoreDirectory = true,
+                    FileName = string.Format(CultureInfo.InvariantCulture, T("ChatExportFileName"), DateTime.Now)
+                })
+                {
+                    if ((ExportDialog != null ? ExportDialog(dialog) : dialog.ShowDialog(this)) != DialogResult.OK) return;
+                    var markdown = dialog.FilterIndex == 1;
+                    File.WriteAllText(dialog.FileName, ChatTranscriptExport.Format(history, markdown, T), new UTF8Encoding(true));
+                    SetStatus("ChatExportSuccess");
+                }
+            }
+            catch (Exception ex)
+            {
+                // Never display/log raw filesystem errors: they may include paths, account data or content.
+                SetStatus("ChatExportFailed", true);
+                AppendStatus(ex is UnauthorizedAccessException || ex is System.Security.SecurityException ? "ChatExportAccessError" :
+                    ex is IOException ? "ChatExportIoError" : ex is ArgumentException || ex is NotSupportedException ? "ChatExportPathError" : "ChatExportUnknownError");
+            }
+        }
         private async void Start(ChatMode mode)
         {
             if (_pending != null || _capture == null || _settings == null) return;
