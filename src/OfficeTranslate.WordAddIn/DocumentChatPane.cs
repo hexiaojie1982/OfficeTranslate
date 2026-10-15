@@ -85,10 +85,11 @@ namespace OfficeTranslate.WordAddIn
             if (string.IsNullOrWhiteSpace(question)) { SetStatus("ChatNeedInput", true); return; }
             var ui = OfficeUiDispatcher.Capture("Chat");
             var cancellation = new CancellationTokenSource(); _pending = cancellation;
+            TranslationSettings? diagnosticSettings = null; ChatContext? diagnosticContext = null;
             _commands.Enabled = false; _cancel.Enabled = true; ClearWrites(); _resultContext = null; _result = "";
             try
             {
-                var context = _capture(); var settings = _settings();
+                var context = diagnosticContext = _capture(); var settings = diagnosticSettings = _settings();
                 _context.Text = string.Format(T("ChatContext"), T(context.IsSelection ? "ChatSelected" : "ChatFull"), context.Text.Trim().Length);
                 if (string.IsNullOrWhiteSpace(context.Text)) { SetStatus("ChatNoText", true); return; }
                 _prefix = "";
@@ -118,7 +119,10 @@ namespace OfficeTranslate.WordAddIn
             }
             catch (Exception) when (cancellation.IsCancellationRequested) { ui.Invoke(() => { if (!IsDisposed) SetStatus("ChatCancelled"); }); }
             // Server bodies may echo private input or keys. Never display/log raw exception messages.
-            catch { ui.Invoke(() => { if (!IsDisposed) SetStatus("ChatError", true); }); }
+            catch (Exception ex) { ui.Invoke(() => { if (!IsDisposed) {
+                SetStatus(ChatErrors.UiKey(ex), true);
+                _transcript.AppendText("\r\n\r\n" + T("ChatErrorDetails") + "\r\n" + ChatErrors.Describe(ex, diagnosticSettings, diagnosticContext?.Text ?? "", question));
+            } }); }
             finally { ui.Invoke(() => { if (!IsDisposed) { _commands.Enabled = true; _cancel.Enabled = false; } _pending = null; }); cancellation.Dispose(); }
         }
         private void BuildWrites()

@@ -73,9 +73,9 @@ namespace OfficeTranslate.Tests
         public async Task NonReducingSummariesAndOversizeQuestion_FailWithoutHistory()
         {
             var session = new DocumentChatSession();
-            await Assert.ThrowsExceptionAsync<InvalidOperationException>(() => session.SendAsync(new ChatContext(new string('a', 20000), false), "Q", ChatMode.Question, Settings(),
+            await Assert.ThrowsExceptionAsync<ChatException>(() => session.SendAsync(new ChatContext(new string('a', 20000), false), "Q", ChatMode.Question, Settings(),
                 (m,s,n,o,t) => Task.FromResult(new ChatReply(m.Last().Content, false)), _=>{}, (i,n)=>{}, CancellationToken.None));
-            await Assert.ThrowsExceptionAsync<InvalidOperationException>(() => session.SendAsync(new ChatContext("doc", false), new string('x', 9000), ChatMode.Question, Settings(),
+            await Assert.ThrowsExceptionAsync<ChatException>(() => session.SendAsync(new ChatContext("doc", false), new string('x', 9000), ChatMode.Question, Settings(),
                 (m,s,n,o,t) => throw new AssertFailedException("No HTTP expected"), _=>{}, (i,n)=>{}, CancellationToken.None));
             Assert.AreEqual(0, session.History.Count);
         }
@@ -129,7 +129,7 @@ namespace OfficeTranslate.Tests
         [DataRow("data: {\"error\":{}}\n\n")]
         [DataRow("data: {\"choices\":[{\"finish_reason\":\"length\"}]}\n\ndata: [DONE]\n\n")]
         public async Task Sse_RejectsEmptyInterruptedErrorAndTruncated(string wire)
-        { await Assert.ThrowsExceptionAsync<InvalidDataException>(()=>ChatSseParser.ReadAsync(new StringReader(wire), _=>{}, CancellationToken.None)); }
+        { await Assert.ThrowsExceptionAsync<ChatException>(()=>ChatSseParser.ReadAsync(new StringReader(wire), _=>{}, CancellationToken.None)); }
         private sealed class Handler : HttpMessageHandler
         {
             public readonly List<Dictionary<string,object>> Bodies = new List<Dictionary<string,object>>();
@@ -154,8 +154,8 @@ namespace OfficeTranslate.Tests
         [DataRow("length")] [DataRow("content_filter")]
         public async Task Transport_OrdinaryRecoveryRejectsPartialOutput(string reason)
         {
-            var handler=new Handler { Reply=(i,t)=>i==1?Response("{}",status:HttpStatusCode.BadRequest):Response("{\"choices\":[{\"message\":{\"content\":\"partial\"},\"finish_reason\":\""+reason+"\"}]}") };
-            using(var client=new TranslationClient(handler)) await Assert.ThrowsExceptionAsync<InvalidDataException>(()=>client.ChatAsync(new[]{new ChatMessage("user","Q")},Settings(),512,_=>{},CancellationToken.None));
+            var handler=new Handler { Reply=(i,t)=>i==1?Response("{}"):Response("{\"choices\":[{\"message\":{\"content\":\"partial\"},\"finish_reason\":\""+reason+"\"}]}") };
+            using(var client=new TranslationClient(handler)) await Assert.ThrowsExceptionAsync<ChatException>(()=>client.ChatAsync(new[]{new ChatMessage("user","Q")},Settings(),512,_=>{},CancellationToken.None));
             Assert.AreEqual(2,handler.Bodies.Count);
         }
         [TestMethod]
@@ -171,7 +171,7 @@ namespace OfficeTranslate.Tests
         public async Task Transport_UnsupportedSseAndOllamaUseOrdinaryCompletion()
         {
             foreach (var ollama in new[]{false,true}) {
-                var handler = new Handler { Reply = (i,t) => ollama ? Response("{\"message\":{\"content\":\"ollama\"},\"done\":true,\"done_reason\":\"stop\"}") : i==1 ? Response("{}",status:HttpStatusCode.BadRequest) : Response("{\"choices\":[{\"message\":{\"content\":\"recovered\"}}]}") };
+                var handler = new Handler { Reply = (i,t) => ollama ? Response("{\"message\":{\"content\":\"ollama\"},\"done\":true,\"done_reason\":\"stop\"}") : i==1 ? Response("{}") : Response("{\"choices\":[{\"message\":{\"content\":\"recovered\"}}]}") };
                 var settings=Settings(); if(ollama) settings.Provider=ProviderKind.Ollama;
                 using(var client=new TranslationClient(handler)) { var result=await client.ChatAsync(new[]{new ChatMessage("user","Q")},settings,512,_=>{},CancellationToken.None); Assert.IsTrue(result.UsedFallback); Assert.AreEqual(ollama?1:2,handler.Bodies.Count); }
             }

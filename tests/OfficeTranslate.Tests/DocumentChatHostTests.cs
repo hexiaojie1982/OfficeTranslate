@@ -97,7 +97,7 @@ namespace OfficeTranslate.Tests
             var pane=assembly.GetType("OfficeTranslate.WordAddIn.DocumentChatPane",true)!; Assert.IsTrue(typeof(UserControl).IsAssignableFrom(pane));
             Assert.AreEqual("OfficeTranslate."+host+"ChatPane",pane.GetCustomAttribute<System.Runtime.InteropServices.ProgIdAttribute>()!.Value);
             using(var stream=assembly.GetManifestResourceStream("OfficeTranslate."+host+"AddIn.Ribbon.xml")) using(var reader=new StreamReader(stream!)) StringAssert.Contains(reader.ReadToEnd(),"onAction=\"OpenChat\"");
-            Assert.AreEqual(new Version(2,3,0,0),assembly.GetName().Version);
+            Assert.AreEqual(new Version(2,3,1,0),assembly.GetName().Version);
         }
         internal static void Sta(Action action)
         {
@@ -130,9 +130,34 @@ namespace OfficeTranslate.Tests
                 ((Button)writes.Controls[0]).PerformClick(); Assert.AreEqual(1,writeCount); Assert.IsFalse(writes.Enabled);
                 ((Button)writes.Controls[0]).PerformClick(); Assert.AreEqual(1,writeCount);
                 type.GetMethod("Clear",BindingFlags.NonPublic|BindingFlags.Instance)!.Invoke(pane,null); Assert.AreEqual(0,writes.Controls.Count);
-                ChatTransport failed=(m,s,n,o,t)=>throw new IOException("SECRET BODY MUST NOT DISPLAY");type.GetProperty("Transport",BindingFlags.NonPublic|BindingFlags.Instance)!.SetValue(pane,failed);
+                settings.ApiKey="SECRET KEY MUST NOT DISPLAY";
+                ChatTransport failed=(m,s,n,o,t)=>throw new IOException("Read failed: "+target.Text+" "+settings.ApiKey);type.GetProperty("Transport",BindingFlags.NonPublic|BindingFlags.Instance)!.SetValue(pane,failed);
                 type.GetMethod("Start",BindingFlags.NonPublic|BindingFlags.Instance)!.Invoke(pane,new object[]{ChatMode.Summarize}); Pump(()=>Field(type,pane,"_pending")==null);
                 Assert.AreEqual(0,writes.Controls.Count); Assert.IsFalse(((Label)Field(type,pane,"_status")).Text.Contains("SECRET"));
+                Assert.IsFalse(transcript.Text.Contains("SECRET")); StringAssert.Contains(transcript.Text,"IOException: Read failed: [redacted] [redacted]");
+                form.Close();
+            }
+        }); }
+        [DataTestMethod]
+        [DataRow("Word", "zh-CN", ChatFailure.Authentication, "ChatAuthError")]
+        [DataRow("Excel", "en", ChatFailure.Network, "ChatNetworkError")]
+        [DataRow("PowerPoint", "en", ChatFailure.Model, "ChatModelError")]
+        [DataRow("Word", "en", ChatFailure.Budget, "ChatBudgetError")]
+        public void Pane_ClassifiesErrorsAndShowsCopyableSafeDetails(string host,string language,ChatFailure failure,string key)
+        { Sta(()=>{
+            var type=Host(host).GetType("OfficeTranslate.WordAddIn.DocumentChatPane",true)!;
+            using(var pane=(UserControl)Activator.CreateInstance(type)!) using(var form=new Form()) {
+                var settings=new TranslationSettings {UiLanguage=language};
+                type.GetMethod("Initialize",BindingFlags.Instance|BindingFlags.NonPublic)!.Invoke(pane,new object[]{(Func<ChatContext>)(()=>new ChatContext("document",false)),(Func<TranslationSettings>)(()=>settings)});
+                form.Controls.Add(pane); form.Show(); Application.DoEvents();
+                ChatTransport failed=(m,s,n,o,t)=>throw new ChatException(failure,"HTTP 401: fixture diagnosis.");
+                type.GetProperty("Transport",BindingFlags.NonPublic|BindingFlags.Instance)!.SetValue(pane,failed);
+                type.GetMethod("Start",BindingFlags.NonPublic|BindingFlags.Instance)!.Invoke(pane,new object[]{ChatMode.Summarize});
+                Pump(()=>Field(type,pane,"_pending")==null);
+                Assert.AreEqual(OfficeTranslate.WordAddIn.UiText.Get(language,key),((Label)Field(type,pane,"_status")).Text);
+                StringAssert.Contains(((TextBox)Field(type,pane,"_transcript")).Text,"ChatException: HTTP 401: fixture diagnosis.");
+                Assert.AreEqual(0,((FlowLayoutPanel)Field(type,pane,"_writes")).Controls.Count);
+                Assert.AreEqual(0,((DocumentChatSession)Field(type,pane,"_session")).History.Count);
                 form.Close();
             }
         }); }
