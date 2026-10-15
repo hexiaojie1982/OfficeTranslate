@@ -48,6 +48,7 @@
         </group>
         <group id="OfficeTranslate.ToolsGroup" getLabel="GetRibbonLabel">
           <box id="OfficeTranslate.ToolRow" boxStyle="horizontal">
+            <button id="OfficeTranslate.Chat" getLabel="GetRibbonLabel" size="large" imageMso="ReviewNewComment" onAction="OpenChat" />
             <button id="OfficeTranslate.Settings" getLabel="GetRibbonLabel" size="large" getImage="GetRibbonImage" onAction="OpenSettings" />
           </box>
         </group>

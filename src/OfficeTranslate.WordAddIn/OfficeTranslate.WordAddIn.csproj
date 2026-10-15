@@ -3,6 +3,7 @@
     <TargetFramework>net48</TargetFramework>
     <OutputType>Library</OutputType>
     <UseWindowsForms>true</UseWindowsForms>
+    <DefineConstants>$(DefineConstants);WORD</DefineConstants>
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <AssemblyName>OfficeTranslate.WordAddIn</AssemblyName>
@@ -10,6 +11,9 @@
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="..\OfficeTranslate.AddInShared\AddIn.Chat.cs" Link="Shared\AddIn.Chat.cs" />
+    <Reference Include="Microsoft.CSharp" />
+
     <ProjectReference Include="..\OfficeTranslate.Core\OfficeTranslate.Core.csproj" />
     <PackageReference Include="Microsoft.Office.Interop.Word" Version="15.0.4797.1004" />
     <Reference Include="Extensibility">

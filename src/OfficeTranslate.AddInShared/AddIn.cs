@@ -26,7 +26,7 @@ namespace OfficeTranslate.PowerPointAddIn
     [ProgId("OfficeTranslate.PowerPointAddIn")]
 #endif
     [ClassInterface(ClassInterfaceType.AutoDispatch)]
-    public sealed class AddIn : Extensibility.IDTExtensibility2, Microsoft.Office.Core.IRibbonExtensibility
+    public sealed partial class AddIn : Extensibility.IDTExtensibility2, Microsoft.Office.Core.IRibbonExtensibility
     {
         private HostApplication? _host;
         private Microsoft.Office.Core.IRibbonUI? _ribbon;
@@ -56,7 +56,7 @@ namespace OfficeTranslate.PowerPointAddIn
         public bool GetImageOcrVisible(Microsoft.Office.Core.IRibbonControl c) => true;
         public string GetRibbonLabel(Microsoft.Office.Core.IRibbonControl c)
         {
-            var id = c.Id; var key = id.EndsWith("LanguageGroup") ? "LanguageGroup" : id.EndsWith("TranslateGroup") ? "TranslateGroup" : id.EndsWith("ToolsGroup") ? "ToolsGroup" : id.EndsWith("SwapLanguages") ? "Swap" : id.EndsWith("Selection") ? "Selection" : id.EndsWith("Document") ? "Document" : id.EndsWith("Bilingual") ? "Bilingual" : id.EndsWith("ImageOcr") ? "ImageOcr" : id.EndsWith("Cancel") ? "Cancel" : "Settings";
+            var id = c.Id; var key = id.EndsWith("LanguageGroup") ? "LanguageGroup" : id.EndsWith("TranslateGroup") ? "TranslateGroup" : id.EndsWith("ToolsGroup") ? "ToolsGroup" : id.EndsWith("SwapLanguages") ? "Swap" : id.EndsWith("Selection") ? "Selection" : id.EndsWith("Document") ? "Document" : id.EndsWith("Bilingual") ? "Bilingual" : id.EndsWith("ImageOcr") ? "ImageOcr" : id.EndsWith("Cancel") ? "Cancel" : id.EndsWith("Chat") ? "Chat" : "Settings";
             var value = UiText.Get(_settings.UiLanguage, key); return _settings.UiLanguage == "en" ? value : string.Join("\u2060", value.ToCharArray());
         }
         public void SelectSourceLanguage(Microsoft.Office.Core.IRibbonControl c) { _settings.SourceLanguage = c.Tag; _ribbon?.InvalidateControl("OfficeTranslate.SourceLanguageMenu"); }
@@ -232,8 +232,8 @@ namespace OfficeTranslate.PowerPointAddIn
             public IntPtr Handle { get; }
         }
         public void OnConnection(object application, Extensibility.ext_ConnectMode mode, object instance, ref Array custom) { System.Windows.Forms.Application.EnableVisualStyles(); _host = (HostApplication)application; _settings = _store.Load(); }
-        public void OnDisconnection(Extensibility.ext_DisconnectMode mode, ref Array custom) { _cancellation?.Cancel(); CloseProgress(); _host = null; }
-        public void OnAddInsUpdate(ref Array custom) { } public void OnStartupComplete(ref Array custom) { } public void OnBeginShutdown(ref Array custom) { _cancellation?.Cancel(); CloseProgress(); }
+        public void OnDisconnection(Extensibility.ext_DisconnectMode mode, ref Array custom) { CloseChat(); _cancellation?.Cancel(); CloseProgress(); _host = null; }
+        public void OnAddInsUpdate(ref Array custom) { } public void OnStartupComplete(ref Array custom) { } public void OnBeginShutdown(ref Array custom) { CloseChat(); _cancellation?.Cancel(); CloseProgress(); }
 
     }
 }

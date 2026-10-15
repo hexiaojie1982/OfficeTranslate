@@ -1,6 +1,11 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup><TargetFramework>net48</TargetFramework><OutputType>Library</OutputType><UseWindowsForms>true</UseWindowsForms><LangVersion>latest</LangVersion><Nullable>enable</Nullable><AssemblyName>OfficeTranslate.ExcelAddIn</AssemblyName><RootNamespace>OfficeTranslate.ExcelAddIn</RootNamespace><GenerateAssemblyInfo>false</GenerateAssemblyInfo></PropertyGroup>
   <ItemGroup>
+    <Compile Include="..\OfficeTranslate.AddInShared\AddIn.Chat.cs" Link="Shared\AddIn.Chat.cs" />
+    <Compile Include="..\OfficeTranslate.WordAddIn\DocumentChatPane.cs" Link="Shared\DocumentChatPane.cs" />
+    <Compile Include="..\OfficeTranslate.WordAddIn\DocumentChatHost.cs" Link="Shared\DocumentChatHost.cs" />
+    <Reference Include="Microsoft.CSharp" />
+
     <ProjectReference Include="..\OfficeTranslate.Core\OfficeTranslate.Core.csproj" />
     <Reference Include="Microsoft.Office.Interop.Excel"><HintPath>C:\Windows\assembly\GAC_MSIL\Microsoft.Office.Interop.Excel\15.0.0.0__71e9bce111e9429c\Microsoft.Office.Interop.Excel.dll</HintPath><EmbedInteropTypes>false</EmbedInteropTypes><Private>false</Private></Reference>
     <Reference Include="Extensibility"><HintPath>C:\Windows\assembly\GAC\Extensibility\7.0.3300.0__b03f5f7f11d50a3a\Extensibility.dll</HintPath><Private>false</Private></Reference>
