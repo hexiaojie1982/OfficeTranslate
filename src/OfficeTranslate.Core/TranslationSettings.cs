@@ -32,6 +32,12 @@ namespace OfficeTranslate.Core
         public string Glossary { get; set; } = string.Empty;
         public int MaxCharactersPerChunk { get; set; } = 5000;
         public int TimeoutSeconds { get; set; } = 120;
+        private string? _chatQuestionPrompt, _chatSummaryPrompt, _chatRewritePrompt;
+        public string ChatQuestionSystemPrompt { get => ChatPrompts.Resolve(UiLanguage, ChatMode.Question, _chatQuestionPrompt); set => _chatQuestionPrompt = value; }
+        public string ChatSummarySystemPrompt { get => ChatPrompts.Resolve(UiLanguage, ChatMode.Summarize, _chatSummaryPrompt); set => _chatSummaryPrompt = value; }
+        public string ChatRewriteSystemPrompt { get => ChatPrompts.Resolve(UiLanguage, ChatMode.Rewrite, _chatRewritePrompt); set => _chatRewritePrompt = value; }
+        public int ChatContextTokens { get; set; } = 8192;
+        public int ChatOutputTokens { get; set; } = 1024;
         public int MaxParallelCells { get; set; } = 4;
 
         public void Validate()

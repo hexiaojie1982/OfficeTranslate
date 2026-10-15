@@ -16,7 +16,7 @@ namespace OfficeTranslate.WordAddIn
     [Guid("7898D80A-8CB7-4E18-9D52-3DC5901786D7")]
     [ProgId("OfficeTranslate.WordAddIn")]
     [ClassInterface(ClassInterfaceType.AutoDispatch)]
-    public sealed class AddIn : Extensibility.IDTExtensibility2, Microsoft.Office.Core.IRibbonExtensibility
+    public sealed partial class AddIn : Extensibility.IDTExtensibility2, Microsoft.Office.Core.IRibbonExtensibility
     {
         private WordApplication? _word;
         private Microsoft.Office.Core.IRibbonUI? _ribbon;
@@ -43,7 +43,7 @@ namespace OfficeTranslate.WordAddIn
                 id.EndsWith("ToolsGroup") ? "ToolsGroup" : id.EndsWith("SwapLanguages") ? "Swap" :
                 id.EndsWith("Selection") ? "Selection" : id.EndsWith("Document") ? "Document" :
                 id.EndsWith("Bilingual") ? "Bilingual" : id.EndsWith("ImageOcr") ? "ImageOcr" :
-                id.EndsWith("Cancel") ? "Cancel" : "Settings";
+                id.EndsWith("Cancel") ? "Cancel" : id.EndsWith("Chat") ? "Chat" : "Settings";
             var value = UiText.Get(_settings.UiLanguage, key);
             return _settings.UiLanguage == "en" ? value : string.Join("\u2060", value.ToCharArray());
         }
@@ -406,10 +406,11 @@ namespace OfficeTranslate.WordAddIn
             _settings = _settingsStore.Load();
             _settings.SourceLanguage = source; _settings.TargetLanguage = target; _settings.BilingualMode = bilingual;
             _settings.ImageOcrEnabled = imageOcr;
+            RefreshChatLanguage();
         }
-        public void OnDisconnection(Extensibility.ext_DisconnectMode removeMode, ref Array custom) { _cancellation?.Cancel(); _progressForm?.CloseSafely(); _word = null; }
+        public void OnDisconnection(Extensibility.ext_DisconnectMode removeMode, ref Array custom) { CloseChat(); _cancellation?.Cancel(); _progressForm?.CloseSafely(); _word = null; }
         public void OnAddInsUpdate(ref Array custom) { }
         public void OnStartupComplete(ref Array custom) { }
-        public void OnBeginShutdown(ref Array custom) { _cancellation?.Cancel(); _progressForm?.CloseSafely(); }
+        public void OnBeginShutdown(ref Array custom) { CloseChat(); _cancellation?.Cancel(); _progressForm?.CloseSafely(); }
     }
 }
