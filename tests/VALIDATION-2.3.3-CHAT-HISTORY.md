@@ -9,6 +9,8 @@
 - 路径：`%APPDATA%\OfficeTranslate\ChatHistory\<SessionId>.json`。SessionId 为 GUID 的 N 格式（32 位十六进制）。UTF-8 无 BOM；一个会话一个文件。
 - 每轮读入已有 JSON 并追加问答，写同目录临时文件，再用 `File.Replace` 原子替换；初次保存用 `File.Move`。没有独立索引文件。
 - JSON 中时间使用 ISO 8601 `O` 格式，保留时区。`CreatedAt` 为首轮完整问答完成时间，`DocumentName` 为该轮捕获的文档名。读取名称失败时为空，不阻断问答。
+- `SchemaVersion` 为 2，`Host` 由宿主显式传入，值为 Word/Excel/PowerPoint，未保存、无扩展名的文档也能识别。首轮成功问答的来源随保存失败重试保留，清空后重新捕获。读取兼容版本 1；缺少 Host 时按 `.doc/.docx`、`.xls/.xlsx`、`.ppt/.pptx` 推断（忽略大小写），无法推断时留空。只读打开不改写旧 JSON，追加时升级为版本 2。不支持的格式版本按无法读取的文件跳过并提示。
+- 历史列表首列显示「来源应用」：蓝色 Word、绿色 Excel、橙色 PowerPoint 文字，其他列保留默认文字颜色；不引入外部图片。列标题通过 UiText 覆盖简体/繁体中文、韩文、日文、英文。
 - `Question` 为实际用户提问或总结/改写请求，`Answer` 保留 AI 回答原文，包括 Markdown 与原始换行。详情视图仅为 WinForms 显示转换 CRLF，不修改 JSON。
 - 活跃会话仍仅保留最近 10 轮供展示、导出及模型上下文使用；完整历史从磁盘读取，不自动恢复到模型上下文。历史窗口按创建时间倒序显示时间、文档名及首问最多 100 个字符预览，可只读查看全部轮次。
 - 单条删除与清空全部均需确认，默认选「否」。清空全部只删除专用目录顶层 JSON 文件，包含损坏的历史文件；不递归删除目录或其他类型文件。删除活跃会话的历史后，下一轮只保存此后新增轮次，不从内存恢复之前已删除轮次；活跃内存仍受「清空」按钮控制。
@@ -20,10 +22,11 @@
 
 ```json
 {
-  "SchemaVersion": 1,
+  "SchemaVersion": 2,
   "SessionId": "1cd052d6268b48e9a0d5ebdd3026c246",
   "CreatedAt": "2026-10-16T12:30:00.0000000+08:00",
   "DocumentName": "报告.docx",
+  "Host": "Word",
   "Turns": [
     {
       "Timestamp": "2026-10-16T12:30:00.0000000+08:00",
@@ -63,3 +66,16 @@
 证据目录（git 忽略）：`TestResults/chat-history-2.3.3/`。构建命令：`./build.ps1 -Configuration Release`（含 WiX MSI）。全量测试：`dotnet test OfficeTranslate.Word.sln -c Release --no-build --no-restore`。使用项目本地 `DOTNET_CLI_HOME=dotnet-home`、`NUGET_PACKAGES=packages`。
 
 验证边界：真实编译的三宿主控件与窗体在 STA 消息循环中运行，文档和模型使用隔离夹具。没有安装候选版本、调用真实模型或修改真实用户历史；真实 Office 功能区打开侧栏及其他设备/DPI 的人工验收仍需安装后进行。
+
+## 来源应用标识追加验证（2026-10-16）
+
+基于 `feat/chat-history` 的 `c7fb415`，版本按要求保持 **2.3.3.0**。
+
+- Release 构建：`./build.ps1 -Configuration Release -SkipInstaller`，**0 错误、7 条既有 nullable 警告**，新增代码无编译警告。本次未生成安装包、未安装。
+- 交互桌面全量测试：**713/713 通过，0 失败、0 跳过**，约 1 分 38 秒，退出码 0，`SessionId=1; UserInteractive=True`。
+- 在原有 685 项基础上新增 28 项：三宿主显式 Host 保存/读回、失败重试和清空后重新捕获（3）；六种扩展名、大小写、空名及未知扩展名的版本 1 兼容、只读不改写和追加升级（9）；版本 2 缺少 Host 兼容及未知格式版本跳过（1）；三宿主、五种界面的混合来源列表、彩色首列及旧记录推断（15）。另扩展既有三宿主适配器测试，断言选中内容和全文路径均传入正确 Host。
+- 新增未知格式版本测试首次发现 `InvalidDataException` 未被存储错误筛选捕获，导致列表不能跳过该文件；已修正并通过最终全量复测。首次结果为 712/713，保留于 `initial-desktop.log/.trx/.exit`。
+- 三宿主五语言列表截图已生成，已人工检查简体中文、繁体中文与英文截图，来源标签与后续列显示正常。未知来源保留空白，三宿主共用原存储目录，无外部图片资源。
+- Core、Word、Excel、PowerPoint 的程序集版本及文件版本均为 **2.3.3.0**。`git diff --check` 通过。仅本地修改，未 push、未合并、未发布。
+
+本次证据目录（git 忽略）：`TestResults/chat-history-host-2.3.3/`，包含 `release-build.log`、`full-desktop.log/.trx/.exit`、`desktop-context.txt`、`dll-versions.json` 及三宿主五语言 `*-hosts.png`。测试沿用隔离文档/模型夹具及临时历史目录；未使用真实用户历史。临时交互桌面计划任务完成后删除。

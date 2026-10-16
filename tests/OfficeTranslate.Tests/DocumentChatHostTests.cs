@@ -37,7 +37,7 @@ namespace OfficeTranslate.Tests
             dynamic target=Range(selected?"selection":""); dynamic content=Range("whole document\r");
             dynamic document=Obj(("Name","sample.docx"),("Content",content),("Shapes",new ChatItems())); dynamic window=Obj(("Document",document),("Selection",Obj(("Range",target))));
             ChatContext context=Capture("Word",(object)window); Assert.AreEqual("sample.docx",context.DocumentName); Assert.AreEqual(selected,context.IsSelection); Assert.AreEqual(selected?"selection":"whole document\r",context.Text);
-            Assert.AreEqual(selected,context.CanReplace); Assert.AreEqual(selected?"selection":"",(string)target.Text);
+            Assert.AreEqual("Word",context.Host); Assert.AreEqual(selected,context.CanReplace); Assert.AreEqual(selected?"selection":"",(string)target.Text);
             if(selected) { context.Apply(ChatMode.Rewrite,ChatWriteAction.ReplaceSelection,"rewritten"); Assert.AreEqual("rewritten",(string)target.Text); }
         }
         [TestMethod]
@@ -57,6 +57,7 @@ namespace OfficeTranslate.Tests
             dynamic sheet=Obj(("UsedRange",used),("Shapes",new ChatItems()),("Name","Sheet1")); dynamic workbook=Obj(("Name","sample.xlsx"),("Worksheets",new ChatItems(sheet))); sheet.Parent=workbook;
             dynamic window=Obj(("ActiveSheet",sheet),("RangeSelection",range)); dynamic app=Obj(); app.ActiveWindow=window; app.Intersect=(Func<object,object,object>)((a,b)=>range); window.Application=app;
             ChatContext context=Capture("Excel",(object)window); Assert.AreEqual("sample.xlsx",context.DocumentName); Assert.AreEqual(selected,context.IsSelection); StringAssert.Contains(context.Text,selected?"selection":"whole sheet");
+            Assert.AreEqual("Excel",context.Host);
             if(selected) { context.Apply(ChatMode.Rewrite,ChatWriteAction.ReplaceSelection,"=2+2"); Assert.AreEqual("'=2+2",(string)range.Value2); }
         }
         [TestMethod]
@@ -77,6 +78,7 @@ namespace OfficeTranslate.Tests
             dynamic slide=Obj(("Shapes",new ChatItems(shape))); dynamic presentation=Obj(("Name","sample.pptx"),("Slides",new ChatItems(slide)));
             dynamic selection=Obj(("Type",selected?3:0),("TextRange",target)); dynamic window=Obj(("Presentation",presentation),("Selection",selection));
             ChatContext context=Capture("PowerPoint",(object)window); Assert.AreEqual("sample.pptx",context.DocumentName); Assert.AreEqual(selected,context.IsSelection); StringAssert.Contains(context.Text,selected?"selected text":"whole slide");
+            Assert.AreEqual("PowerPoint",context.Host);
             if(selected) { context.Apply(ChatMode.Rewrite,ChatWriteAction.InsertBelow,"rewrite"); Assert.AreEqual("selected text\rrewrite",(string)target.Text); }
         }
         [TestMethod]

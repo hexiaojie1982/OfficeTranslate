@@ -1,8 +1,8 @@
 # OfficeTranslate 应用说明
 
-当前本地开发版本：**2.3.3.0**；分支：`feat/chat-history`。尚未推送、合并、发布或创建 tag。
+当前正式版本：**2.3.3.0**；Git tag：`v2.3.3`。
 
-最近正式版本仍为 2.3.2.0（`v2.3.2`）。
+本版本包含历史会话持久化、宿主标识、Enter 发送 / Shift+Enter 换行，以及翻译设置开关。
 
 ## 构建
 
@@ -18,4 +18,4 @@
 
 静默部署命令：`msiexec /i OfficeTranslate.Office.x64.msi /qn /l*v install.log`。
 
-本分支只作本地构建与测试，不自动安装或发布。验证范围及真机验收项目见 `tests/VALIDATION-2.3.3-CHAT-HISTORY.md`。
+验证范围及真机验收项目见 `tests/VALIDATION-2.3.3-CHAT-HISTORY.md`。

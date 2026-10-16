@@ -27,7 +27,8 @@ namespace OfficeTranslate.WordAddIn
             root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             root.RowStyles.Add(new RowStyle(SizeType.AutoSize)); root.RowStyles.Add(new RowStyle(SizeType.Percent, 38));
             root.RowStyles.Add(new RowStyle(SizeType.Percent, 62)); root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            _list.Columns.Add(T("ChatHistoryTime"), 180); _list.Columns.Add(T("ChatHistoryDocument"), 200); _list.Columns.Add(T("ChatHistoryQuestion"), 440);
+            _list.Columns.Add(T("ChatHistoryHost"), 100); _list.Columns.Add(T("ChatHistoryTime"), 170);
+            _list.Columns.Add(T("ChatHistoryDocument"), 190); _list.Columns.Add(T("ChatHistoryQuestion"), 360);
             _list.AccessibleName = T("ChatHistoryTitle"); _details.AccessibleName = T("ChatHistoryDetails");
             _list.SelectedIndexChanged += (s, e) => ShowSelected();
             var buttons = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true };
@@ -47,7 +48,11 @@ namespace OfficeTranslate.WordAddIn
                 var records = _store.List(out var unreadable);
                 foreach (var record in records)
                 {
-                    var row = new ListViewItem(record.CreatedAt.ToLocalTime().ToString("g", CultureInfo.CurrentCulture)) { Tag = record.SessionId };
+                    var row = new ListViewItem(record.Host) { Tag = record.SessionId, UseItemStyleForSubItems = false };
+                    row.ForeColor = record.Host == "Word" ? Color.FromArgb(24, 90, 189) :
+                        record.Host == "Excel" ? Color.FromArgb(16, 124, 65) :
+                        record.Host == "PowerPoint" ? Color.FromArgb(180, 71, 35) : _list.ForeColor;
+                    row.SubItems.Add(record.CreatedAt.ToLocalTime().ToString("g", CultureInfo.CurrentCulture));
                     row.SubItems.Add(record.DocumentName); row.SubItems.Add(record.Preview); _list.Items.Add(row);
                 }
                 _status.Text = unreadable > 0 ? T("ChatHistoryUnreadable") : records.Count == 0 ? T("ChatHistoryEmpty") : T("ChatHistoryHint");

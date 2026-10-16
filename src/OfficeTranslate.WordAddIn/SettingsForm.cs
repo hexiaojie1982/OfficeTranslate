@@ -225,6 +225,7 @@ namespace OfficeTranslate.WordAddIn
                 MaxParallelCells = _existing.MaxParallelCells,
                 ChatQuestionSystemPrompt = _existing.ChatQuestionSystemPrompt, ChatSummarySystemPrompt = _existing.ChatSummarySystemPrompt,
                 ChatRewriteSystemPrompt = _existing.ChatRewriteSystemPrompt, ChatContextTokens = _existing.ChatContextTokens, ChatOutputTokens = _existing.ChatOutputTokens,
+                ChatUseTranslationSettings = _existing.ChatUseTranslationSettings,
                 TranslationStyle = _translationStyle.SelectedIndex >= 0 ? TranslationStyleCatalog.Ids[_translationStyle.SelectedIndex] : "Custom",
                 CustomInstructions = _instructions.Text.Trim(), Glossary = _glossary.Text.Trim(),
                 OllamaBaseUrl = _existing.OllamaBaseUrl, OllamaApiKey = _existing.OllamaApiKey, OllamaModel = _existing.OllamaModel,

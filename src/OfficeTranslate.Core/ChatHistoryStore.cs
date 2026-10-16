@@ -16,10 +16,11 @@ namespace OfficeTranslate.Core
     }
     public sealed class ChatHistoryRecord
     {
-        public int SchemaVersion { get; set; } = 1;
+        public int SchemaVersion { get; set; } = 2;
         public string SessionId { get; set; } = "";
         public string CreatedAt { get; set; } = "";
         public string DocumentName { get; set; } = "";
+        public string Host { get; set; } = "";
         public List<ChatHistoryTurn> Turns { get; set; } = new List<ChatHistoryTurn>();
     }
     public sealed class ChatHistorySummary
@@ -27,6 +28,7 @@ namespace OfficeTranslate.Core
         public string SessionId { get; internal set; } = "";
         public DateTimeOffset CreatedAt { get; internal set; }
         public string DocumentName { get; internal set; } = "";
+        public string Host { get; internal set; } = "";
         public string Preview { get; internal set; } = "";
     }
     // Local history only. Never send these records to diagnostics or transport.
@@ -49,12 +51,13 @@ namespace OfficeTranslate.Core
                 var path = FilePath(id);
                 if (!File.Exists(path)) return null;
                 var record = Json().Deserialize<ChatHistoryRecord>(File.ReadAllText(path, Encoding.UTF8));
-                if (record == null || record.SchemaVersion != 1 || record.SessionId != id ||
+                if (record == null || (record.SchemaVersion != 1 && record.SchemaVersion != 2) || record.SessionId != id ||
                     !DateTimeOffset.TryParse(record.CreatedAt, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out _) ||
                     record.DocumentName == null || record.Turns == null || record.Turns.Count == 0 ||
                     record.Turns.Any(t => t == null || t.Question == null || t.Answer == null ||
                         !DateTimeOffset.TryParse(t.Timestamp, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out _)))
                     throw new InvalidDataException("Invalid chat history.");
+                if (string.IsNullOrEmpty(record.Host)) record.Host = InferHost(record.DocumentName);
                 return record;
             }
         }
@@ -72,7 +75,7 @@ namespace OfficeTranslate.Core
                         var record = Read(Path.GetFileNameWithoutExtension(path));
                         if (record == null) continue;
                         var preview = record.Turns[0].Question.Replace('\r', ' ').Replace('\n', ' ');
-                        result.Add(new ChatHistorySummary { SessionId = record.SessionId, DocumentName = record.DocumentName,
+                        result.Add(new ChatHistorySummary { SessionId = record.SessionId, DocumentName = record.DocumentName, Host = record.Host,
                             CreatedAt = DateTimeOffset.Parse(record.CreatedAt, CultureInfo.InvariantCulture),
                             Preview = preview.Length > 100 ? preview.Substring(0, 100) + "…" : preview });
                     }
@@ -81,11 +84,20 @@ namespace OfficeTranslate.Core
                 return result.OrderByDescending(r => r.CreatedAt).ThenBy(r => r.SessionId, StringComparer.Ordinal).ToArray();
             }
         }
-        internal void Append(string id, DateTimeOffset createdAt, string documentName, IReadOnlyList<ChatHistoryTurn> turns)
+        private static string InferHost(string documentName)
+        {
+            if (documentName.EndsWith(".doc", StringComparison.OrdinalIgnoreCase) || documentName.EndsWith(".docx", StringComparison.OrdinalIgnoreCase)) return "Word";
+            if (documentName.EndsWith(".xls", StringComparison.OrdinalIgnoreCase) || documentName.EndsWith(".xlsx", StringComparison.OrdinalIgnoreCase)) return "Excel";
+            if (documentName.EndsWith(".ppt", StringComparison.OrdinalIgnoreCase) || documentName.EndsWith(".pptx", StringComparison.OrdinalIgnoreCase)) return "PowerPoint";
+            return "";
+        }
+        internal void Append(string id, DateTimeOffset createdAt, string documentName, IReadOnlyList<ChatHistoryTurn> turns, string host = "")
         {
             lock (Sync)
             {
-                var record = Read(id) ?? new ChatHistoryRecord { SessionId = id, CreatedAt = createdAt.ToString("O", CultureInfo.InvariantCulture), DocumentName = documentName };
+                var record = Read(id) ?? new ChatHistoryRecord { SessionId = id, CreatedAt = createdAt.ToString("O", CultureInfo.InvariantCulture), DocumentName = documentName, Host = host };
+                record.SchemaVersion = 2;
+                if (string.IsNullOrEmpty(record.Host)) record.Host = host;
                 record.Turns.AddRange(turns);
                 Directory.CreateDirectory(_directory);
                 var path = FilePath(id); var temporary = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
@@ -107,7 +119,7 @@ namespace OfficeTranslate.Core
                 foreach (var path in Directory.GetFiles(_directory, "*.json")) File.Delete(path);
             }
         }
-        internal static bool IsStorageError(Exception ex) => ex is IOException || ex is UnauthorizedAccessException ||
+        internal static bool IsStorageError(Exception ex) => ex is IOException || ex is InvalidDataException || ex is UnauthorizedAccessException ||
             ex is System.Security.SecurityException || ex is ArgumentException || ex is InvalidOperationException ||
             ex is FormatException || ex is OverflowException;
     }
