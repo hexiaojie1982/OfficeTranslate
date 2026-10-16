@@ -38,6 +38,7 @@ namespace OfficeTranslate.Core
         public string ChatRewriteSystemPrompt { get => ChatPrompts.Resolve(UiLanguage, ChatMode.Rewrite, _chatRewritePrompt); set => _chatRewritePrompt = value; }
         public int ChatContextTokens { get; set; } = 8192;
         public int ChatOutputTokens { get; set; } = 1024;
+        public bool ChatUseTranslationSettings { get; set; }
         public int MaxParallelCells { get; set; } = 4;
 
         public void Validate()

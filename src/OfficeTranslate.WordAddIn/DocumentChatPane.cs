@@ -23,12 +23,16 @@ namespace OfficeTranslate.WordAddIn
     [ClassInterface(ClassInterfaceType.AutoDispatch)]
     public sealed class DocumentChatPane : UserControl
     {
-        private readonly DocumentChatSession _session = new DocumentChatSession();
+        private DocumentChatSession _session = new DocumentChatSession();
+        internal ChatHistoryStore HistoryStore { get; set; } = new ChatHistoryStore();
+        internal SettingsStore ChatSettingsStore { get; set; } = new SettingsStore();
         private readonly ChatConversationView _transcript = new ChatConversationView { Dock = DockStyle.Fill };
-        private readonly TextBox _input = new TextBox { Multiline = true, ScrollBars = ScrollBars.Vertical, Dock = DockStyle.Fill, MaxLength = 0 };
+        private readonly TextBox _input = new TextBox { Multiline = true, AcceptsReturn = true, ScrollBars = ScrollBars.Vertical, Dock = DockStyle.Fill, MaxLength = 0 };
         private readonly Label _context = new Label { AutoSize = true, ForeColor = Color.FromArgb(90, 104, 122), MaximumSize = new Size(440, 0) };
         private readonly Label _status = new Label { AutoSize = true, MaximumSize = new Size(440, 0) };
-        private readonly TableLayoutPanel _commands = new TableLayoutPanel { AutoSize = true, Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2, Margin = Padding.Empty };
+        private readonly TableLayoutPanel _commands = new TableLayoutPanel { AutoSize = true, Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3, Margin = Padding.Empty };
+        private readonly CheckBox _useTranslationSettings = new CheckBox { Tag = "ChatUseTranslationSettings", AutoSize = true, Dock = DockStyle.Fill, Margin = new Padding(0, 0, 0, 8) };
+        private bool _refreshingSettings;
         private readonly FlowLayoutPanel _writes = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Fill };
         private readonly Button _cancel = new Button();
         private readonly ToolTip _tips = new ToolTip();
@@ -44,6 +48,7 @@ namespace OfficeTranslate.WordAddIn
         internal ChatTransport? Transport { get; set; }
         internal Func<ChatWriteAction, bool>? ConfirmWrite { get; set; }
         internal Func<SaveFileDialog, DialogResult>? ExportDialog { get; set; }
+        internal Action<Form>? HistoryDialog { get; set; }
         private Func<ChatContext>? _capture;
         private Func<TranslationSettings>? _settings;
         private string _language = "zh-CN", _result = "";
@@ -61,6 +66,7 @@ namespace OfficeTranslate.WordAddIn
         }
         internal void Initialize(Func<ChatContext> capture, Func<TranslationSettings> settings)
         {
+            _session = new DocumentChatSession(HistoryStore);
             _capture = capture; _settings = settings; _language = settings().UiLanguage;
             var root = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(12), ColumnCount = 1, RowCount = 9 };
             root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
@@ -68,11 +74,18 @@ namespace OfficeTranslate.WordAddIn
             root.Controls.Add(new Label { Tag = "Chat", Text = T("Chat"), AutoSize = true, ForeColor = Color.FromArgb(32, 55, 88), Font = new Font(Font.FontFamily, 14F, FontStyle.Bold) }, 0, 0);
             root.Controls.Add(_context, 0, 1);
             var functions = ButtonRow(); var operations = ButtonRow();
-            _commands.Controls.Add(functions, 0, 0); _commands.Controls.Add(operations, 0, 1);
+            _commands.Controls.Add(functions, 0, 0); _commands.Controls.Add(_useTranslationSettings, 0, 1); _commands.Controls.Add(operations, 0, 2);
             AddButton(functions, "ChatSummary", () => Start(ChatMode.Summarize), true); AddButton(functions, "ChatRewrite", () => Start(ChatMode.Rewrite), true);
+            AddButton(functions, "ChatSettings", () => { using (var form = new ChatSettingsForm(ChatSettingsStore)) form.ShowDialog(this); RefreshLanguage(); }, true);
+            _useTranslationSettings.CheckedChanged += (s, e) => SaveTranslationSettingsChoice();
             AddButton(operations, "ChatClear", Clear); AddButton(operations, "ChatRefresh", RefreshContext);
             AddButton(operations, "ChatExport", Export);
-            AddButton(operations, "ChatSettings", () => { using (var form = new ChatSettingsForm(new SettingsStore())) form.ShowDialog(this); RefreshLanguage(); });
+            AddButton(operations, "ChatHistory", () =>
+            {
+                RefreshLanguage();
+                using (var form = new ChatHistoryForm(HistoryStore, _language))
+                { if (HistoryDialog != null) HistoryDialog(form); else form.ShowDialog(this); }
+            });
             root.Controls.Add(_commands, 0, 2); root.Controls.Add(_transcript, 0, 3); root.Controls.Add(_writes, 0, 4); root.Controls.Add(_status, 0, 5);
             root.Controls.Add(new Label { Tag = "ChatInputHint", Text = T("ChatInputHint"), AutoSize = true }, 0, 6);
             root.Controls.Add(_input, 0, 7);
@@ -80,7 +93,7 @@ namespace OfficeTranslate.WordAddIn
             AddButton(sendBar, "ChatSend", () => Start(ChatMode.Question), true);
             _cancel.Tag = "Cancel"; Style(_cancel, T("Cancel")); _cancel.Click += (s, e) => _pending?.Cancel(); _cancel.Enabled = false; sendBar.Controls.Add(_cancel);
             root.Controls.Add(sendBar, 0, 8); Controls.Add(root);
-            _input.KeyDown += (s, e) => { if (e.Control && e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; Start(ChatMode.Question); } };
+            _input.KeyDown += (s, e) => { if (e.KeyCode == Keys.Enter && !e.Shift) { e.SuppressKeyPress = true; Start(ChatMode.Question); } };
             Enter += (s, e) => { RefreshLanguage(); if (_pending == null) RefreshContext(); };
             VisibleChanged += (s, e) => { if (Visible) { RefreshLanguage(); if (_pending == null) RefreshContext(); } };
             RenderTranscript(); RefreshLanguage(); RefreshContext();
@@ -101,11 +114,15 @@ namespace OfficeTranslate.WordAddIn
         internal void RefreshLanguage()
         {
             if (_settings == null) return;
-            var language = _settings().UiLanguage; var changed = language != _language; _language = language;
+            var settings = _settings();
+            var language = settings.UiLanguage; var changed = language != _language; _language = language;
             SuspendLayout();
             try
             {
                 Localize(Controls);
+                _refreshingSettings = true;
+                try { _useTranslationSettings.Checked = settings.ChatUseTranslationSettings; }
+                finally { _refreshingSettings = false; }
                 _input.AccessibleName = T("ChatInputHint"); _transcript.AccessibleName = T("ChatTranscript");
                 _tips.SetToolTip(_context, T("ChatContextTip")); _tips.SetToolTip(_input, T("ChatInputHint"));
                 ShowContext();
@@ -117,13 +134,29 @@ namespace OfficeTranslate.WordAddIn
             }
             finally { ResumeLayout(true); }
         }
+        private void SaveTranslationSettingsChoice()
+        {
+            if (_refreshingSettings || _settings == null) return;
+            var settings = _settings();
+            var previous = settings.ChatUseTranslationSettings;
+            settings.ChatUseTranslationSettings = _useTranslationSettings.Checked;
+            try { ChatSettingsStore.Save(settings); }
+            catch
+            {
+                settings.ChatUseTranslationSettings = previous;
+                _refreshingSettings = true;
+                try { _useTranslationSettings.Checked = previous; }
+                finally { _refreshingSettings = false; }
+                SetStatus("ChatSettingsError", true);
+            }
+        }
         private void Localize(Control.ControlCollection controls)
         {
             foreach (Control control in controls)
             {
                 if (control.Tag is string key)
                 {
-                    if (control is Button button) Style(button, T(key), key == "ChatSummary" || key == "ChatRewrite" || key == "ChatSend" || key == "ChatReplace" || key == "ChatInsertBelow" || key == "ChatInsertStart");
+                    if (control is Button button) Style(button, T(key), key == "ChatSummary" || key == "ChatRewrite" || key == "ChatSettings" || key == "ChatSend" || key == "ChatReplace" || key == "ChatInsertBelow" || key == "ChatInsertStart");
                     else control.Text = T(key);
                     if (key == "ChatRefresh") _tips.SetToolTip(control, T("ChatRefreshTip"));
                 }
@@ -175,7 +208,7 @@ namespace OfficeTranslate.WordAddIn
         private void ClearWrites()
         { while (_writes.Controls.Count > 0) { var control = _writes.Controls[0]; _writes.Controls.RemoveAt(0); control.Dispose(); } }
         private void Clear()
-        { if (_pending != null) return; _session.Clear(); _hasTurn = false; _renderedOutput = _result = _turnQuestion = _errorDetails = ""; _turnHistory = new ChatMessage[0]; _resultContext = null; RenderTranscript(); ClearWrites(); SetStatus("ChatCleared"); }
+        { if (_pending != null) return; if (!_session.Clear()) { SetStatus("ChatHistorySaveFailed", true); return; } _hasTurn = false; _renderedOutput = _result = _turnQuestion = _errorDetails = ""; _turnHistory = new ChatMessage[0]; _resultContext = null; RenderTranscript(); ClearWrites(); SetStatus("ChatCleared"); }
         private void Export()
         {
             RefreshLanguage();
@@ -239,6 +272,7 @@ namespace OfficeTranslate.WordAddIn
                         SetStatus(reply.UsedFallback ? "ChatFallback" : "ChatDone");
                         if (reply.UsedSummaries) AppendStatus("ChatReduced");
                         BuildWrites();
+                        if (_session.HistorySaveFailed) SetStatus("ChatHistorySaveFailed", true);
                     });
                 }
             }
@@ -285,6 +319,7 @@ namespace OfficeTranslate.WordAddIn
             base.OnResize(e);
             var width = Math.Max(100, ClientSize.Width - 32);
             _context.MaximumSize = new Size(width, 0); _status.MaximumSize = new Size(width, 0);
+            _useTranslationSettings.MaximumSize = new Size(width, 0);
         }
         protected override void Dispose(bool disposing)
         { if (disposing) { Stop(); _streamTimer.Dispose(); _tips.Dispose(); _resultContext = _displayContext = null; _capture = null; _settings = null; } base.Dispose(disposing); }

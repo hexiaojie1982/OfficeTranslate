@@ -4,6 +4,7 @@ using System.Drawing;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Web.Script.Serialization;
@@ -31,6 +32,7 @@ namespace OfficeTranslate.Tests
         }
         private sealed class PaneFixture : IDisposable
         {
+            private readonly HistorySandbox _history = new HistorySandbox();
             internal readonly TranslationSettings Settings;
             internal readonly UserControl Pane;
             internal readonly Form Window = new Form { ClientSize = new Size(440, 760) };
@@ -40,6 +42,7 @@ namespace OfficeTranslate.Tests
             {
                 Settings = new TranslationSettings { UiLanguage = language };
                 Pane = (UserControl)Activator.CreateInstance(DocumentChatHostTests.Host(host).GetType("OfficeTranslate.WordAddIn.DocumentChatPane", true)!)!;
+                Pane.GetType().GetProperty("HistoryStore", Hidden)!.SetValue(Pane, _history.Store);
                 Call(Pane, "Initialize", (Func<ChatContext>)(() => { Reads++; return Context; }), (Func<TranslationSettings>)(() => Settings));
                 Pane.Dock = DockStyle.Fill; Window.Controls.Add(Pane); Window.Show(); Application.DoEvents();
             }
@@ -51,7 +54,7 @@ namespace OfficeTranslate.Tests
                 Selected.Select(Selected.Text.IndexOf(text, StringComparison.Ordinal), text.Length);
             }
             internal void Transport(ChatTransport transport) => Pane.GetType().GetProperty("Transport", Hidden)!.SetValue(Pane, transport);
-            public void Dispose() { Window.Close(); Window.Dispose(); Pane.Dispose(); }
+            public void Dispose() { Window.Close(); Window.Dispose(); Pane.Dispose(); _history.Dispose(); }
         }
 
         [DataTestMethod]
@@ -97,6 +100,106 @@ namespace OfficeTranslate.Tests
             });
         }
         private static object? FieldOrNull(object target, string name) => target.GetType().GetField(name, Hidden)!.GetValue(target);
+
+        [DllImport("user32.dll")] private static extern bool GetKeyboardState(byte[] state);
+        [DllImport("user32.dll")] private static extern bool SetKeyboardState(byte[] state);
+        [DllImport("user32.dll")] private static extern bool PostMessage(IntPtr window, int message, IntPtr key, IntPtr data);
+        [DllImport("user32.dll")] private static extern IntPtr SendMessage(IntPtr window, int message, IntPtr key, IntPtr data);
+        private static void EnterKey(TextBox input, bool shift = false)
+        {
+            var original = new byte[256]; Assert.IsTrue(GetKeyboardState(original));
+            var state = new byte[256];
+            if (shift) state[(int)Keys.ShiftKey] = state[(int)Keys.LShiftKey] = 0x80;
+            try
+            {
+                Assert.IsTrue(SetKeyboardState(state));
+                // Target only this test control. Queue the translated character first so
+                // KeyDown's SuppressKeyPress can remove it, as in the native message loop.
+                Assert.IsTrue(PostMessage(input.Handle, 0x0102 /* WM_CHAR */, (IntPtr)'\r', (IntPtr)1));
+                SendMessage(input.Handle, 0x0100 /* WM_KEYDOWN */, (IntPtr)(int)Keys.Enter, (IntPtr)1);
+                Application.DoEvents();
+            }
+            finally { Assert.IsTrue(SetKeyboardState(original)); }
+        }
+
+        [DataTestMethod]
+        [DataRow("Word", "zh-CN")] [DataRow("Word", "en")]
+        [DataRow("Excel", "zh-CN")] [DataRow("Excel", "en")]
+        [DataRow("PowerPoint", "zh-CN")] [DataRow("PowerPoint", "en")]
+        public void Input_EnterSends_ShiftEnterInsertsNewline_AndHintsAreLocalized(string host, string language)
+        {
+            DocumentChatHostTests.Sta(() =>
+            {
+                using (var f = new PaneFixture(host, language))
+                {
+                    var input = (TextBox)Field(f.Pane, "_input");
+                    var calls = 0; var completion = new TaskCompletionSource<ChatReply>();
+                    f.Transport((m, s, n, o, t) => { calls++; return completion.Task; });
+                    var hint = language == "zh-CN" ? "输入问题（Enter 发送，Shift+Enter 换行）" :
+                        "Enter a question (Enter to send, Shift+Enter for a new line)";
+                    Assert.AreEqual(hint, Descendants(f.Pane).Single(c => (string?)c.Tag == "ChatInputHint").Text);
+                    Assert.AreEqual(hint, input.AccessibleName);
+                    Assert.AreEqual(hint, ((ToolTip)Field(f.Pane, "_tips")).GetToolTip(input));
+                    Assert.IsFalse(f.Transcript.Text.Contains("Ctrl+Enter"));
+                    StringAssert.Contains(f.Transcript.Text, "Shift+Enter");
+
+                    f.Window.Activate(); input.Focus();
+                    Assert.IsTrue(input.Focused, "Keyboard regression requires the input to have focus.");
+                    input.Text = "first line"; input.SelectionStart = input.TextLength;
+                    EnterKey(input, shift: true);
+                    Assert.AreEqual("first line\r\n", input.Text, "Shift+Enter must insert a native TextBox newline.");
+                    Assert.AreEqual(0, calls, "Shift+Enter must never send.");
+                    input.SelectedText = "second line";
+                    var question = input.Text;
+                    EnterKey(input);
+                    Pump(() => calls == 1);
+                    Assert.AreEqual(question, input.Text, "Enter must be suppressed instead of inserting a newline.");
+                    EnterKey(input);
+                    Assert.AreEqual(1, calls, "Enter while a request is pending must not send twice.");
+                    completion.SetResult(new ChatReply("answer", false));
+                    Pump(() => FieldOrNull(f.Pane, "_pending") == null);
+                    Assert.AreEqual("", input.Text);
+                    Assert.AreEqual(question, ((DocumentChatSession)Field(f.Pane, "_session")).History[0].Content);
+
+                    EnterKey(input);
+                    Assert.AreEqual(1, calls, "Empty Enter must not invoke the transport.");
+                    Assert.AreEqual("", input.Text);
+                    Assert.AreEqual(UiText.Get(language, "ChatNeedInput"), ((Label)Field(f.Pane, "_status")).Text);
+                }
+            });
+        }
+
+        [DataTestMethod]
+        [DataRow("Word")] [DataRow("Excel")] [DataRow("PowerPoint")]
+        public void History_SaveFailureKeepsAnswerAndClearRetries_AndHistoryButtonOpensStoredSession(string host)
+        {
+            DocumentChatHostTests.Sta(() =>
+            {
+                using (var f = new PaneFixture(host, "en"))
+                {
+                    var store = (ChatHistoryStore)f.Pane.GetType().GetProperty("HistoryStore", Hidden)!.GetValue(f.Pane)!;
+                    var directory = (string)typeof(ChatHistoryStore).GetField("_directory", Hidden)!.GetValue(store)!;
+                    File.WriteAllText(directory, "blocks history directory creation");
+                    f.Transport((m, s, n, o, t) => Task.FromResult(new ChatReply("retained answer", false)));
+                    Call(f.Pane, "Start", ChatMode.Summarize); Pump(() => FieldOrNull(f.Pane, "_pending") == null);
+                    StringAssert.Contains(f.Transcript.Text, "retained answer");
+                    Assert.AreEqual(UiText.Get("en", "ChatHistorySaveFailed"), ((Label)Field(f.Pane, "_status")).Text);
+                    Call(f.Pane, "Clear"); Assert.AreEqual(2, ((DocumentChatSession)Field(f.Pane, "_session")).History.Count);
+                    File.Delete(directory); Call(f.Pane, "Clear");
+                    Assert.AreEqual(0, ((DocumentChatSession)Field(f.Pane, "_session")).History.Count);
+                    Assert.AreEqual(1, store.List(out _).Count);
+                    var opened = false; var count = -1;
+                    f.Pane.GetType().GetProperty("HistoryDialog", Hidden)!.SetValue(f.Pane, (Action<Form>)(history =>
+                    {
+                        history.Show(); Application.DoEvents();
+                        opened = history.Text == UiText.Get("en", "ChatHistoryTitle");
+                        count = ((ListView)Field(history, "_list")).Items.Count; history.Close();
+                    }));
+                    Button(f.Pane, "ChatHistory").PerformClick();
+                    Assert.IsTrue(opened); Assert.AreEqual(1, count);
+                }
+            });
+        }
 
         [DataTestMethod]
         [DataRow("Word")] [DataRow("Excel")] [DataRow("PowerPoint")]
@@ -214,6 +317,9 @@ namespace OfficeTranslate.Tests
                         f.Window.ClientSize = new Size(width, 760); Application.DoEvents();
                         var summary = Button(f.Pane, "ChatSummary"); var rewrite = Button(f.Pane, "ChatRewrite");
                         Assert.AreSame(summary.Parent, rewrite.Parent);
+                        Assert.AreSame(rewrite.Parent, Button(f.Pane, "ChatSettings").Parent);
+                        Assert.IsTrue(Button(f.Pane, "ChatSettings").TabIndex > rewrite.TabIndex);
+                        Assert.AreSame(Button(f.Pane, "ChatClear").Parent, Button(f.Pane, "ChatHistory").Parent);
                         Assert.AreNotSame(summary.Parent, Button(f.Pane, "ChatClear").Parent);
                         foreach (var button in Descendants(f.Pane).OfType<Button>())
                         {

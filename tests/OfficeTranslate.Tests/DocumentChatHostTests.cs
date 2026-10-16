@@ -35,9 +35,9 @@ namespace OfficeTranslate.Tests
         public void Word_RealAdapterSelectsSelectionOrFullTextAndWritesOnlyOnApply(bool selected)
         {
             dynamic target=Range(selected?"selection":""); dynamic content=Range("whole document\r");
-            dynamic document=Obj(("Content",content),("Shapes",new ChatItems())); dynamic window=Obj(("Document",document),("Selection",Obj(("Range",target))));
-            ChatContext context=Capture("Word",(object)window); Assert.AreEqual(selected,context.IsSelection); Assert.AreEqual(selected?"selection":"whole document\r",context.Text);
-            Assert.AreEqual(selected,context.CanReplace); Assert.AreEqual(selected?"selection":"",(string)target.Text);
+            dynamic document=Obj(("Name","sample.docx"),("Content",content),("Shapes",new ChatItems())); dynamic window=Obj(("Document",document),("Selection",Obj(("Range",target))));
+            ChatContext context=Capture("Word",(object)window); Assert.AreEqual("sample.docx",context.DocumentName); Assert.AreEqual(selected,context.IsSelection); Assert.AreEqual(selected?"selection":"whole document\r",context.Text);
+            Assert.AreEqual("Word",context.Host); Assert.AreEqual(selected,context.CanReplace); Assert.AreEqual(selected?"selection":"",(string)target.Text);
             if(selected) { context.Apply(ChatMode.Rewrite,ChatWriteAction.ReplaceSelection,"rewritten"); Assert.AreEqual("rewritten",(string)target.Text); }
         }
         [TestMethod]
@@ -54,9 +54,10 @@ namespace OfficeTranslate.Tests
         {
             dynamic range=Obj(("Value2",selected?"selection":""),("CountLarge",1d),("MergeCells",false),("Formula",selected?"selection":""),("Row",2),("Rows",Obj(("Count",1)))); range.Areas=new ChatItems(range);
             dynamic used=Obj(("Value2","whole sheet")); used.Areas=new ChatItems(used);
-            dynamic sheet=Obj(("UsedRange",used),("Shapes",new ChatItems()),("Name","Sheet1")); dynamic workbook=Obj(("Worksheets",new ChatItems(sheet))); sheet.Parent=workbook;
+            dynamic sheet=Obj(("UsedRange",used),("Shapes",new ChatItems()),("Name","Sheet1")); dynamic workbook=Obj(("Name","sample.xlsx"),("Worksheets",new ChatItems(sheet))); sheet.Parent=workbook;
             dynamic window=Obj(("ActiveSheet",sheet),("RangeSelection",range)); dynamic app=Obj(); app.ActiveWindow=window; app.Intersect=(Func<object,object,object>)((a,b)=>range); window.Application=app;
-            ChatContext context=Capture("Excel",(object)window); Assert.AreEqual(selected,context.IsSelection); StringAssert.Contains(context.Text,selected?"selection":"whole sheet");
+            ChatContext context=Capture("Excel",(object)window); Assert.AreEqual("sample.xlsx",context.DocumentName); Assert.AreEqual(selected,context.IsSelection); StringAssert.Contains(context.Text,selected?"selection":"whole sheet");
+            Assert.AreEqual("Excel",context.Host);
             if(selected) { context.Apply(ChatMode.Rewrite,ChatWriteAction.ReplaceSelection,"=2+2"); Assert.AreEqual("'=2+2",(string)range.Value2); }
         }
         [TestMethod]
@@ -74,9 +75,10 @@ namespace OfficeTranslate.Tests
         public void PowerPoint_RealAdapterSelectsTextOrEntirePresentation(bool selected)
         {
             dynamic target=Range("selected text"); dynamic shape=Obj(("Type",1),("HasTable",0),("HasTextFrame",-1),("TextFrame",Obj(("TextRange",Range("whole slide")))));
-            dynamic slide=Obj(("Shapes",new ChatItems(shape))); dynamic presentation=Obj(("Slides",new ChatItems(slide)));
+            dynamic slide=Obj(("Shapes",new ChatItems(shape))); dynamic presentation=Obj(("Name","sample.pptx"),("Slides",new ChatItems(slide)));
             dynamic selection=Obj(("Type",selected?3:0),("TextRange",target)); dynamic window=Obj(("Presentation",presentation),("Selection",selection));
-            ChatContext context=Capture("PowerPoint",(object)window); Assert.AreEqual(selected,context.IsSelection); StringAssert.Contains(context.Text,selected?"selected text":"whole slide");
+            ChatContext context=Capture("PowerPoint",(object)window); Assert.AreEqual("sample.pptx",context.DocumentName); Assert.AreEqual(selected,context.IsSelection); StringAssert.Contains(context.Text,selected?"selected text":"whole slide");
+            Assert.AreEqual("PowerPoint",context.Host);
             if(selected) { context.Apply(ChatMode.Rewrite,ChatWriteAction.InsertBelow,"rewrite"); Assert.AreEqual("selected text\rrewrite",(string)target.Text); }
         }
         [TestMethod]
@@ -97,7 +99,7 @@ namespace OfficeTranslate.Tests
             var pane=assembly.GetType("OfficeTranslate.WordAddIn.DocumentChatPane",true)!; Assert.IsTrue(typeof(UserControl).IsAssignableFrom(pane));
             Assert.AreEqual("OfficeTranslate."+host+"ChatPane",pane.GetCustomAttribute<System.Runtime.InteropServices.ProgIdAttribute>()!.Value);
             using(var stream=assembly.GetManifestResourceStream("OfficeTranslate."+host+"AddIn.Ribbon.xml")) using(var reader=new StreamReader(stream!)) StringAssert.Contains(reader.ReadToEnd(),"onAction=\"OpenChat\"");
-            Assert.AreEqual(new Version(2,3,2,0),assembly.GetName().Version);
+            Assert.AreEqual(new Version(2,3,3,0),assembly.GetName().Version);
         }
         internal static void Sta(Action action)
         {
@@ -108,7 +110,9 @@ namespace OfficeTranslate.Tests
         public void Pane_EmptyLoadingSuccessAndFailure_MatchExistingVisualsAndGateWriteButtons(string host,string language)
         { Sta(()=>{
             var type=Host(host).GetType("OfficeTranslate.WordAddIn.DocumentChatPane",true)!;
+            using(var history = new HistorySandbox())
             using(var pane=(UserControl)Activator.CreateInstance(type)!) using(var form=new Form()) {
+                type.GetProperty("HistoryStore", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(pane, history.Store);
                 var settings=new TranslationSettings {UiLanguage=language}; var writeCount=0; var target=new ChatContext("document",true,(a,s)=>writeCount++,true);
                 form.ClientSize=new System.Drawing.Size(440,760);
                 type.GetMethod("Initialize",BindingFlags.Instance|BindingFlags.NonPublic)!.Invoke(pane,new object[]{(Func<ChatContext>)(()=>target),(Func<TranslationSettings>)(()=>settings)});
@@ -146,7 +150,9 @@ namespace OfficeTranslate.Tests
         public void Pane_ClassifiesErrorsAndShowsCopyableSafeDetails(string host,string language,ChatFailure failure,string key)
         { Sta(()=>{
             var type=Host(host).GetType("OfficeTranslate.WordAddIn.DocumentChatPane",true)!;
+            using(var history = new HistorySandbox())
             using(var pane=(UserControl)Activator.CreateInstance(type)!) using(var form=new Form()) {
+                type.GetProperty("HistoryStore", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(pane, history.Store);
                 var settings=new TranslationSettings {UiLanguage=language};
                 type.GetMethod("Initialize",BindingFlags.Instance|BindingFlags.NonPublic)!.Invoke(pane,new object[]{(Func<ChatContext>)(()=>new ChatContext("document",false)),(Func<TranslationSettings>)(()=>settings)});
                 form.Controls.Add(pane); form.Show(); Application.DoEvents();

@@ -50,7 +50,8 @@ namespace OfficeTranslate.Core
         {
             var secrets = privateInputs.ToList();
             if (settings != null) secrets.AddRange(new[] { settings.ApiKey, settings.OpenAiApiKey, settings.OllamaApiKey,
-                settings.ChatQuestionSystemPrompt, settings.ChatSummarySystemPrompt, settings.ChatRewriteSystemPrompt });
+                settings.ChatQuestionSystemPrompt, settings.ChatSummarySystemPrompt, settings.ChatRewriteSystemPrompt,
+                TranslationStyleCatalog.GetPrompt(settings.TranslationStyle), settings.CustomInstructions, settings.Glossary });
             foreach (var secret in secrets.Where(s => !string.IsNullOrEmpty(s)).OrderByDescending(s => s.Length))
             {
                 message = message.Replace(secret, "[redacted]");

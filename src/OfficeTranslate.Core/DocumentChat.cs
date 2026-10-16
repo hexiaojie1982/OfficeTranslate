@@ -17,17 +17,19 @@ namespace OfficeTranslate.Core
         public string Content { get; }
         public DateTimeOffset Timestamp { get; }
     }
-    // The host captures the target before any await. No document text is logged or persisted.
+    // The host captures the target before any await. Document context is never logged or persisted.
     public sealed class ChatContext
     {
-        public ChatContext(string text, bool selected, Action<ChatWriteAction, string>? write = null, bool canReplace = false)
-        { Text = text ?? ""; IsSelection = selected; Write = write; CanReplace = selected && canReplace; }
+        public ChatContext(string text, bool selected, Action<ChatWriteAction, string>? write = null, bool canReplace = false, string documentName = "", string host = "")
+        { Text = text ?? ""; IsSelection = selected; Write = write; CanReplace = selected && canReplace; DocumentName = documentName; Host = host; }
         public string Text { get; }
+        public string DocumentName { get; }
+        public string Host { get; }
         public bool IsSelection { get; }
         public bool CanReplace { get; }
         public Action<ChatWriteAction, string>? Write { get; }
-        public static ChatContext Capture(string? selection, Func<string> fullText, Action<ChatWriteAction, string>? write = null, bool canReplace = false) =>
-            !string.IsNullOrWhiteSpace(selection) ? new ChatContext(selection!, true, write, canReplace) : new ChatContext(fullText(), false, write);
+        public static ChatContext Capture(string? selection, Func<string> fullText, Action<ChatWriteAction, string>? write = null, bool canReplace = false, string documentName = "", string host = "") =>
+            !string.IsNullOrWhiteSpace(selection) ? new ChatContext(selection!, true, write, canReplace, documentName, host) : new ChatContext(fullText(), false, write, documentName: documentName, host: host);
         public bool Allows(ChatMode mode, ChatWriteAction action, string result) => Write != null && !string.IsNullOrWhiteSpace(result) &&
             (mode == ChatMode.Summarize ? action == ChatWriteAction.InsertAtStart : mode == ChatMode.Rewrite &&
              (action == ChatWriteAction.InsertBelow || action == ChatWriteAction.ReplaceSelection && CanReplace));
@@ -70,9 +72,33 @@ namespace OfficeTranslate.Core
     {
         private readonly List<ChatMessage> _history = new List<ChatMessage>();
         private readonly object _historySync = new object();
+        private readonly ChatHistoryStore? _store;
+        private readonly List<ChatHistoryTurn> _unsaved = new List<ChatHistoryTurn>();
+        private string _sessionId = Guid.NewGuid().ToString("N"), _documentName = "", _host = "";
+        private DateTimeOffset _createdAt;
         private int _generation;
+        public DocumentChatSession(ChatHistoryStore? store = null) { _store = store; }
+        public bool HistorySaveFailed { get { lock (_historySync) return _unsaved.Count > 0; } }
         public IReadOnlyList<ChatMessage> History { get { lock (_historySync) return _history.ToArray(); } }
-        public void Clear() { lock (_historySync) { _generation++; _history.Clear(); } }
+        // A failed save must not silently discard completed turns on Clear.
+        public bool Clear()
+        {
+            lock (_historySync)
+            {
+                if (!TrySaveHistory()) return false;
+                _generation++; _history.Clear(); _sessionId = Guid.NewGuid().ToString("N"); _createdAt = default; _documentName = ""; _host = "";
+                return true;
+            }
+        }
+        public bool TrySaveHistory()
+        {
+            lock (_historySync)
+            {
+                if (_store == null || _unsaved.Count == 0) return true;
+                try { _store.Append(_sessionId, _createdAt, _documentName, _unsaved, _host); _unsaved.Clear(); return true; }
+                catch (Exception ex) when (ChatHistoryStore.IsStorageError(ex)) { return false; }
+            }
+        }
         public async Task<ChatReply> SendAsync(ChatContext context, string question, ChatMode mode, TranslationSettings settings,
             ChatTransport transport, Action<string> output, Action<int, int> progress, CancellationToken token)
         {
@@ -81,6 +107,7 @@ namespace OfficeTranslate.Core
                 settings.ChatOutputTokens > settings.ChatContextTokens / 2) throw new ChatException(ChatFailure.Budget, "Invalid chat context/output budget.");
             var system = mode == ChatMode.Summarize ? settings.ChatSummarySystemPrompt : mode == ChatMode.Rewrite ? settings.ChatRewriteSystemPrompt : settings.ChatQuestionSystemPrompt;
             system += "\n" + ChatPrompts.Safety(settings.UiLanguage);
+            system = ChatPrompts.AppendTranslationSettings(system, settings);
             var messages = new List<ChatMessage> { new ChatMessage("system", system) };
             var inputBudget = settings.ChatContextTokens - settings.ChatOutputTokens;
             var fixedCost = ChatBudget.Cost(messages) + ChatBudget.Estimate(question) + 128;
@@ -92,7 +119,7 @@ namespace OfficeTranslate.Core
             messages.AddRange(history);
             var contextBudget = inputBudget - ChatBudget.Cost(messages) - ChatBudget.Estimate(question) - 128;
             var text = context.Text; var usedFallback = false; var summarized = false;
-            var mapSystem = ChatPrompts.Map(settings.UiLanguage);
+            var mapSystem = ChatPrompts.AppendTranslationSettings(ChatPrompts.Map(settings.UiLanguage), settings);
             var mapBudget = settings.ChatContextTokens - 256 - ChatBudget.Estimate(mapSystem) - ChatBudget.Estimate(question) - 160;
             while (ChatBudget.Estimate(text) > contextBudget)
             {
@@ -122,6 +149,12 @@ namespace OfficeTranslate.Core
                 var timestamp = DateTimeOffset.Now;
                 _history.Add(new ChatMessage("user", question, timestamp)); _history.Add(new ChatMessage("assistant", reply.Text, timestamp));
                 if (_history.Count > 20) _history.RemoveRange(0, _history.Count - 20);
+                if (_store != null)
+                {
+                    if (_createdAt == default) { _createdAt = timestamp; _documentName = context.DocumentName; _host = context.Host; }
+                    _unsaved.Add(new ChatHistoryTurn { Timestamp = timestamp.ToString("O", System.Globalization.CultureInfo.InvariantCulture), Question = question, Answer = reply.Text });
+                    TrySaveHistory();
+                }
             }
             return new ChatReply(reply.Text, usedFallback || reply.UsedFallback, summarized);
         }
