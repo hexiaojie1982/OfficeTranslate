@@ -23,7 +23,8 @@ namespace OfficeTranslate.WordAddIn
     [ClassInterface(ClassInterfaceType.AutoDispatch)]
     public sealed class DocumentChatPane : UserControl
     {
-        private readonly DocumentChatSession _session = new DocumentChatSession();
+        private DocumentChatSession _session = new DocumentChatSession();
+        internal ChatHistoryStore HistoryStore { get; set; } = new ChatHistoryStore();
         private readonly ChatConversationView _transcript = new ChatConversationView { Dock = DockStyle.Fill };
         private readonly TextBox _input = new TextBox { Multiline = true, ScrollBars = ScrollBars.Vertical, Dock = DockStyle.Fill, MaxLength = 0 };
         private readonly Label _context = new Label { AutoSize = true, ForeColor = Color.FromArgb(90, 104, 122), MaximumSize = new Size(440, 0) };
@@ -44,6 +45,7 @@ namespace OfficeTranslate.WordAddIn
         internal ChatTransport? Transport { get; set; }
         internal Func<ChatWriteAction, bool>? ConfirmWrite { get; set; }
         internal Func<SaveFileDialog, DialogResult>? ExportDialog { get; set; }
+        internal Action<Form>? HistoryDialog { get; set; }
         private Func<ChatContext>? _capture;
         private Func<TranslationSettings>? _settings;
         private string _language = "zh-CN", _result = "";
@@ -61,6 +63,7 @@ namespace OfficeTranslate.WordAddIn
         }
         internal void Initialize(Func<ChatContext> capture, Func<TranslationSettings> settings)
         {
+            _session = new DocumentChatSession(HistoryStore);
             _capture = capture; _settings = settings; _language = settings().UiLanguage;
             var root = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(12), ColumnCount = 1, RowCount = 9 };
             root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
@@ -70,9 +73,15 @@ namespace OfficeTranslate.WordAddIn
             var functions = ButtonRow(); var operations = ButtonRow();
             _commands.Controls.Add(functions, 0, 0); _commands.Controls.Add(operations, 0, 1);
             AddButton(functions, "ChatSummary", () => Start(ChatMode.Summarize), true); AddButton(functions, "ChatRewrite", () => Start(ChatMode.Rewrite), true);
+            AddButton(functions, "ChatSettings", () => { using (var form = new ChatSettingsForm(new SettingsStore())) form.ShowDialog(this); RefreshLanguage(); }, true);
             AddButton(operations, "ChatClear", Clear); AddButton(operations, "ChatRefresh", RefreshContext);
             AddButton(operations, "ChatExport", Export);
-            AddButton(operations, "ChatSettings", () => { using (var form = new ChatSettingsForm(new SettingsStore())) form.ShowDialog(this); RefreshLanguage(); });
+            AddButton(operations, "ChatHistory", () =>
+            {
+                RefreshLanguage();
+                using (var form = new ChatHistoryForm(HistoryStore, _language))
+                { if (HistoryDialog != null) HistoryDialog(form); else form.ShowDialog(this); }
+            });
             root.Controls.Add(_commands, 0, 2); root.Controls.Add(_transcript, 0, 3); root.Controls.Add(_writes, 0, 4); root.Controls.Add(_status, 0, 5);
             root.Controls.Add(new Label { Tag = "ChatInputHint", Text = T("ChatInputHint"), AutoSize = true }, 0, 6);
             root.Controls.Add(_input, 0, 7);
@@ -123,7 +132,7 @@ namespace OfficeTranslate.WordAddIn
             {
                 if (control.Tag is string key)
                 {
-                    if (control is Button button) Style(button, T(key), key == "ChatSummary" || key == "ChatRewrite" || key == "ChatSend" || key == "ChatReplace" || key == "ChatInsertBelow" || key == "ChatInsertStart");
+                    if (control is Button button) Style(button, T(key), key == "ChatSummary" || key == "ChatRewrite" || key == "ChatSettings" || key == "ChatSend" || key == "ChatReplace" || key == "ChatInsertBelow" || key == "ChatInsertStart");
                     else control.Text = T(key);
                     if (key == "ChatRefresh") _tips.SetToolTip(control, T("ChatRefreshTip"));
                 }
@@ -175,7 +184,7 @@ namespace OfficeTranslate.WordAddIn
         private void ClearWrites()
         { while (_writes.Controls.Count > 0) { var control = _writes.Controls[0]; _writes.Controls.RemoveAt(0); control.Dispose(); } }
         private void Clear()
-        { if (_pending != null) return; _session.Clear(); _hasTurn = false; _renderedOutput = _result = _turnQuestion = _errorDetails = ""; _turnHistory = new ChatMessage[0]; _resultContext = null; RenderTranscript(); ClearWrites(); SetStatus("ChatCleared"); }
+        { if (_pending != null) return; if (!_session.Clear()) { SetStatus("ChatHistorySaveFailed", true); return; } _hasTurn = false; _renderedOutput = _result = _turnQuestion = _errorDetails = ""; _turnHistory = new ChatMessage[0]; _resultContext = null; RenderTranscript(); ClearWrites(); SetStatus("ChatCleared"); }
         private void Export()
         {
             RefreshLanguage();
@@ -239,6 +248,7 @@ namespace OfficeTranslate.WordAddIn
                         SetStatus(reply.UsedFallback ? "ChatFallback" : "ChatDone");
                         if (reply.UsedSummaries) AppendStatus("ChatReduced");
                         BuildWrites();
+                        if (_session.HistorySaveFailed) SetStatus("ChatHistorySaveFailed", true);
                     });
                 }
             }

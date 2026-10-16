@@ -31,6 +31,7 @@ namespace OfficeTranslate.Tests
         }
         private sealed class PaneFixture : IDisposable
         {
+            private readonly HistorySandbox _history = new HistorySandbox();
             internal readonly TranslationSettings Settings;
             internal readonly UserControl Pane;
             internal readonly Form Window = new Form { ClientSize = new Size(440, 760) };
@@ -40,6 +41,7 @@ namespace OfficeTranslate.Tests
             {
                 Settings = new TranslationSettings { UiLanguage = language };
                 Pane = (UserControl)Activator.CreateInstance(DocumentChatHostTests.Host(host).GetType("OfficeTranslate.WordAddIn.DocumentChatPane", true)!)!;
+                Pane.GetType().GetProperty("HistoryStore", Hidden)!.SetValue(Pane, _history.Store);
                 Call(Pane, "Initialize", (Func<ChatContext>)(() => { Reads++; return Context; }), (Func<TranslationSettings>)(() => Settings));
                 Pane.Dock = DockStyle.Fill; Window.Controls.Add(Pane); Window.Show(); Application.DoEvents();
             }
@@ -51,7 +53,7 @@ namespace OfficeTranslate.Tests
                 Selected.Select(Selected.Text.IndexOf(text, StringComparison.Ordinal), text.Length);
             }
             internal void Transport(ChatTransport transport) => Pane.GetType().GetProperty("Transport", Hidden)!.SetValue(Pane, transport);
-            public void Dispose() { Window.Close(); Window.Dispose(); Pane.Dispose(); }
+            public void Dispose() { Window.Close(); Window.Dispose(); Pane.Dispose(); _history.Dispose(); }
         }
 
         [DataTestMethod]
@@ -97,6 +99,38 @@ namespace OfficeTranslate.Tests
             });
         }
         private static object? FieldOrNull(object target, string name) => target.GetType().GetField(name, Hidden)!.GetValue(target);
+
+        [DataTestMethod]
+        [DataRow("Word")] [DataRow("Excel")] [DataRow("PowerPoint")]
+        public void History_SaveFailureKeepsAnswerAndClearRetries_AndHistoryButtonOpensStoredSession(string host)
+        {
+            DocumentChatHostTests.Sta(() =>
+            {
+                using (var f = new PaneFixture(host, "en"))
+                {
+                    var store = (ChatHistoryStore)f.Pane.GetType().GetProperty("HistoryStore", Hidden)!.GetValue(f.Pane)!;
+                    var directory = (string)typeof(ChatHistoryStore).GetField("_directory", Hidden)!.GetValue(store)!;
+                    File.WriteAllText(directory, "blocks history directory creation");
+                    f.Transport((m, s, n, o, t) => Task.FromResult(new ChatReply("retained answer", false)));
+                    Call(f.Pane, "Start", ChatMode.Summarize); Pump(() => FieldOrNull(f.Pane, "_pending") == null);
+                    StringAssert.Contains(f.Transcript.Text, "retained answer");
+                    Assert.AreEqual(UiText.Get("en", "ChatHistorySaveFailed"), ((Label)Field(f.Pane, "_status")).Text);
+                    Call(f.Pane, "Clear"); Assert.AreEqual(2, ((DocumentChatSession)Field(f.Pane, "_session")).History.Count);
+                    File.Delete(directory); Call(f.Pane, "Clear");
+                    Assert.AreEqual(0, ((DocumentChatSession)Field(f.Pane, "_session")).History.Count);
+                    Assert.AreEqual(1, store.List(out _).Count);
+                    var opened = false; var count = -1;
+                    f.Pane.GetType().GetProperty("HistoryDialog", Hidden)!.SetValue(f.Pane, (Action<Form>)(history =>
+                    {
+                        history.Show(); Application.DoEvents();
+                        opened = history.Text == UiText.Get("en", "ChatHistoryTitle");
+                        count = ((ListView)Field(history, "_list")).Items.Count; history.Close();
+                    }));
+                    Button(f.Pane, "ChatHistory").PerformClick();
+                    Assert.IsTrue(opened); Assert.AreEqual(1, count);
+                }
+            });
+        }
 
         [DataTestMethod]
         [DataRow("Word")] [DataRow("Excel")] [DataRow("PowerPoint")]
@@ -214,6 +248,9 @@ namespace OfficeTranslate.Tests
                         f.Window.ClientSize = new Size(width, 760); Application.DoEvents();
                         var summary = Button(f.Pane, "ChatSummary"); var rewrite = Button(f.Pane, "ChatRewrite");
                         Assert.AreSame(summary.Parent, rewrite.Parent);
+                        Assert.AreSame(rewrite.Parent, Button(f.Pane, "ChatSettings").Parent);
+                        Assert.IsTrue(Button(f.Pane, "ChatSettings").TabIndex > rewrite.TabIndex);
+                        Assert.AreSame(Button(f.Pane, "ChatClear").Parent, Button(f.Pane, "ChatHistory").Parent);
                         Assert.AreNotSame(summary.Parent, Button(f.Pane, "ChatClear").Parent);
                         foreach (var button in Descendants(f.Pane).OfType<Button>())
                         {

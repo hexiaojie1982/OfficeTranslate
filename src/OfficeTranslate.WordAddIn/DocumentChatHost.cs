@@ -48,7 +48,7 @@ namespace OfficeTranslate.WordAddIn
                     dynamic insertion = target.Duplicate; insertion.Collapse(0); insertion.InsertAfter("\r" + text);
                 }
                 else { if (document.Content.End - 1 != end) throw new InvalidOperationException(); document.Range(end, end).InsertAfter("\r" + text); }
-            }, canReplaceSelection);
+            }, canReplaceSelection, DocumentName((object)document));
 #elif EXCEL
             dynamic sheet = window.ActiveSheet; dynamic workbook = sheet.Parent;
             // Shapes are selected through Application.Selection; only consult it when this is the active window.
@@ -76,7 +76,7 @@ namespace OfficeTranslate.WordAddIn
                     if (action == ChatWriteAction.ReplaceSelection) target.TextFrame2.TextRange.Text = text;
                     else if (action == ChatWriteAction.InsertAtStart) ExcelStart(sheet, text);
                     else ExcelBelow(sheet, replaceShape ? (int)target.BottomRightCell.Row : (int)sheet.UsedRange.Row + (int)sheet.UsedRange.Rows.Count - 1, text);
-                }, replaceShape);
+                }, replaceShape, DocumentName((object)workbook));
             }
             dynamic range = window.RangeSelection;
             // Intersect with UsedRange before materializing arrays (whole-column/whole-sheet selections).
@@ -95,7 +95,7 @@ namespace OfficeTranslate.WordAddIn
                 { if (!canReplace || (Convert.ToString(range.Formula) ?? "") != originalValue || (Convert.ToString(range.Value2) ?? "") != originalCellValue) throw new InvalidOperationException(); ExcelLiteral(range, text); }
                 else if (action == ChatWriteAction.InsertAtStart) ExcelStart(sheet, text);
                 else ExcelBelow(sheet, string.IsNullOrWhiteSpace(selected) ? (int)sheet.UsedRange.Row + (int)sheet.UsedRange.Rows.Count - 1 : bottom, text);
-            }, canReplace);
+            }, canReplace, DocumentName((object)workbook));
 #else
             dynamic presentation = window.Presentation;
             dynamic selection = window.Selection;
@@ -133,10 +133,12 @@ namespace OfficeTranslate.WordAddIn
                     var index = capturedSlide == null ? (int)presentation.Slides.Count : (int)capturedSlide.SlideIndex;
                     dynamic added = presentation.Slides.Add(index + 1, 12); AddTextBox(added, text, (float)presentation.PageSetup.SlideWidth, (float)presentation.PageSetup.SlideHeight);
                 }
-            }, (object?)target != null && !string.IsNullOrWhiteSpace(selected));
+            }, (object?)target != null && !string.IsNullOrWhiteSpace(selected), DocumentName((object)presentation));
 #endif
         }
         private static bool Same(object a, object b) => ReferenceEquals(a, b) || a.Equals(b);
+        private static string DocumentName(dynamic document)
+        { try { return Convert.ToString(document.Name) ?? ""; } catch { return ""; } }
 #if WORD
         private static string WordText(dynamic document)
         {
