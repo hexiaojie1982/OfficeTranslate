@@ -99,7 +99,7 @@ namespace OfficeTranslate.Tests
             var pane=assembly.GetType("OfficeTranslate.WordAddIn.DocumentChatPane",true)!; Assert.IsTrue(typeof(UserControl).IsAssignableFrom(pane));
             Assert.AreEqual("OfficeTranslate."+host+"ChatPane",pane.GetCustomAttribute<System.Runtime.InteropServices.ProgIdAttribute>()!.Value);
             using(var stream=assembly.GetManifestResourceStream("OfficeTranslate."+host+"AddIn.Ribbon.xml")) using(var reader=new StreamReader(stream!)) StringAssert.Contains(reader.ReadToEnd(),"onAction=\"OpenChat\"");
-            Assert.AreEqual(new Version(2,3,3,0),assembly.GetName().Version);
+            Assert.AreEqual(new Version(2,3,4,0),assembly.GetName().Version);
         }
         internal static void Sta(Action action)
         {

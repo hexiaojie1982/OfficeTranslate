@@ -1,8 +1,8 @@
 # OfficeTranslate 应用说明
 
-当前正式版本：**2.3.3.0**；Git tag：`v2.3.3`。
+当前正式版本：**2.3.4.0**（`v2.3.4`），从 `main` 构建。
 
-本版本包含历史会话持久化、宿主标识、Enter 发送 / Shift+Enter 换行，以及翻译设置开关。
+本次新增 Word 正文有界并行翻译及按序增量写回，翻译设置可调并发数（默认 4）。保留已发布的历史会话、输入快捷键、翻译设置开关；图片 OCR 翻译仍串行。
 
 ## 构建
 
@@ -18,4 +18,4 @@
 
 静默部署命令：`msiexec /i OfficeTranslate.Office.x64.msi /qn /l*v install.log`。
 
-验证范围及真机验收项目见 `tests/VALIDATION-2.3.3-CHAT-HISTORY.md`。
+功能测试及验证边界见 `tests/VALIDATION-2.3.4-PARALLEL-TRANSLATE.md`。正式版构建后，安装和实际模型端到端验收仍需单独执行。

@@ -20,10 +20,12 @@ namespace OfficeTranslate.Core
         private readonly TimeSpan _imageRequestTimeout;
         internal const int ImageRequestTimeoutSeconds = 600;
         public TranslationClient() : this(new HttpClient(), new HttpClient(), TimeSpan.FromSeconds(ImageRequestTimeoutSeconds)) { }
-        // Excel's text lane has an explicit per-server limit so .NET Framework's
+        // Parallel text lanes have an explicit per-server limit so .NET Framework's
         // default connection limit cannot silently serialize the bounded batch.
         internal static TranslationClient CreateForParallelCells(int maxParallelCells) =>
-            new TranslationClient(new HttpClient(new HttpClientHandler { MaxConnectionsPerServer = maxParallelCells }),
+            CreateForParallelText(maxParallelCells);
+        internal static TranslationClient CreateForParallelText(int maxParallelTextBlocks) =>
+            new TranslationClient(new HttpClient(new HttpClientHandler { MaxConnectionsPerServer = maxParallelTextBlocks }),
                   new HttpClient(), TimeSpan.FromSeconds(ImageRequestTimeoutSeconds));
         // A shared fake handler is owned exactly once (by the image client).
         internal TranslationClient(HttpMessageHandler handler, TimeSpan? imageRequestTimeout = null)

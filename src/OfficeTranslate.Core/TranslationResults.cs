@@ -43,10 +43,30 @@ namespace OfficeTranslate.Core
             new TranslationResult(text, false, false, false, true, 0, fallbackReviewParagraphs);
     }
 
+    public sealed class TextBlockFailure
+    {
+        internal TextBlockFailure(int blockNumber, bool duringWrite, Exception error)
+        { BlockNumber = blockNumber; DuringWrite = duringWrite; ErrorType = error.GetType().Name; }
+        public int BlockNumber { get; }
+        public bool DuringWrite { get; }
+        // Exception messages can contain provider echoes of document text or secrets.
+        public string ErrorType { get; }
+    }
+
     public sealed class TranslationTaskSummary
     {
         private readonly object _recordLock = new object();
         private readonly List<string> _unplacedImageNotes = new List<string>();
+        private readonly List<TextBlockFailure> _textBlockFailures = new List<TextBlockFailure>();
+        public IReadOnlyList<TextBlockFailure> TextBlockFailures => _textBlockFailures.AsReadOnly();
+        public void RecordTextFailure(int blockNumber, bool duringWrite, Exception error)
+        {
+            lock (_recordLock)
+            {
+                _textBlockFailures.Add(new TextBlockFailure(blockNumber, duringWrite, error));
+                NeedsReview++; TextNeedsReview++;
+            }
+        }
         public TranslationTaskSummary(int total) => Total = total;
 
         public int Total { get; }

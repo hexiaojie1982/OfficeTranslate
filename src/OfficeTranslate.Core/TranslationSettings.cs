@@ -40,6 +40,7 @@ namespace OfficeTranslate.Core
         public int ChatOutputTokens { get; set; } = 1024;
         public bool ChatUseTranslationSettings { get; set; }
         public int MaxParallelCells { get; set; } = 4;
+        public int MaxParallelTextBlocks { get; set; } = 4;
 
         public void Validate()
         {
@@ -48,6 +49,13 @@ namespace OfficeTranslate.Core
             if (string.IsNullOrWhiteSpace(TargetLanguage)) throw new InvalidOperationException("目标语言不能为空。");
             if (MaxCharactersPerChunk < 500 || MaxCharactersPerChunk > 30000) throw new InvalidOperationException("分块字符数必须在 500–30000 之间。");
             ValidateParallelCells();
+            ValidateParallelTextBlocks();
+        }
+
+        internal void ValidateParallelTextBlocks(string? validationMessage = null)
+        {
+            if (MaxParallelTextBlocks < 1 || MaxParallelTextBlocks > 32)
+                throw new InvalidOperationException(validationMessage ?? nameof(MaxParallelTextBlocks));
         }
 
         internal void ValidateParallelCells()

@@ -9,6 +9,21 @@ namespace OfficeTranslate.WordAddIn
 
         private static readonly Dictionary<string, string[]> Texts = new Dictionary<string, string[]>
         {
+            ["WordTextConcurrency"] = new[] { "Word 文本并发数", "Word 文字並行數", "Word 텍스트 동시 요청", "Word テキスト同時実行数", "Word text concurrency" },
+            ["WordConcurrencyInvalid"] = new[] { "Word 文本并发数必须在 1–32 之间。", "Word 文字並行數必須介於 1–32。", "Word 텍스트 동시 요청 수는 1–32여야 합니다.", "Word テキスト同時実行数は1–32で指定してください。", "Word text concurrency must be between 1 and 32." },
+            ["TextTranslating"] = new[] { "OfficeTranslate：正在翻译 {0}/{1}", "OfficeTranslate：正在翻譯 {0}/{1}", "OfficeTranslate: 번역 중 {0}/{1}", "OfficeTranslate：翻訳中 {0}/{1}", "OfficeTranslate: translating {0}/{1}" },
+            ["TextWriting"] = new[] { "OfficeTranslate：正在写回 {0}/{1}", "OfficeTranslate：正在寫回 {0}/{1}", "OfficeTranslate: 쓰는 중 {0}/{1}", "OfficeTranslate：書き込み中 {0}/{1}", "OfficeTranslate: writing {0}/{1}" },
+            ["TextCompleted"] = new[] { "OfficeTranslate：已完成 {0}/{1}", "OfficeTranslate：已完成 {0}/{1}", "OfficeTranslate: 완료 {0}/{1}", "OfficeTranslate：完了 {0}/{1}", "OfficeTranslate: completed {0}/{1}" },
+            ["SummaryTextFailures"] = new[] { "处理结束，{0} 个文本块失败", "處理結束，{0} 個文字區塊失敗", "처리 완료, 텍스트 블록 {0}개 실패", "処理終了、{0}個のテキストブロックが失敗", "Processing finished; {0} text blocks failed" },
+            ["TextBlockFailure"] = new[] { "第 {0} 块：{1}失败（{2}）。请重试此块。", "第 {0} 區塊：{1}失敗（{2}）。請重試此區塊。", "블록 {0}: {1} 실패 ({2}). 이 블록을 다시 시도하세요.", "ブロック {0}：{1}失敗（{2}）。再試行してください。", "Block {0}: {1} failed ({2}). Retry this block." },
+            ["TextWriteStage"] = new[] { "写回", "寫回", "쓰기", "書き込み", "write" },
+            ["TextTranslateStage"] = new[] { "翻译", "翻譯", "번역", "翻訳", "translation" },
+            ["ParallelChangelog"] = new[] {
+                "OfficeTranslate 2.3.4.0\r\n• Word 文本默认 4 块并行翻译，可在翻译设置中调整为 1–32；按原文顺序逐块写回。\r\n• 取消保留已写回内容；单块失败继续处理并汇总。图片 OCR 翻译仍串行。\r\n\r\n",
+                "OfficeTranslate 2.3.4.0\r\n• Word 文字預設 4 區塊並行翻譯，可在翻譯設定調整為 1–32；依原文順序逐塊寫回。\r\n• 取消保留已寫回內容；單塊失敗繼續處理並彙總。圖片 OCR 翻譯仍循序執行。\r\n\r\n",
+                "OfficeTranslate 2.3.4.0\r\n• Word 텍스트를 기본 4개 블록씩 병렬 번역합니다. 설정에서 1–32로 조절하며 원문 순서대로 기록합니다.\r\n• 취소 시 완료된 기록을 보존하며 블록 오류는 계속 처리한 뒤 보고합니다. 이미지 OCR 번역은 순차 실행합니다.\r\n\r\n",
+                "OfficeTranslate 2.3.4.0\r\n• Word テキストを既定で4ブロック並列翻訳し、原文順に書き込みます。設定で1–32に変更できます。\r\n• キャンセル時は書き込み済みの内容を保持し、ブロックの失敗は処理を続けて集計します。画像OCR翻訳は順次実行します。\r\n\r\n",
+                "OfficeTranslate 2.3.4.0\r\n• Word text translates in parallel (default 4, configurable 1–32) and commits each block in source order.\r\n• Cancellation keeps committed blocks; individual failures are reported after processing the remaining blocks. Image OCR translation remains serial.\r\n\r\n" },
             ["Chat"] = new[] { "文档内 Chat","文件內 Chat","문서 Chat","文書 Chat","Document Chat" },
             ["ChatUserAvatar"] = new[] { "你", "你", "나", "私", "You" },
             ["ChatAiAvatar"] = new[] { "AI", "AI", "AI", "AI", "AI" },

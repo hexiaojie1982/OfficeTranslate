@@ -11,13 +11,13 @@ namespace OfficeTranslate.WordAddIn
         private readonly Button _close = new Button();
         private readonly Timer _timer = new Timer();
         private readonly string _uiLanguage;
-        private readonly bool _hasUnplacedNotes;
+        private readonly bool _requiresAcknowledgement;
         private int _remainingSeconds = 5;
 
         internal TranslationResultForm(string uiLanguage, TranslationTaskSummary summary, TranslationTaskFailure? failure = null)
         {
             _uiLanguage = uiLanguage;
-            _hasUnplacedNotes = summary.UnplacedImageNotes.Count > 0;
+            _requiresAcknowledgement = summary.UnplacedImageNotes.Count > 0 || summary.TextBlockFailures.Count > 0;
             Text = UiText.Get(uiLanguage, "SummaryTitle");
             Width = 520; Height = 300; MinimumSize = new Size(480, 280);
             MaximizeBox = false; MinimizeBox = false; ShowInTaskbar = false;
@@ -41,19 +41,21 @@ namespace OfficeTranslate.WordAddIn
 
             var icon = new Label
             {
-                Text = _hasUnplacedNotes ? "!" : "✓",
+                Text = _requiresAcknowledgement ? "!" : "✓",
                 AutoSize = false,
                 Width = 42,
                 Height = 42,
                 TextAlign = ContentAlignment.MiddleCenter,
                 Font = new Font("Segoe UI", 22F, FontStyle.Bold),
                 ForeColor = Color.White,
-                BackColor = _hasUnplacedNotes ? Color.DarkOrange : Color.FromArgb(38, 166, 91),
+                BackColor = _requiresAcknowledgement ? Color.DarkOrange : Color.FromArgb(38, 166, 91),
                 Margin = new Padding(0, 0, 10, 12)
             };
             var heading = new Label
             {
-                Text = failure != null ? UiText.Get(uiLanguage, failure.HeadingKey) : _hasUnplacedNotes
+                Text = failure != null ? UiText.Get(uiLanguage, failure.HeadingKey) : summary.TextBlockFailures.Count > 0
+                    ? string.Format(UiText.Get(uiLanguage, "SummaryTextFailures"), summary.TextBlockFailures.Count)
+                    : _requiresAcknowledgement
                     ? string.Format(UiText.Get(uiLanguage, "SummaryUnplaced"), summary.UnplacedImageNotes.Count)
                     : string.Format(UiText.Get(uiLanguage, "SummaryCompleted"), summary.Total),
                 AutoSize = true,
@@ -88,9 +90,12 @@ namespace OfficeTranslate.WordAddIn
                 details.Text += "\r\n\r\n" + string.Format(UiText.Get(uiLanguage, "OcrRegionDetails"),
                     summary.OcrImages, summary.OcrRawRegions, summary.OcrKeptRegions, summary.OcrDroppedRegions,
                     summary.OcrBboxNotes, summary.OcrEmptyTranslations, summary.ImageNeedsReview);
-            if (_hasUnplacedNotes)
+            if (summary.UnplacedImageNotes.Count > 0)
                 details.Text += "\r\n\r\n" + UiText.Get(uiLanguage, "UnplacedNoteDetails") + "\r\n\r\n"
                     + string.Join("\r\n\r\n", summary.UnplacedImageNotes);
+            foreach (var block in summary.TextBlockFailures)
+                details.Text += "\r\n" + string.Format(UiText.Get(uiLanguage, "TextBlockFailure"), block.BlockNumber,
+                    UiText.Get(uiLanguage, block.DuringWrite ? "TextWriteStage" : "TextTranslateStage"), block.ErrorType);
             if (failure != null)
                 details.Text = UiText.Get(uiLanguage, "SummaryInterruptedHint")
                     + (failure.IsUserCancellation ? string.Empty : "\r\n" + failure.Error.Message)
@@ -140,12 +145,12 @@ namespace OfficeTranslate.WordAddIn
             form.Activate();
             // Failed text must remain copyable until acknowledged, not vanish
             // after five seconds. Successful tasks keep the existing countdown.
-            if (!form._hasUnplacedNotes) form._timer.Start();
+            if (!form._requiresAcknowledgement) form._timer.Start();
         }
 
         private void UpdateCloseText()
         {
-            _close.Text = _hasUnplacedNotes ? UiText.Get(_uiLanguage, "Close")
+            _close.Text = _requiresAcknowledgement ? UiText.Get(_uiLanguage, "Close")
                 : string.Format(UiText.Get(_uiLanguage, "ResultCloseCountdown"), _remainingSeconds);
         }
 
