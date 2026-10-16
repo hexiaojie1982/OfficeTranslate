@@ -3,6 +3,7 @@
     <TargetFramework>net48</TargetFramework>
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
+    <Version>$([System.IO.File]::ReadAllText('$(MSBuildThisFileDirectory)..\..\VERSION.txt').Trim())</Version>
   </PropertyGroup>
   <ItemGroup>
     <Reference Include="System.Net.Http" />
@@ -22,6 +23,9 @@
          consumed by the Excel add-in. -->
     <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleTo">
       <_Parameter1>OfficeTranslate.ExcelAddIn</_Parameter1>
+    </AssemblyAttribute>
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleTo">
+      <_Parameter1>OfficeTranslate.WordAddIn</_Parameter1>
     </AssemblyAttribute>
   </ItemGroup>
 </Project>

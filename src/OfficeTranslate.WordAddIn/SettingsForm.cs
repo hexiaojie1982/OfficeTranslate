@@ -18,6 +18,7 @@ namespace OfficeTranslate.WordAddIn
         private readonly ComboBox _imageModel = new ComboBox();
         private readonly Button _refreshModels = new Button();
         private readonly NumericUpDown _chunkSize = new NumericUpDown();
+        private readonly NumericUpDown _textConcurrency = new NumericUpDown();
         private readonly ComboBox _translationStyle = new ComboBox();
         private readonly TextBox _instructions = new TextBox();
         private readonly TextBox _glossary = new TextBox();
@@ -75,15 +76,16 @@ namespace OfficeTranslate.WordAddIn
             root.RowStyles.Add(new RowStyle(SizeType.AutoSize)); root.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             root.Controls.Add(new Label { Text = T("Heading"), Font = new Font(Font.FontFamily, 15F, FontStyle.Bold), ForeColor = Color.FromArgb(32, 55, 88), AutoSize = true, Margin = new Padding(0, 0, 0, 14) }, 0, 0);
 
-            var card = new TableLayoutPanel { Dock = DockStyle.Fill, BackColor = Color.White, Padding = new Padding(18), ColumnCount = 2, RowCount = 11 };
+            var card = new TableLayoutPanel { Dock = DockStyle.Fill, BackColor = Color.White, Padding = new Padding(18), ColumnCount = 2, RowCount = 12 };
             card.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 110)); card.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            for (var i = 0; i < 8; i++) card.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            for (var i = 0; i < 9; i++) card.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             card.RowStyles.Add(new RowStyle(SizeType.Percent, 38)); card.RowStyles.Add(new RowStyle(SizeType.Percent, 62)); card.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
             _uiLanguage.DropDownStyle = ComboBoxStyle.DropDownList; _uiLanguage.Items.AddRange(UiText.LanguageNames);
             _provider.DropDownStyle = ComboBoxStyle.DropDownList; _provider.Items.AddRange(new object[] { "Ollama API", "OpenAI-compatible API" }); _provider.SelectedIndexChanged += ProviderChanged;
             _apiKey.UseSystemPasswordChar = true; _model.DropDownStyle = ComboBoxStyle.DropDownList; _imageModel.DropDownStyle = ComboBoxStyle.DropDownList;
             _chunkSize.Minimum = 500; _chunkSize.Maximum = 30000; _chunkSize.Increment = 500;
+            _textConcurrency.Minimum = 1; _textConcurrency.Maximum = 32;
             _translationStyle.DropDownStyle = ComboBoxStyle.DropDownList; _translationStyle.SelectedIndexChanged += TranslationStyleChanged;
             _instructions.Multiline = true; _instructions.ScrollBars = ScrollBars.Vertical;
             _glossary.Multiline = true; _glossary.ScrollBars = ScrollBars.Both; _glossary.AcceptsReturn = true; _glossary.WordWrap = false;
@@ -94,9 +96,10 @@ namespace OfficeTranslate.WordAddIn
             _model.Dock = DockStyle.Fill; StyleButton(_refreshModels, T("Refresh"), false); _refreshModels.Margin = new Padding(8, 0, 0, 0); _refreshModels.Click += RefreshModelsClicked;
             modelPanel.Controls.Add(_model, 0, 0); modelPanel.Controls.Add(_refreshModels, 1, 0); AddRow(card, 4, T("Model"), modelPanel);
             AddRow(card, 5, T("ImageModel"), _imageModel);
-            AddRow(card, 6, T("Chunk"), _chunkSize); AddRow(card, 7, T("TranslationStyle"), _translationStyle); AddRow(card, 8, T("Instructions"), _instructions); AddRow(card, 9, T("Glossary"), _glossary);
+            AddRow(card, 6, T("Chunk"), _chunkSize); AddRow(card, 7, T("WordTextConcurrency"), _textConcurrency);
+            AddRow(card, 8, T("TranslationStyle"), _translationStyle); AddRow(card, 9, T("Instructions"), _instructions); AddRow(card, 10, T("Glossary"), _glossary);
             _status.Text = T("InitialStatus"); _status.AutoSize = true; _status.ForeColor = Color.FromArgb(90, 104, 122); _status.Margin = new Padding(0, 10, 0, 0);
-            card.Controls.Add(_status, 0, 10); card.SetColumnSpan(_status, 2); root.Controls.Add(card, 0, 1);
+            card.Controls.Add(_status, 0, 11); card.SetColumnSpan(_status, 2); root.Controls.Add(card, 0, 1);
 
             var buttonBar = new TableLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, ColumnCount = 3, Padding = new Padding(0, 14, 0, 0) };
             buttonBar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); buttonBar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize)); buttonBar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
@@ -129,6 +132,7 @@ namespace OfficeTranslate.WordAddIn
             _activeProvider = _existing.Provider; _provider.SelectedIndex = _activeProvider == ProviderKind.Ollama ? 0 : 1; ApplyProviderProfile(_activeProvider);
             SetImageModels(new[] { _existing.ImageModel }, _existing.ImageModel);
             _chunkSize.Value = Math.Max(_chunkSize.Minimum, Math.Min(_chunkSize.Maximum, _existing.MaxCharactersPerChunk));
+            _textConcurrency.Value = Math.Max(_textConcurrency.Minimum, Math.Min(_textConcurrency.Maximum, _existing.MaxParallelTextBlocks));
             var styleId = _existing.TranslationStyle;
             if (!string.IsNullOrWhiteSpace(_existing.CustomInstructions) && string.IsNullOrWhiteSpace(styleId)) styleId = "Custom";
             if (Array.IndexOf(TranslationStyleCatalog.Ids, styleId) < 0) styleId = "Custom";
@@ -223,6 +227,7 @@ namespace OfficeTranslate.WordAddIn
                 UiLanguage = _uiLanguage.SelectedIndex >= 0 ? UiText.LanguageCodes[_uiLanguage.SelectedIndex] : _existing.UiLanguage,
                 BilingualMode = _existing.BilingualMode, MaxCharactersPerChunk = (int)_chunkSize.Value, TimeoutSeconds = _existing.TimeoutSeconds,
                 MaxParallelCells = _existing.MaxParallelCells,
+                MaxParallelTextBlocks = (int)_textConcurrency.Value,
                 ChatQuestionSystemPrompt = _existing.ChatQuestionSystemPrompt, ChatSummarySystemPrompt = _existing.ChatSummarySystemPrompt,
                 ChatRewriteSystemPrompt = _existing.ChatRewriteSystemPrompt, ChatContextTokens = _existing.ChatContextTokens, ChatOutputTokens = _existing.ChatOutputTokens,
                 ChatUseTranslationSettings = _existing.ChatUseTranslationSettings,

@@ -17,9 +17,11 @@ namespace OfficeTranslate.Tests
     [TestClass]
     public class ParallelTranslationTransportTests
     {
-        [TestMethod]
+        [DataTestMethod]
+        [DataRow(false)]
+        [DataRow(true)]
         [Timeout(25000)]
-        public async Task RealHttp_FourConcurrentRequests_SharedClient_StrictRetryAndCachePreserved()
+        public async Task RealHttp_FourConcurrentRequests_SharedClient_StrictRetryAndCachePreserved(bool wordText)
         {
             // Loopback only: no model service, API key or user documents.
             var portProbe = new TcpListener(IPAddress.Loopback, 0);
@@ -28,7 +30,7 @@ namespace OfficeTranslate.Tests
             portProbe.Stop();
             using (var listener = new HttpListener())
             using (var deadline = new CancellationTokenSource(15000))
-            using (var client = TranslationClient.CreateForParallelCells(4))
+            using (var client = wordText ? TranslationClient.CreateForParallelText(4) : TranslationClient.CreateForParallelCells(4))
             {
                 listener.Prefixes.Add($"http://127.0.0.1:{port}/");
                 listener.Start();

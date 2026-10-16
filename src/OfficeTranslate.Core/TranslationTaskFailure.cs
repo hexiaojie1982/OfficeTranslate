@@ -17,7 +17,7 @@ namespace OfficeTranslate.Core
         public Exception Error { get; }
         public TranslationTaskSummary? Summary { get; }
         public bool IsUserCancellation { get; }
-        public bool HasRecoverableNotes => Summary != null && Summary.UnplacedImageNotes.Count > 0;
+        public bool HasRecoverableNotes => Summary != null && (Summary.UnplacedImageNotes.Count > 0 || Summary.TextBlockFailures.Count > 0);
         public bool ShowErrorDialog => !HasRecoverableNotes && !IsUserCancellation;
         public string HeadingKey => IsUserCancellation ? "SummaryCancelled" : "SummaryFailed";
     }

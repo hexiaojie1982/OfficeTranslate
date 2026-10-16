@@ -85,7 +85,8 @@ namespace OfficeTranslate.WordAddIn
             var targets = wholeDocument ? ReadDocumentParagraphs() : ReadSelection();
             var images = settings.ImageOcrEnabled ? (wholeDocument ? ReadDocumentImages() : ReadSelectionImages()) : new List<ImageTarget>();
             if (targets.Count == 0 && images.Count == 0) throw new InvalidOperationException(wholeDocument ? "文档中没有可翻译的正文或图片。" : "请先选择需要翻译的文字或图片。");
-            using (var client = new TranslationClient())
+            settings.ValidateParallelTextBlocks(UiText.Get(settings.UiLanguage, "WordConcurrencyInvalid"));
+            using (var client = TranslationClient.CreateForParallelText(settings.MaxParallelTextBlocks))
             {
                 var total = targets.Count + images.Count;
                 var summary = Summary = new TranslationTaskSummary(total);
@@ -129,54 +130,26 @@ namespace OfficeTranslate.WordAddIn
                 }
                 ui.LogProbe("image_loop_after");
                 ui.LogProbe("text_loop_before");
+                var textTargets = new List<WordTextTarget>(targets.Count);
                 for (var i = 0; i < targets.Count; i++)
                 {
-                    token.ThrowIfCancellationRequested();
-                    var current = images.Count + i + 1;
-                    progress($"OfficeTranslate：正在翻译 {current}/{total}");
-                    var sourceText = CleanWordObjectMarkers(targets[i].Text);
-                    if (!HasTranslatableText(sourceText))
+                    var target = targets[i];
+                    var blockNumber = i + 1;
+                    textTargets.Add(new WordTextTarget(CleanWordObjectMarkers(target.Text), translatedText =>
                     {
-                        summary.RecordSkipped();
-                        progress($"OfficeTranslate：已完成 {current}/{total}");
-                        continue;
-                    }
-                    var result = await client.TranslateDetailedAsync(sourceText, settings, token);
-                    token.ThrowIfCancellationRequested();
-
-                    if (!result.Changed)
-                    {
-                        summary.Record(result);
-                        progress($"OfficeTranslate：已完成 {current}/{total}");
-                        continue;
-                    }
-
-                    var translatedText = result.Text.TrimEnd('\r', '\a');
-                    progress($"OfficeTranslate：正在写回 {i + 1}/{targets.Count}");
-
-                    // M2: the writeback touches the Word object model, so it
-                    // runs on the Office UI (STA) thread explicitly instead of
-                    // on whatever thread the network await resumed on.
-                    await ui.InvokeAsync(() =>
-                    {
-                        // N3: re-check inside the queued UI callback. The
-                        // token may have been cancelled after the pre-queue
-                        // check above but before this callback ran; a
-                        // cancelled run must not write back. The cancel
-                        // boundary is "the item whose commit has started":
-                        // once mutations begin they run to completion.
+                        // The ordered consumer dispatches the entire per-block commit to
+                        // the Office STA. Live duplicated Ranges track earlier text edits.
                         token.ThrowIfCancellationRequested();
                         var undo = _word.UndoRecord;
-                        undo.StartCustomRecord(bilingual ? $"OfficeTranslate 双语排版 {i + 1}/{targets.Count}" : $"OfficeTranslate 翻译 {i + 1}/{targets.Count}");
-                        try
-                        {
-                            WriteTarget(targets[i], translatedText, bilingual);
-                        }
+                        undo.StartCustomRecord(bilingual ? $"OfficeTranslate 双语排版 {blockNumber}/{targets.Count}" : $"OfficeTranslate 翻译 {blockNumber}/{targets.Count}");
+                        try { WriteTarget(target, translatedText, bilingual); }
                         finally { undo.EndCustomRecord(); }
-                    });
-                    summary.Record(result);
-                    progress($"OfficeTranslate：已完成 {current}/{total}");
+                    }));
                 }
+                await WordTextTranslation.RunAsync(textTargets, settings, summary, images.Count,
+                    (text, workToken) => client.TranslateDetailedAsync(text, settings, workToken),
+                    token, progress, ui, (key, current, count) =>
+                        string.Format(UiText.Get(settings.UiLanguage, key), current, count));
                 ui.LogProbe("text_loop_after");
                 return summary;
             }
