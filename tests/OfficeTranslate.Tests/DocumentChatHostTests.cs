@@ -97,7 +97,7 @@ namespace OfficeTranslate.Tests
             var pane=assembly.GetType("OfficeTranslate.WordAddIn.DocumentChatPane",true)!; Assert.IsTrue(typeof(UserControl).IsAssignableFrom(pane));
             Assert.AreEqual("OfficeTranslate."+host+"ChatPane",pane.GetCustomAttribute<System.Runtime.InteropServices.ProgIdAttribute>()!.Value);
             using(var stream=assembly.GetManifestResourceStream("OfficeTranslate."+host+"AddIn.Ribbon.xml")) using(var reader=new StreamReader(stream!)) StringAssert.Contains(reader.ReadToEnd(),"onAction=\"OpenChat\"");
-            Assert.AreEqual(new Version(2,3,1,0),assembly.GetName().Version);
+            Assert.AreEqual(new Version(2,3,2,0),assembly.GetName().Version);
         }
         internal static void Sta(Action action)
         {
@@ -113,8 +113,8 @@ namespace OfficeTranslate.Tests
                 form.ClientSize=new System.Drawing.Size(440,760);
                 type.GetMethod("Initialize",BindingFlags.Instance|BindingFlags.NonPublic)!.Invoke(pane,new object[]{(Func<ChatContext>)(()=>target),(Func<TranslationSettings>)(()=>settings)});
                 form.Controls.Add(pane); pane.Dock=DockStyle.Fill; form.Show(); Application.DoEvents();
-                Assert.AreEqual("Microsoft YaHei UI",pane.Font.Name); Assert.AreEqual(System.Drawing.Color.FromArgb(247,249,252),pane.BackColor);
-                var transcript=(RichTextBox)Field(type,pane,"_transcript"); Assert.IsTrue(transcript.Text.Length>20); var writes=(FlowLayoutPanel)Field(type,pane,"_writes"); Assert.AreEqual(0,writes.Controls.Count);
+                Assert.AreEqual("Microsoft YaHei UI",pane.Font.Name); Assert.AreEqual(System.Drawing.Color.FromArgb(240,244,250),pane.BackColor);
+                var transcript=(Control)Field(type,pane,"_transcript"); Assert.IsTrue(transcript.Text.Length>20); var writes=(FlowLayoutPanel)Field(type,pane,"_writes"); Assert.AreEqual(0,writes.Controls.Count);
                 var completion=new TaskCompletionSource<ChatReply>();
                 SynchronizationContext.SetSynchronizationContext(new SynchronizationContext());
                 ChatTransport transport=(m,s,n,o,t)=>Task.Run(async()=>{o("streamed");return await completion.Task;}); type.GetProperty("Transport",BindingFlags.NonPublic|BindingFlags.Instance)!.SetValue(pane,transport);
@@ -155,7 +155,7 @@ namespace OfficeTranslate.Tests
                 type.GetMethod("Start",BindingFlags.NonPublic|BindingFlags.Instance)!.Invoke(pane,new object[]{ChatMode.Summarize});
                 Pump(()=>Field(type,pane,"_pending")==null);
                 Assert.AreEqual(OfficeTranslate.WordAddIn.UiText.Get(language,key),((Label)Field(type,pane,"_status")).Text);
-                StringAssert.Contains(((RichTextBox)Field(type,pane,"_transcript")).Text,"ChatException: HTTP 401: fixture diagnosis.");
+                StringAssert.Contains(((Control)Field(type,pane,"_transcript")).Text,"ChatException: HTTP 401: fixture diagnosis.");
                 Assert.AreEqual(0,((FlowLayoutPanel)Field(type,pane,"_writes")).Controls.Count);
                 Assert.AreEqual(0,((DocumentChatSession)Field(type,pane,"_session")).History.Count);
                 form.Close();

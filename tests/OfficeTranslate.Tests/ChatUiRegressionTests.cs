@@ -43,7 +43,13 @@ namespace OfficeTranslate.Tests
                 Call(Pane, "Initialize", (Func<ChatContext>)(() => { Reads++; return Context; }), (Func<TranslationSettings>)(() => Settings));
                 Pane.Dock = DockStyle.Fill; Window.Controls.Add(Pane); Window.Show(); Application.DoEvents();
             }
-            internal RichTextBox Transcript => (RichTextBox)Field(Pane, "_transcript");
+            internal Control Transcript => (Control)Field(Pane, "_transcript");
+            internal RichTextBox Selected = null!;
+            internal void SelectText(string text)
+            {
+                Selected = Descendants(Transcript).OfType<RichTextBox>().Last(b => b.Text.Contains(text));
+                Selected.Select(Selected.Text.IndexOf(text, StringComparison.Ordinal), text.Length);
+            }
             internal void Transport(ChatTransport transport) => Pane.GetType().GetProperty("Transport", Hidden)!.SetValue(Pane, transport);
             public void Dispose() { Window.Close(); Window.Dispose(); Pane.Dispose(); }
         }
@@ -117,27 +123,27 @@ namespace OfficeTranslate.Tests
                     output("## 标题\n**bold**");
                     Pump(() => f.Transcript.Text.EndsWith("bold", StringComparison.Ordinal));
                     Assert.IsFalse(completion.Task.IsCompleted, "Rendering must be progressive, before the request completes.");
-                    f.Transcript.Select(f.Transcript.Text.LastIndexOf("bold", StringComparison.Ordinal), 4);
-                    Assert.IsTrue(f.Transcript.SelectionFont!.Bold);
+                    f.SelectText("bold");
+                    Assert.IsTrue(f.Selected.SelectionFont!.Bold);
                     output(answer); Call(f.Pane, "FlushOutput");
                     Assert.AreEqual(0, layouts); Assert.AreEqual(0, invalidations);
                     StringAssert.Contains(f.Transcript.Text, question);
-                    f.Transcript.Select(f.Transcript.Text.IndexOf("**question**", StringComparison.Ordinal), 12);
-                    Assert.IsFalse(f.Transcript.SelectionFont!.Bold);
-                    f.Transcript.Select(f.Transcript.Text.IndexOf("var x", StringComparison.Ordinal), 5);
-                    Assert.AreEqual(Color.FromArgb(242, 244, 247), f.Transcript.SelectionBackColor);
+                    f.SelectText("**question**");
+                    Assert.IsFalse(f.Selected.SelectionFont!.Bold);
+                    f.SelectText("var x");
+                    Assert.AreEqual(Color.FromArgb(242, 244, 247), f.Selected.SelectionBackColor);
                     output(""); output("fallback plain"); Call(f.Pane, "FlushOutput");
                     Assert.IsFalse(f.Transcript.Text.Contains("var x"));
-                    f.Transcript.Select(f.Transcript.Text.IndexOf("fallback", StringComparison.Ordinal), 8);
-                    Assert.IsFalse(f.Transcript.SelectionFont!.Bold); Assert.AreEqual(0, f.Transcript.SelectionIndent);
+                    f.SelectText("fallback");
+                    Assert.IsFalse(f.Selected.SelectionFont!.Bold); Assert.AreEqual(0, f.Selected.SelectionIndent);
                     completion.SetResult(new ChatReply(answer, true)); Pump(() => FieldOrNull(f.Pane, "_pending") == null);
                     Assert.IsFalse(f.Transcript.Text.Contains("fallback plain"));
                     foreach (var language in UiText.LanguageCodes)
                     {
                         f.Settings.UiLanguage = language; Call(f.Pane, "RefreshLanguage");
                         StringAssert.Contains(f.Transcript.Text, question);
-                        f.Transcript.Select(f.Transcript.Text.LastIndexOf("bold", StringComparison.Ordinal), 4);
-                        Assert.IsTrue(f.Transcript.SelectionFont!.Bold);
+                        f.SelectText("bold");
+                        Assert.IsTrue(f.Selected.SelectionFont!.Bold);
                     }
                     SaveImage(f, host + "-markdown");
                     var history = ((DocumentChatSession)Field(f.Pane, "_session")).History;
@@ -236,9 +242,114 @@ namespace OfficeTranslate.Tests
         }
         private static void SaveImage(PaneFixture f, string name)
         {
-            var dir = Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "../../../../../TestResults/chat-ui-2.3.1/screenshots"));
+            var dir = Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "../../../../../TestResults/chat-bubbles-2.3.2/screenshots"));
             Directory.CreateDirectory(dir);
             using (var bitmap = new Bitmap(f.Pane.Width, f.Pane.Height)) { f.Pane.DrawToBitmap(bitmap, f.Pane.ClientRectangle); bitmap.Save(Path.Combine(dir, name + ".png")); }
+        }
+
+        private static Control[] Bubbles(PaneFixture f) => Descendants(f.Transcript).Where(c => c.GetType().Name == "ChatBubbleRow").ToArray();
+        private static object Property(object target, string name) => target.GetType().GetProperty(name, Hidden)!.GetValue(target)!;
+        private static RichTextBox BubbleContent(Control row) => (RichTextBox)Property(row, "Content");
+
+        [DataTestMethod]
+        [DataRow("Word", "zh-CN")] [DataRow("Excel", "zh-CN")] [DataRow("PowerPoint", "zh-CN")]
+        [DataRow("Word", "en")] [DataRow("Excel", "ko")] [DataRow("PowerPoint", "ja")]
+        public void Bubbles_RenderAlignedColorsTimesAndMarkdown_AndWrapWithinNarrowViewports(string host, string language)
+        {
+            DocumentChatHostTests.Sta(() =>
+            {
+                using (var f = new PaneFixture(host, language))
+                {
+                    const string question = "**hi**";
+                    var answer = "# 标题\n**bold**\n> quote\n```cs\n" + new string('x', 180) + "\n```\n" + string.Join("\n", Enumerable.Repeat("中文 English 😀 long text wraps automatically.", 35)) + "\nlast line";
+                    ((TextBox)Field(f.Pane, "_input")).Text = question;
+                    f.Transport((m, s, n, o, t) => Task.FromResult(new ChatReply(answer, false)));
+                    Call(f.Pane, "Start", ChatMode.Question); Pump(() => FieldOrNull(f.Pane, "_pending") == null);
+                    var rows = Bubbles(f); Assert.AreEqual(2, rows.Length);
+                    var user = BubbleContent(rows[0]); var ai = BubbleContent(rows[1]);
+                    Assert.AreEqual(question, user.Text); user.Select(0, 6); Assert.IsFalse(user.SelectionFont!.Bold);
+                    Assert.AreEqual(Color.White, user.SelectionColor);
+                    Assert.AreEqual(Color.FromArgb(45, 108, 223), user.BackColor);
+                    Assert.AreEqual(user.BackColor, user.SelectionBackColor, "Plain user text must not acquire white paragraph shading.");
+                    Assert.AreEqual(Color.White, ai.BackColor);
+                    ai.Select(ai.Text.IndexOf("bold", StringComparison.Ordinal), 4); Assert.IsTrue(ai.SelectionFont!.Bold);
+                    Assert.AreEqual(Color.FromArgb(32, 55, 88), ai.SelectionColor);
+                    Assert.AreEqual(ai.BackColor, ai.SelectionBackColor, "Plain AI text must not acquire dark paragraph shading.");
+                    Assert.AreEqual(Color.FromArgb(240, 244, 250), f.Pane.BackColor);
+                    foreach (var width in new[] { 260, 320, 440, 600 })
+                    {
+                        f.Window.ClientSize = new Size(width, 760); Application.DoEvents();
+                        foreach (var row in rows)
+                        {
+                            var rect = (Rectangle)Property(row, "BubbleBounds"); var body = BubbleContent(row);
+                            Assert.IsTrue(rect.Width <= row.Width * .8, "Bubble exceeds 80% at " + width);
+                            Assert.IsTrue(rect.Left >= 0 && rect.Right <= row.Width);
+                            Assert.IsTrue(body.WordWrap); Assert.AreEqual(RichTextBoxScrollBars.None, body.ScrollBars);
+                            body.Select(0, 0); body.ScrollToCaret();
+                            var last = body.GetPositionFromCharIndex(body.TextLength - 1);
+                            Assert.IsTrue(last.Y >= 0 && last.Y + body.Font.Height <= body.Height, "Final line clipped at " + width + ": " + last + " / " + body.Size);
+                            var time = row.Controls.OfType<Label>().Single();
+                            var stamp = (DateTimeOffset)Property(row, "Timestamp");
+                            Assert.AreEqual(stamp.ToLocalTime().ToString("HH:mm", System.Globalization.CultureInfo.InvariantCulture), time.Text);
+                            Assert.IsTrue(time.Font.SizeInPoints < body.Font.SizeInPoints);
+                            Assert.IsTrue(time.Top >= rect.Bottom); Assert.IsTrue(time.Bottom <= row.Height);
+                            Assert.AreEqual(UiText.Get(language, (bool)Property(row, "IsUser") ? "ChatYou" : "ChatAssistant"), body.AccessibleName);
+                        }
+                        var u = (Rectangle)Property(rows[0], "BubbleBounds"); var a = (Rectangle)Property(rows[1], "BubbleBounds");
+                        Assert.IsTrue(u.Left > a.Left); Assert.AreEqual(rows[0].Width - a.Left, u.Right, "User and AI must anchor to opposite avatar columns.");
+                        Assert.IsTrue(user.Width < ai.Width, "Short text should shrink to its content.");
+                        ((ScrollableControl)Field(f.Transcript, "_viewport")).AutoScrollPosition = Point.Empty;
+                        SaveImage(f, host + "-bubbles-" + language + "-" + width);
+                    }
+                    var original = (DateTimeOffset)Property(rows[0], "Timestamp");
+                    foreach (var lang in UiText.LanguageCodes)
+                    {
+                        f.Settings.UiLanguage = lang; Call(f.Pane, "RefreshLanguage");
+                        Assert.AreEqual(original, Property(rows[0], "Timestamp"));
+                        Assert.AreEqual(UiText.Get(lang, "ChatUserAvatar"), Field(rows[0], "_avatar"));
+                        Assert.AreEqual(UiText.Get(lang, "ChatAiAvatar"), Field(rows[1], "_avatar"));
+                        Assert.AreEqual(question, user.Text);
+                    }
+                }
+            });
+        }
+
+        [DataTestMethod]
+        [DataRow("Word")] [DataRow("Excel")] [DataRow("PowerPoint")]
+        public void Bubbles_StreamOnlyIntoActiveAnswer_KeepHistoryAndScrollPosition_AndDisposeOnClear(string host)
+        {
+            DocumentChatHostTests.Sta(() =>
+            {
+                using (var f = new PaneFixture(host, "en"))
+                {
+                    SeedExport(f); Call(f.Pane, "RenderTranscript");
+                    var committed = Bubbles(f); var historyLayout = 0; var historyText = 0;
+                    foreach (var row in committed)
+                    { row.Layout += (s, e) => historyLayout++; BubbleContent(row).TextChanged += (s, e) => historyText++; }
+                    Action<string> output = null!; var completion = new TaskCompletionSource<ChatReply>();
+                    f.Transport((m, s, n, o, t) => { output = o; return completion.Task; });
+                    ((TextBox)Field(f.Pane, "_input")).Text = "next";
+                    Call(f.Pane, "Start", ChatMode.Question);
+                    var rows = Bubbles(f); Assert.AreEqual(4, rows.Length);
+                    var timestamp = Property(rows[3], "Timestamp");
+                    historyLayout = historyText = 0;
+                    output(string.Join("\n", Enumerable.Repeat("line 中文😀", 80))); Call(f.Pane, "FlushOutput");
+                    Assert.AreSame(committed[0], Bubbles(f)[0]);
+                    Assert.AreEqual(0, historyLayout); Assert.AreEqual(0, historyText);
+                    var viewport = (ScrollableControl)Field(f.Transcript, "_viewport");
+                    Assert.IsTrue(-viewport.AutoScrollPosition.Y > 0, "Streaming should follow new text at the bottom.");
+                    viewport.AutoScrollPosition = Point.Empty;
+                    output(string.Join("\n", Enumerable.Repeat("line 中文😀", 90))); Call(f.Pane, "FlushOutput");
+                    Assert.AreEqual(0, viewport.AutoScrollPosition.Y, "Reading history must not be interrupted by streaming.");
+                    Assert.AreEqual(timestamp, Property(rows[3], "Timestamp"));
+                    output(""); output("**final**"); Call(f.Pane, "FlushOutput");
+                    Assert.AreEqual("final", BubbleContent(rows[3]).Text);
+                    completion.SetResult(new ChatReply("**final**", false)); Pump(() => FieldOrNull(f.Pane, "_pending") == null);
+                    var finalRows = Bubbles(f); Button(f.Pane, "ChatClear").PerformClick();
+                    Assert.AreEqual(0, Bubbles(f).Length); Assert.IsTrue(finalRows.All(r => r.IsDisposed));
+                    Assert.AreEqual(UiText.Get("en", "ChatEmpty"), f.Transcript.Text);
+                }
+            });
         }
 
         [DataTestMethod]

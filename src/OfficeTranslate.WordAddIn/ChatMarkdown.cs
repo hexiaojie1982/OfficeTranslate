@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Drawing;
 using System.Text;
 using System.Text.RegularExpressions;
 
@@ -26,9 +27,13 @@ namespace OfficeTranslate.WordAddIn
             }
             return result.ToString();
         }
-        internal static string Document(IEnumerable<ChatParagraph> paragraphs)
+        internal static string Document(IEnumerable<ChatParagraph> paragraphs, Color? foreground = null)
         {
-            var rtf = new StringBuilder(@"{\rtf1\ansi\deff0\uc1{\fonttbl{\f0 Microsoft YaHei UI;}}{\colortbl ;\red242\green244\blue247;\red90\green104\blue122;}");
+            var color = foreground ?? Color.Black;
+            var rtf = new StringBuilder(@"{\rtf1\ansi\deff0\uc1{\fonttbl{\f0 Microsoft YaHei UI;}}{\colortbl ;\red242\green244\blue247;\red90\green104\blue122;");
+            // Keep index 0 automatic for unshaded backgrounds. Paragraph() uses
+            // index 3 for the foreground without rewriting escaped literal text.
+            rtf.Append(@"\red").Append(color.R).Append(@"\green").Append(color.G).Append(@"\blue").Append(color.B).Append(";}");
             foreach (var paragraph in paragraphs) rtf.Append(paragraph.Rtf);
             return rtf.Append('}').ToString();
         }
@@ -49,7 +54,7 @@ namespace OfficeTranslate.WordAddIn
                 result.Add(new ChatParagraph(value, Paragraph(size) + (code ? @"\cbpat1\highlight1 " : "") + Escape(value)));
             }
         }
-        private static string Paragraph(int size) => @"\pard\plain\f0\fs" + size.ToString(CultureInfo.InvariantCulture) + @"\cf0\highlight0\cbpat0\sa0\sb0 ";
+        private static string Paragraph(int size) => @"\pard\plain\f0\fs" + size.ToString(CultureInfo.InvariantCulture) + @"\cf3\highlight0\cbpat0\sa0\sb0 ";
         internal static List<ChatParagraph> Parse(string source, int fontSize)
         {
             var result = new List<ChatParagraph>();
