@@ -21,6 +21,7 @@ namespace OfficeTranslate.WordAddIn
         private ChatBubbleRow? _active;
         private bool _arranging;
         internal IReadOnlyList<ChatBubbleRow> Messages => _messages;
+        internal void ScrollToStart() => _viewport.AutoScrollPosition = Point.Empty;
 
         internal ChatConversationView()
         {
@@ -40,7 +41,8 @@ namespace OfficeTranslate.WordAddIn
         }
 
         internal void ShowConversation(IReadOnlyList<ChatMessage> history, string userLabel, string assistantLabel,
-            string empty, string? question, string output, string error, string userAvatar, string aiAvatar, DateTimeOffset turnTime)
+            string empty, string? question, string output, string error, string userAvatar, string aiAvatar, DateTimeOffset turnTime,
+            string language = "zh-CN", bool streaming = true)
         {
             var wasAtBottom = AtBottom();
             var count = history.Count + (question == null ? 0 : 2);
@@ -61,6 +63,7 @@ namespace OfficeTranslate.WordAddIn
                 {
                     var message = i < history.Count ? history[i] : new ChatMessage(i == history.Count ? "user" : "assistant", i == history.Count ? question! : output, turnTime);
                     var user = message.Role == "user";
+                    _messages[i].SetCopyState(i == count - 1 && question != null && streaming, language);
                     _messages[i].ShowMessage(message.Content, user, user ? userLabel : assistantLabel,
                         user ? userAvatar : aiAvatar, message.Timestamp, i == count - 1 && question != null ? error : "");
                 }
@@ -115,6 +118,9 @@ namespace OfficeTranslate.WordAddIn
         internal string RoleLabel { get; private set; } = "";
         internal DateTimeOffset Timestamp { get; private set; }
         internal Rectangle BubbleBounds { get; private set; }
+        internal ChatCopyButton CopyButton { get; } = new ChatCopyButton();
+        private bool _streaming;
+        private string _language = "zh-CN";
         private readonly Label _time = new Label { AutoSize = false, ForeColor = Color.FromArgb(90, 104, 122) };
         private string _avatar = "", _source = "", _error = "";
         private int _contentHeight;
@@ -124,7 +130,7 @@ namespace OfficeTranslate.WordAddIn
         internal ChatBubbleRow()
         {
             SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer, true);
-            Controls.Add(Content); Controls.Add(_time);
+            Controls.Add(Content); Controls.Add(_time); Controls.Add(CopyButton);
             Content.ContentsResized += (s, e) => _contentHeight = e.NewRectangle.Height;
             Content.MouseWheel += (s, e) =>
             {
@@ -133,6 +139,8 @@ namespace OfficeTranslate.WordAddIn
                     viewport.AutoScrollPosition = new Point(0, Math.Max(0, -viewport.AutoScrollPosition.Y - e.Delta));
             };
         }
+        internal void SetCopyState(bool streaming, string language)
+        { _streaming = streaming; _language = language; CopyButton.Configure(_source, streaming, IsUser, language); }
         internal void ShowMessage(string source, bool user, string role, string avatar, DateTimeOffset timestamp, string error)
         {
             // Assigning RichTextBox.Font/ForeColor resets existing character
@@ -156,12 +164,13 @@ namespace OfficeTranslate.WordAddIn
                 _timeFont = new Font(Font.FontFamily, timeSize); _time.Font = _timeFont;
                 old?.Dispose();
             }
-            UpdateOutput(source, error); Invalidate();
+            UpdateOutput(source, error); CopyButton.Configure(_source, _streaming, IsUser, _language); Invalidate();
         }
         internal bool UpdateOutput(string source, string error)
         {
             if (_shown && _source == source && _error == error) return false;
             _shown = _dirty = true; _source = source; _error = error;
+            CopyButton.Configure(_source, _streaming, IsUser, _language);
             Content.ShowMessage(source, !IsUser, error); return true;
         }
 
@@ -203,8 +212,10 @@ namespace OfficeTranslate.WordAddIn
                 SendMessage(Content.Handle, 0x0441, IntPtr.Zero, IntPtr.Zero);
                 var height = Math.Max(Content.Font.Height + Px(6), _contentHeight + Px(4));
                 var x = IsUser ? Width - inset - avatar - gap - bubbleWidth : inset + avatar + gap;
-                BubbleBounds = new Rectangle(x, 0, bubbleWidth, height + padding * 2);
+                var copySize = Px(24);
+                BubbleBounds = new Rectangle(x, 0, bubbleWidth, height + padding * 2 + copySize + Px(2));
                 Content.SetBounds(x + padding, padding, Content.Width, height);
+                CopyButton.SetBounds(BubbleBounds.Right - Px(8) - copySize, Content.Bottom + Px(4), copySize, copySize);
                 _time.TextAlign = IsUser ? ContentAlignment.MiddleRight : ContentAlignment.MiddleLeft;
                 _time.SetBounds(x, BubbleBounds.Bottom + Px(3), bubbleWidth, Px(18));
                 Height = _time.Bottom; _dirty = false; _arrangedWidth = Width; Invalidate();

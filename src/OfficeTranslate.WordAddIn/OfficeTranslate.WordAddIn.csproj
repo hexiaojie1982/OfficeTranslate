@@ -13,6 +13,8 @@
   <ItemGroup>
     <Compile Include="..\OfficeTranslate.AddInShared\AddIn.Chat.cs" Link="Shared\AddIn.Chat.cs" />
     <Reference Include="Microsoft.CSharp" />
+    <Reference Include="PresentationCore" />
+    <Reference Include="WindowsBase" />
 
     <ProjectReference Include="..\OfficeTranslate.Core\OfficeTranslate.Core.csproj" />
     <PackageReference Include="Microsoft.Office.Interop.Word" Version="15.0.4797.1004" />
