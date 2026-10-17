@@ -219,7 +219,7 @@ namespace OfficeTranslate.Tests
         [DataTestMethod]
         [DataRow("Word", "zh-CN")] [DataRow("Excel", "zh-CN")] [DataRow("PowerPoint", "zh-CN")]
         [DataRow("Word", "en")] [DataRow("Excel", "en")] [DataRow("PowerPoint", "en")]
-        public void Dialog_ListsAndShowsRawReadOnlyDetails_ConfirmsDeletes_AndLocalizesEmptyState(string host, string language)
+        public void Dialog_ListsAndShowsReadOnlyBubblesWithRawSource_ConfirmsDeletes_AndLocalizesEmptyState(string host, string language)
         {
             DocumentChatHostTests.Sta(() =>
             {
@@ -234,13 +234,17 @@ namespace OfficeTranslate.Tests
                         void Call(string method) => type.GetMethod(method, flags)!.Invoke(form, null);
                         form.Show(); Application.DoEvents();
                         Assert.AreEqual(UiText.Get(language, "ChatHistoryTitle"), form.Text);
-                        var list = (ListView)Field("_list"); var details = (TextBox)Field("_details");
+                        var list = (ListView)Field("_list"); var details = (Control)Field("_details");
                         Assert.AreEqual(2, list.Items.Count); Assert.AreEqual(newer, list.Items[0].Tag);
                         CollectionAssert.AreEqual(new[] { "ChatHistoryHost", "ChatHistoryTime", "ChatHistoryDocument", "ChatHistoryQuestion" }.Select(k => UiText.Get(language, k)).ToArray(), list.Columns.Cast<ColumnHeader>().Select(c => c.Text).ToArray());
-                        list.Items[0].Selected = true; Application.DoEvents(); Assert.IsTrue(details.ReadOnly);
-                        StringAssert.Contains(details.Text, "new question"); StringAssert.Contains(details.Text, "**raw**");
-                        StringAssert.Contains(details.Text, "## 回答\r\n**raw**\r\n```cs\r\nx++;\r\n```");
-                        StringAssert.Contains(details.Text, UiText.Get(language, "ChatExportAnswer")); StringAssert.Contains(details.Text, Time.ToString("O"));
+                        list.Items[0].Selected = true; Application.DoEvents();
+                        var rows = ((System.Collections.IEnumerable)details.GetType().GetProperty("Messages", flags)!.GetValue(details)!).Cast<Control>().ToArray();
+                        Assert.AreEqual(2, rows.Length);
+                        foreach (var row in rows) Assert.IsTrue(((RichTextBox)row.GetType().GetProperty("Content", flags)!.GetValue(row)!).ReadOnly);
+                        Assert.AreEqual(Turn().Answer, rows[1].GetType().GetField("_source", flags)!.GetValue(rows[1]));
+                        StringAssert.Contains(details.Text, "new question"); StringAssert.Contains(details.Text, "raw");
+                        StringAssert.Contains(details.Text, UiText.Get(language, "ChatExportAnswer"));
+                        StringAssert.Contains(((Label)Field("_metadata")).Text, Time.AddHours(1).ToString("O"));
                         var evidence = Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "../../../../../TestResults/chat-history-2.3.3"));
                         Directory.CreateDirectory(evidence);
                         using (var bitmap = new System.Drawing.Bitmap(form.ClientSize.Width, form.ClientSize.Height)) { form.Controls[0].DrawToBitmap(bitmap, form.ClientRectangle); bitmap.Save(Path.Combine(evidence, host + "-" + language + "-details.png")); }

@@ -7,6 +7,9 @@
     <Compile Include="..\OfficeTranslate.WordAddIn\ChatMarkdown.cs" Link="Shared\ChatMarkdown.cs" />
     <Compile Include="..\OfficeTranslate.WordAddIn\ChatTranscriptBox.cs" Link="Shared\ChatTranscriptBox.cs" />
     <Compile Include="..\OfficeTranslate.WordAddIn\ChatConversationView.cs" Link="Shared\ChatConversationView.cs" />
+    <Compile Include="..\OfficeTranslate.WordAddIn\ChatCopyButton.cs" Link="Shared\ChatCopyButton.cs" />
+    <Reference Include="PresentationCore" />
+    <Reference Include="WindowsBase" />
     <Compile Include="..\OfficeTranslate.WordAddIn\DocumentChatHost.cs" Link="Shared\DocumentChatHost.cs" />
     <Reference Include="Microsoft.CSharp" />
 

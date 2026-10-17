@@ -165,7 +165,7 @@ namespace OfficeTranslate.WordAddIn
         }
         private void RenderTranscript() => _transcript.ShowConversation(_hasTurn ? _turnHistory : _session.History,
             T("ChatYou"), T("ChatAssistant"), T("ChatEmpty"), _hasTurn ? _turnQuestion : null,
-            _hasTurn ? _renderedOutput : "", ErrorText(), T("ChatUserAvatar"), T("ChatAiAvatar"), _turnTime);
+            _hasTurn ? _renderedOutput : "", ErrorText(), T("ChatUserAvatar"), T("ChatAiAvatar"), _turnTime, _language, _acceptingStream);
         private string ErrorText() => _errorDetails.Length == 0 ? "" : "\r\n\r\n" + T("ChatErrorDetails") + "\r\n" + _errorDetails;
         private void SetStatus(string key, bool error = false)
         { _statusKey = key; _statusArgs = new object[0]; _statusSuffixes.Clear(); RenderStatus(); _status.ForeColor = error ? Color.FromArgb(190, 45, 45) : Color.FromArgb(90, 104, 122); }
@@ -290,7 +290,7 @@ namespace OfficeTranslate.WordAddIn
                     }
                 });
             }
-            finally { ui.Invoke(() => { if (!IsDisposed) { EndStream(false); _commands.Enabled = true; _cancel.Enabled = false; } lock (_streamSync) { _pending = null; } }); cancellation.Dispose(); }
+            finally { ui.Invoke(() => { if (!IsDisposed) { EndStream(false); if (_hasTurn) RenderTranscript(); _commands.Enabled = true; _cancel.Enabled = false; } lock (_streamSync) { _pending = null; } }); cancellation.Dispose(); }
         }
         private void BuildWrites()
         {

@@ -1,8 +1,8 @@
 # OfficeTranslate 应用说明
 
-当前正式版本：**2.3.4.0**（`v2.3.4`），从 `main` 构建。
+当前本地验收版本：**2.3.5.0**，从 `feat/copy-button` 构建；未合并、未创建 tag、未 push。
 
-本次新增 Word 正文有界并行翻译及按序增量写回，翻译设置可调并发数（默认 4）。保留已发布的历史会话、输入快捷键、翻译设置开关；图片 OCR 翻译仍串行。
+本次新增聊天和历史会话逐条复制按钮：用户复制原文，AI 复制 Markdown 原文；流式与空消息隐藏，成功/失败提示约 1.5 秒。保留并行翻译、历史持久化、输入快捷键及翻译设置开关。
 
 ## 构建
 
@@ -18,4 +18,4 @@
 
 静默部署命令：`msiexec /i OfficeTranslate.Office.x64.msi /qn /l*v install.log`。
 
-功能测试及验证边界见 `tests/VALIDATION-2.3.4-PARALLEL-TRANSLATE.md`。正式版构建后，安装和实际模型端到端验收仍需单独执行。
+功能测试及验证边界见 `tests/VALIDATION-2.3.5-CHAT-COPY.md`。本地 MSI 等待用户真机验收；明确说“合并发布”后才执行合并发布流程。
