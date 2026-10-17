@@ -1,6 +1,6 @@
 # OfficeTranslate for Microsoft Office（原生 COM 加载项）
 
-当前本地验收版本：**2.3.5.0**（`feat/copy-button`，尚未合并或发布）。Word / Excel / PowerPoint 的「OCR」识别按钮检测图片文字区域并转录原文，不执行翻译。PowerPoint 支持选中图片或幻灯片（单页、多页），逐页识别其中的图片；Word / Excel 仍仅处理选中图片。
+当前正式版本：**2.3.5.0**（`main`，Git tag：`v2.3.5`）。用户真机验收通过，全量测试 **803/803 通过，0 失败、0 跳过**。Word / Excel / PowerPoint 的「OCR」识别按钮检测图片文字区域并转录原文，不执行翻译。PowerPoint 支持选中图片或幻灯片（单页、多页），逐页识别其中的图片；Word / Excel 仍仅处理选中图片。
 
 2.3.5：用户和 AI 聊天气泡右下角常显一键复制按钮，AI 复制 Markdown 原文，用户复制原文；流式输出中和空消息隐藏。复制成功显示对勾及“已复制”，失败显示“复制失败”，约 1.5 秒恢复。提示覆盖简中、繁中、英语、韩语和日语。历史会话同样以只读气泡显示并可逐条复制；剪贴板仅在 UI STA 线程操作，不记录正文。验证见 [复制按钮验证记录](tests/VALIDATION-2.3.5-CHAT-COPY.md)。
 

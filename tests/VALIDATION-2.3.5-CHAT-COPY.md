@@ -1,6 +1,8 @@
 # 2.3.5 Chat 逐条复制验证
 
-日期：2026-10-17。基于干净的 `main`（`62de3da`，merge #27）创建本地分支 `feat/copy-button`。产品、Core、三个宿主程序集、MSI 和 COM 注册版本统一为 **2.3.5.0**。未合并、未创建 tag、未 push、未发布、未安装或发送文件，等待用户真机验收后明确说“合并发布”。
+日期：2026-10-17。基于干净的 `main`（`62de3da`，merge #27）创建分支 `feat/copy-button`。产品、Core、三个宿主程序集、MSI 和 COM 注册版本统一为 **2.3.5.0**。用户已完成真机验收并明确授权“合并发布”；正式版从合并后的 `main` 清理重建，Git tag 为 `v2.3.5`。
+
+下列测试结果及 MSI 哈希记录的是发布前验收包；正式版重建结果以 GitHub Release 和最终交付报告为准。
 
 ## 实现
 
@@ -37,7 +39,7 @@
 | `CHANGELOG.md` | 2.3.5 更新记录 |
 | `tests/VALIDATION-2.3.5-CHAT-COPY.md`（新增） | 本报告 |
 
-版本已用 `git grep` 全量扫描。历史 CHANGELOG、About 历史更新项和旧验证报告仍保留各自原始版本；没有创建 2.3.5 Git tag。
+版本已用 `git grep` 全量扫描。历史 CHANGELOG、About 历史更新项和旧验证报告仍保留各自原始版本。
 
 ## 测试与构建
 
@@ -70,4 +72,4 @@
 - 直接读取 MSI 数据库：ProductVersion **2.3.5.0**；6 个 COM Assembly 注册项版本均为 **2.3.5.0**。
 - 用 WiX dark 解出 MSI 中的 Core、Word、Excel、PowerPoint DLL；四个 DLL 的 AssemblyVersion/FileVersion 均为 **2.3.5.0**，SHA-256 与最终 Release 输出逐一相同（`versions.json`）。没有执行安装。
 
-证据目录：`TestResults/copy-button-2.3.5/`，含红灯/专项/全量 TRX、Release 构建、源码哈希清单、MSI 信息及控件截图。自动控件回归和截图不等于真实 Office 端到端验收，仍需用户在实际宿主中验收交互与视觉效果。
+证据目录：`TestResults/copy-button-2.3.5/`，含红灯/专项/全量 TRX、Release 构建、源码哈希清单、MSI 信息及控件截图。自动控件回归和截图的范围为上述控件及隔离夹具；用户另已完成实际 Office 宿主交互与视觉效果的真机验收。
