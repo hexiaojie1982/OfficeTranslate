@@ -34,6 +34,12 @@ namespace OfficeTranslate.WordAddIn
                 "OfficeTranslate 2.3.7.0\r\n• Chat 번역 버튼이 번역 서비스의 대상 언어로 번역하고 스트리밍으로 표시합니다.\r\n• 번역 시스템 프롬프트를 편집하고 선택 영역을 바꾸거나 아래에 삽입할 수 있습니다.\r\n\r\n",
                 "OfficeTranslate 2.3.7.0\r\n• Chat の翻訳ボタンで翻訳サービスの翻訳先言語に翻訳し、ストリーミング表示します。\r\n• 翻訳システムプロンプトの編集、選択範囲の置換、下への挿入に対応します。\r\n\r\n",
                 "OfficeTranslate 2.3.7.0\r\n• Chat translates into the translation service's target language with streamed output.\r\n• Customize the translation system prompt; replace the selection or insert below.\r\n\r\n" },
+            ["CjkSpacingChangelog"] = new[] {
+                "OfficeTranslate 2.3.6.0\r\n• Chat 回复完成后自动删除中日文字符之间的多余空格，显示、历史、导出与复制保持一致。\r\n• 保留中英、中数、韩文间距，以及代码块和行内代码。\r\n\r\n",
+                "OfficeTranslate 2.3.6.0\r\n• Chat 回覆完成後自動刪除中日文字元之間的多餘空格，顯示、歷史、匯出與複製保持一致。\r\n• 保留中英、中數、韓文間距，以及程式碼區塊和行內程式碼。\r\n\r\n",
+                "OfficeTranslate 2.3.6.0\r\n• Chat 답변 완료 후 중국어·일본어 문자 사이의 불필요한 공백을 제거하고 화면, 기록, 내보내기, 복사에 동일하게 적용합니다.\r\n• 한국어, 영문·숫자 경계, 코드 블록과 인라인 코드의 공백을 보존합니다.\r\n\r\n",
+                "OfficeTranslate 2.3.6.0\r\n• Chat回答の完了後、中国語・日本語の文字間の余分な空白を除去し、表示・履歴・エクスポート・コピーに反映します。\r\n• 韓国語、英数字との間隔、コードブロックとインラインコードを保持します。\r\n\r\n",
+                "OfficeTranslate 2.3.6.0\r\n• Completed Chat answers remove extra spaces between Chinese/Japanese characters consistently across display, history, export and copy.\r\n• Preserve Korean spacing, English/number boundaries, fenced and inline code.\r\n\r\n" },
             ["CopyChangelog"] = new[] {
                 "OfficeTranslate 2.3.5.0\r\n• 聊天气泡和历史消息支持一键复制原文，AI 回复保留 Markdown。\r\n• 流式输出完成后显示复制按钮，提供复制成功或失败提示。\r\n\r\n",
                 "OfficeTranslate 2.3.5.0\r\n• 聊天氣泡與歷史訊息支援一鍵複製原文，AI 回覆保留 Markdown。\r\n• 串流輸出結束後顯示複製按鈕，提供複製成功或失敗提示。\r\n\r\n",

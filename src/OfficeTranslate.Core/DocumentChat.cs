@@ -142,21 +142,24 @@ namespace OfficeTranslate.Core
             progress(0, 0);
             var reply = await transport(messages, settings, settings.ChatOutputTokens, output, token).ConfigureAwait(false);
             token.ThrowIfCancellationRequested();
+            // Commit one canonical answer after streaming completes, before any
+            // history write or final bubble/export/copy consumes the response.
+            var answer = ChatCjkSpacing.Clean(reply.Text);
             lock (_historySync)
             {
                 token.ThrowIfCancellationRequested();
                 if (generation != _generation) throw new OperationCanceledException("Chat session cleared.");
                 var timestamp = DateTimeOffset.Now;
-                _history.Add(new ChatMessage("user", question, timestamp)); _history.Add(new ChatMessage("assistant", reply.Text, timestamp));
+                _history.Add(new ChatMessage("user", question, timestamp)); _history.Add(new ChatMessage("assistant", answer, timestamp));
                 if (_history.Count > 20) _history.RemoveRange(0, _history.Count - 20);
                 if (_store != null)
                 {
                     if (_createdAt == default) { _createdAt = timestamp; _documentName = context.DocumentName; _host = context.Host; }
-                    _unsaved.Add(new ChatHistoryTurn { Timestamp = timestamp.ToString("O", System.Globalization.CultureInfo.InvariantCulture), Question = question, Answer = reply.Text });
+                    _unsaved.Add(new ChatHistoryTurn { Timestamp = timestamp.ToString("O", System.Globalization.CultureInfo.InvariantCulture), Question = question, Answer = answer });
                     TrySaveHistory();
                 }
             }
-            return new ChatReply(reply.Text, usedFallback || reply.UsedFallback, summarized);
+            return new ChatReply(answer, usedFallback || reply.UsedFallback, summarized);
         }
     }
 }
