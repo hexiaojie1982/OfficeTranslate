@@ -20,8 +20,8 @@ namespace OfficeTranslate.Tests
         private static object Field(object target, string name) => target.GetType().GetField(name, Hidden)!.GetValue(target)!;
         private static object? Call(object target, string name, params object[] args) => target.GetType().GetMethod(name, Hidden)!.Invoke(target, args);
         private static string Baseline(TranslationSettings settings, ChatMode mode) =>
-            (mode == ChatMode.Question ? settings.ChatQuestionSystemPrompt : mode == ChatMode.Summarize ? settings.ChatSummarySystemPrompt : settings.ChatRewriteSystemPrompt)
-            + "\n" + ChatPrompts.Safety(settings.UiLanguage);
+            (mode == ChatMode.Translate ? settings.ChatTranslateSystemPrompt : mode == ChatMode.Question ? settings.ChatQuestionSystemPrompt : mode == ChatMode.Summarize ? settings.ChatSummarySystemPrompt : settings.ChatRewriteSystemPrompt)
+            + "\n" + ChatPrompts.Safety(settings.UiLanguage, mode);
         private static TranslationSettings Settings() => new TranslationSettings
         {
             TranslationStyle = "Technology", CustomInstructions = "Keep product codes unchanged.", Glossary = "wafer = 晶圆",
@@ -31,12 +31,14 @@ namespace OfficeTranslate.Tests
             session.SendAsync(new ChatContext(text, false), "question", mode, settings, transport, _ => { }, (i, n) => { }, CancellationToken.None);
 
         [DataTestMethod]
+        [DataRow("zh-CN", ChatMode.Translate)] [DataRow("en", ChatMode.Translate)]
         [DataRow("zh-CN", ChatMode.Question)] [DataRow("en", ChatMode.Question)]
         [DataRow("zh-CN", ChatMode.Summarize)] [DataRow("en", ChatMode.Summarize)]
         [DataRow("zh-CN", ChatMode.Rewrite)] [DataRow("en", ChatMode.Rewrite)]
         public async Task Toggle_PreservesExactDisabledPrompt_AndUsesLatestSharedValues(string language, ChatMode mode)
         {
             var settings = Settings(); settings.UiLanguage = language;
+            settings.ChatTranslateSystemPrompt = "custom translation prompt";
             settings.ChatQuestionSystemPrompt = "custom question prompt";
             settings.ChatSummarySystemPrompt = "custom summary prompt";
             settings.ChatRewriteSystemPrompt = "custom rewrite prompt";

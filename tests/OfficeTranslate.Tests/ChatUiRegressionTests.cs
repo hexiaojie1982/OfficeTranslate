@@ -153,7 +153,7 @@ namespace OfficeTranslate.Tests
                     var question = input.Text;
                     EnterKey(input);
                     Pump(() => calls == 1);
-                    Assert.AreEqual(question, input.Text, "Enter must be suppressed instead of inserting a newline.");
+                    Assert.AreEqual("", input.Text, "Enter sends and clears immediately without inserting a newline.");
                     EnterKey(input);
                     Assert.AreEqual(1, calls, "Enter while a request is pending must not send twice.");
                     completion.SetResult(new ChatReply("answer", false));
@@ -638,7 +638,8 @@ namespace OfficeTranslate.Tests
             {
                 var session = new DocumentChatSession();
                 await session.SendAsync(new ChatContext("A document in a different language. 文書の言語", false), "Q", mode, settings,
-                    (m, s, n, o, t) => { StringAssert.StartsWith(m[0].Content, ChatPrompts.Default(language, mode)); StringAssert.Contains(m[0].Content, requirement);
+                    (m, s, n, o, t) => { StringAssert.StartsWith(m[0].Content, ChatPrompts.Default(language, mode)); if (mode != ChatMode.Translate) StringAssert.Contains(m[0].Content, requirement);
+                        else StringAssert.Contains(m[0].Content, ChatPrompts.Safety(language, mode));
                         Assert.IsFalse(m[0].Content.Contains("user's language")); Assert.IsFalse(m[0].Content.Contains("facts and language")); return Task.FromResult(new ChatReply("ok", false)); }, _ => { }, (i, n) => { }, CancellationToken.None);
             }
             var restored = json.Deserialize<TranslationSettings>(json.Serialize(settings)); restored.UiLanguage = language == "en" ? "zh-CN" : "en";
@@ -682,10 +683,11 @@ namespace OfficeTranslate.Tests
                         form.Show(); Application.DoEvents();
                         Assert.AreEqual(UiText.Get(language, "ChatSettings"), form.Text);
                         var all = Descendants(form).ToArray();
-                        foreach (var key in new[] { "ChatQuestionPrompt", "ChatSummaryPrompt", "ChatRewritePrompt", "ChatBudget", "ChatOutputBudget", "Save" }) Assert.IsTrue(all.Any(c => c.Text == UiText.Get(language, key)), key);
+                        foreach (var key in new[] { "ChatQuestionPrompt", "ChatTranslatePrompt", "ChatSummaryPrompt", "ChatRewritePrompt", "ChatBudget", "ChatOutputBudget", "Save" }) Assert.IsTrue(all.Any(c => c.Text == UiText.Get(language, key)), key);
                         var boxes = all.OfType<TextBox>().Where(b => b.Multiline).ToArray();
-                        Assert.AreEqual(3, boxes.Length);
-                        for (var i = 0; i < 3; i++) Assert.AreEqual(ChatPrompts.Default(language, (ChatMode)i), boxes[i].Text);
+                        Assert.AreEqual(4, boxes.Length);
+                        var modes = new[] { ChatMode.Question, ChatMode.Translate, ChatMode.Summarize, ChatMode.Rewrite };
+                        for (var i = 0; i < modes.Length; i++) Assert.AreEqual(ChatPrompts.Default(language, modes[i]), boxes[i].Text);
                         form.Close();
                     }
                 }

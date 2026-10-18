@@ -80,14 +80,17 @@ namespace OfficeTranslate.Tests
             Assert.AreEqual(0, session.History.Count);
         }
         [DataTestMethod]
-        [DataRow(ChatMode.Question, false, false, false)]
+        [DataRow(ChatMode.Question, false, true, false)]
+        [DataRow(ChatMode.Question, true, true, false)]
         [DataRow(ChatMode.Summarize, false, false, true)]
         [DataRow(ChatMode.Rewrite, false, true, false)]
         [DataRow(ChatMode.Rewrite, true, true, false)]
+        [DataRow(ChatMode.Translate, false, true, false)]
+        [DataRow(ChatMode.Translate, true, true, false)]
         public void WriteButtons_OnlyPermitMatchingCompletedAction(ChatMode mode, bool selected, bool below, bool start)
         {
             var writes = 0; var context = new ChatContext("source", selected, (a,t) => writes++, selected);
-            Assert.AreEqual(mode == ChatMode.Rewrite && selected, context.Allows(mode, ChatWriteAction.ReplaceSelection, "result"));
+            Assert.AreEqual(mode != ChatMode.Summarize && selected, context.Allows(mode, ChatWriteAction.ReplaceSelection, "result"));
             Assert.AreEqual(below, context.Allows(mode, ChatWriteAction.InsertBelow, "result")); Assert.AreEqual(start, context.Allows(mode, ChatWriteAction.InsertAtStart, "result"));
             Assert.IsFalse(context.Allows(mode, ChatWriteAction.InsertAtStart, "")); Assert.AreEqual(0, writes);
             if (start) context.Apply(mode, ChatWriteAction.InsertAtStart, "result"); else if (below) context.Apply(mode, ChatWriteAction.InsertBelow, "result");
@@ -105,10 +108,10 @@ namespace OfficeTranslate.Tests
         [TestMethod]
         public async Task CustomPromptsAndChangingModelBudgets_AreAppliedPerRequest()
         {
-            var session=new DocumentChatSession();var settings=Settings();settings.ChatQuestionSystemPrompt="QUESTION SYSTEM";settings.ChatSummarySystemPrompt="SUMMARY SYSTEM";settings.ChatRewriteSystemPrompt="REWRITE SYSTEM";
+            var session=new DocumentChatSession();var settings=Settings();settings.ChatTranslateSystemPrompt="TRANSLATE SYSTEM";settings.ChatQuestionSystemPrompt="QUESTION SYSTEM";settings.ChatSummarySystemPrompt="SUMMARY SYSTEM";settings.ChatRewriteSystemPrompt="REWRITE SYSTEM";
             foreach(ChatMode mode in Enum.GetValues(typeof(ChatMode)))
                 await session.SendAsync(new ChatContext(new string('d',200),true),"Q",mode,settings,(m,s,n,o,t)=>{
-                    StringAssert.StartsWith(m[0].Content,mode==ChatMode.Question?"QUESTION SYSTEM":mode==ChatMode.Summarize?"SUMMARY SYSTEM":"REWRITE SYSTEM");
+                    StringAssert.StartsWith(m[0].Content,mode==ChatMode.Translate?"TRANSLATE SYSTEM":mode==ChatMode.Question?"QUESTION SYSTEM":mode==ChatMode.Summarize?"SUMMARY SYSTEM":"REWRITE SYSTEM");
                     Assert.IsTrue(ChatBudget.Cost(m)+n<=s.ChatContextTokens);return Task.FromResult(new ChatReply(new string('a',1500),false));},_=>{},(i,n)=>{},CancellationToken.None);
             settings.ChatContextTokens=2048;settings.ChatOutputTokens=256;
             await session.SendAsync(new ChatContext("doc",false),"Q",ChatMode.Question,settings,(m,s,n,o,t)=>{

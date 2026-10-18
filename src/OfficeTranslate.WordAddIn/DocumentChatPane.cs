@@ -75,6 +75,7 @@ namespace OfficeTranslate.WordAddIn
             root.Controls.Add(_context, 0, 1);
             var functions = ButtonRow(); var operations = ButtonRow();
             _commands.Controls.Add(functions, 0, 0); _commands.Controls.Add(_useTranslationSettings, 0, 1); _commands.Controls.Add(operations, 0, 2);
+            AddButton(functions, "ChatTranslate", () => Start(ChatMode.Translate), true);
             AddButton(functions, "ChatSummary", () => Start(ChatMode.Summarize), true); AddButton(functions, "ChatRewrite", () => Start(ChatMode.Rewrite), true);
             AddButton(functions, "ChatSettings", () => { using (var form = new ChatSettingsForm(ChatSettingsStore)) form.ShowDialog(this); RefreshLanguage(); }, true);
             _useTranslationSettings.CheckedChanged += (s, e) => SaveTranslationSettingsChoice();
@@ -156,7 +157,7 @@ namespace OfficeTranslate.WordAddIn
             {
                 if (control.Tag is string key)
                 {
-                    if (control is Button button) Style(button, T(key), key == "ChatSummary" || key == "ChatRewrite" || key == "ChatSettings" || key == "ChatSend" || key == "ChatReplace" || key == "ChatInsertBelow" || key == "ChatInsertStart");
+                    if (control is Button button) Style(button, T(key), key == "ChatTranslate" || key == "ChatSummary" || key == "ChatRewrite" || key == "ChatSettings" || key == "ChatSend" || key == "ChatReplace" || key == "ChatInsertBelow" || key == "ChatInsertStart");
                     else control.Text = T(key);
                     if (key == "ChatRefresh") _tips.SetToolTip(control, T("ChatRefreshTip"));
                 }
@@ -241,8 +242,17 @@ namespace OfficeTranslate.WordAddIn
         {
             if (_pending != null || _capture == null || _settings == null) return;
             RefreshLanguage();
-            var question = mode == ChatMode.Question ? _input.Text.Trim() : T(mode == ChatMode.Summarize ? "ChatSummaryRequest" : "ChatRewriteRequest");
+            var settings = _settings();
+            string question;
+            switch (mode)
+            {
+                case ChatMode.Translate: question = string.Format(T("ChatTranslateRequest"), settings.TargetLanguage); break;
+                case ChatMode.Summarize: question = T("ChatSummaryRequest"); break;
+                case ChatMode.Rewrite: question = T("ChatRewriteRequest"); break;
+                default: question = _input.Text.Trim(); break;
+            }
             if (string.IsNullOrWhiteSpace(question)) { SetStatus("ChatNeedInput", true); return; }
+            _input.Clear();
             var ui = OfficeUiDispatcher.Capture("Chat");
             var cancellation = new CancellationTokenSource();
             lock (_streamSync) { _pending = cancellation; _queuedOutput = null; _recovering = false; _acceptingStream = true; }
@@ -250,7 +260,7 @@ namespace OfficeTranslate.WordAddIn
             _commands.Enabled = false; _cancel.Enabled = true; ClearWrites(); _resultContext = null; _result = "";
             try
             {
-                var settings = diagnosticSettings = _settings(); var context = diagnosticContext = _capture();
+                diagnosticSettings = settings; var context = diagnosticContext = _capture();
                 _displayContext = context; ShowContext();
                 if (string.IsNullOrWhiteSpace(context.Text)) { SetStatus("ChatNoText", true); return; }
                 _turnHistory = _session.History; _turnQuestion = question; _turnTime = DateTimeOffset.Now; _errorDetails = ""; _hasTurn = true;
@@ -268,7 +278,6 @@ namespace OfficeTranslate.WordAddIn
                         if (IsDisposed || cancellation.IsCancellationRequested) return;
                         EndStream(false); _result = reply.Text; _hasTurn = false; RenderTranscript();
                         _turnQuestion = ""; _turnHistory = new ChatMessage[0]; _resultMode = mode; _resultContext = context; _written = false;
-                        if (mode == ChatMode.Question) _input.Clear();
                         SetStatus(reply.UsedFallback ? "ChatFallback" : "ChatDone");
                         if (reply.UsedSummaries) AppendStatus("ChatReduced");
                         BuildWrites();
@@ -294,10 +303,13 @@ namespace OfficeTranslate.WordAddIn
         }
         private void BuildWrites()
         {
+            // Answers, translations and rewrites use the source position: replace the
+            // captured selection or insert below it; never insert at the document start.
+            var sourceResult = _resultMode == ChatMode.Question || _resultMode == ChatMode.Rewrite || _resultMode == ChatMode.Translate;
             foreach (ChatWriteAction action in Enum.GetValues(typeof(ChatWriteAction)))
             {
-                if (_resultMode == ChatMode.Question || (_resultMode == ChatMode.Summarize && action != ChatWriteAction.InsertAtStart) ||
-                    (_resultMode == ChatMode.Rewrite && action == ChatWriteAction.InsertAtStart)) continue;
+                if ((_resultMode == ChatMode.Summarize && action != ChatWriteAction.InsertAtStart) ||
+                    (sourceResult && action == ChatWriteAction.InsertAtStart)) continue;
                 var allowed = _resultContext?.Allows(_resultMode, action, _result) == true;
                 var key = action == ChatWriteAction.ReplaceSelection ? "ChatReplace" : action == ChatWriteAction.InsertBelow ? "ChatInsertBelow" : "ChatInsertStart";
                 var button = AddButton(_writes, key, () =>
@@ -311,7 +323,7 @@ namespace OfficeTranslate.WordAddIn
                 button.Enabled = allowed;
             }
             _writes.Enabled = true;
-            if (_resultMode == ChatMode.Rewrite && _resultContext?.CanReplace != true) AppendStatus("ChatReplaceUnavailable");
+            if (sourceResult && _resultContext?.CanReplace != true) AppendStatus("ChatReplaceUnavailable");
         }
         internal void Stop() { _pending?.Cancel(); EndStream(false); _session.Clear(); _hasTurn = false; _renderedOutput = _result = _turnQuestion = _errorDetails = ""; _turnHistory = new ChatMessage[0]; _resultContext = null; }
         protected override void OnResize(EventArgs e)
@@ -330,17 +342,17 @@ namespace OfficeTranslate.WordAddIn
         {
             var settings = store.Load(); string T(string key) => UiText.Get(settings.UiLanguage, key);
             Text = T("ChatSettings"); Font = new Font("Microsoft YaHei UI", 9F); BackColor = Color.FromArgb(247, 249, 252);
-            Size = new Size(620, 600); MinimumSize = new Size(520, 500); StartPosition = FormStartPosition.CenterParent; ShowInTaskbar = false;
-            var root = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(16), ColumnCount = 1, RowCount = 11 };
-            TextBox Add(string label, string value) { root.Controls.Add(new Label { Text = T(label), AutoSize = true }); var box = new TextBox { Multiline = true, ScrollBars = ScrollBars.Vertical, Text = value, Dock = DockStyle.Fill, Height = 80, MaxLength = 0 }; root.Controls.Add(box); return box; }
-            var q = Add("ChatQuestionPrompt", settings.ChatQuestionSystemPrompt); var s = Add("ChatSummaryPrompt", settings.ChatSummarySystemPrompt); var r = Add("ChatRewritePrompt", settings.ChatRewriteSystemPrompt);
+            Size = new Size(620, 720); MinimumSize = new Size(520, 500); StartPosition = FormStartPosition.CenterParent; ShowInTaskbar = false;
+            var root = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(16), AutoScroll = true, ColumnCount = 1, RowCount = 13 };
+            TextBox Add(string label, string value) { root.Controls.Add(new Label { Text = T(label), AutoSize = true }); var box = new TextBox { Tag = label, Multiline = true, ScrollBars = ScrollBars.Vertical, Text = value, Dock = DockStyle.Fill, Height = 80, MaxLength = 0 }; root.Controls.Add(box); return box; }
+            var q = Add("ChatQuestionPrompt", settings.ChatQuestionSystemPrompt); var t = Add("ChatTranslatePrompt", settings.ChatTranslateSystemPrompt); var s = Add("ChatSummaryPrompt", settings.ChatSummarySystemPrompt); var r = Add("ChatRewritePrompt", settings.ChatRewriteSystemPrompt);
             root.Controls.Add(new Label { Text = T("ChatBudget"), AutoSize = true });
             var budget = new NumericUpDown { Minimum = 2048, Maximum = 1048576, Value = Math.Max(2048, Math.Min(1048576, settings.ChatContextTokens)), Dock = DockStyle.Fill }; root.Controls.Add(budget);
             root.Controls.Add(new Label { Text = T("ChatOutputBudget"), AutoSize = true });
             var output = new NumericUpDown { Minimum = 256, Maximum = 524288, Value = Math.Max(256, Math.Min(524288, settings.ChatOutputTokens)), Dock = DockStyle.Fill }; root.Controls.Add(output);
             var save = new Button { Text = T("Save"), AutoSize = true, FlatStyle = FlatStyle.Flat, BackColor = Color.FromArgb(45,108,223), ForeColor = Color.White }; save.FlatAppearance.BorderSize = 0;
-            save.Click += (a, b) => { if (output.Value > budget.Value / 2 || string.IsNullOrWhiteSpace(q.Text) || string.IsNullOrWhiteSpace(s.Text) || string.IsNullOrWhiteSpace(r.Text)) { MessageBox.Show(this, T("ChatInvalidSettings"), Text); return; }
-                try { settings.ChatQuestionSystemPrompt = q.Text; settings.ChatSummarySystemPrompt = s.Text; settings.ChatRewriteSystemPrompt = r.Text; settings.ChatContextTokens = (int)budget.Value; settings.ChatOutputTokens = (int)output.Value; store.Save(settings); Close(); } catch { MessageBox.Show(this, T("ChatSettingsError"), Text); } };
+            save.Click += (a, b) => { if (output.Value > budget.Value / 2 || string.IsNullOrWhiteSpace(t.Text) || string.IsNullOrWhiteSpace(q.Text) || string.IsNullOrWhiteSpace(s.Text) || string.IsNullOrWhiteSpace(r.Text)) { MessageBox.Show(this, T("ChatInvalidSettings"), Text); return; }
+                try { settings.ChatTranslateSystemPrompt = t.Text; settings.ChatQuestionSystemPrompt = q.Text; settings.ChatSummarySystemPrompt = s.Text; settings.ChatRewriteSystemPrompt = r.Text; settings.ChatContextTokens = (int)budget.Value; settings.ChatOutputTokens = (int)output.Value; store.Save(settings); Close(); } catch { MessageBox.Show(this, T("ChatSettingsError"), Text); } };
             root.Controls.Add(save); Controls.Add(root); AcceptButton = save;
         }
     }

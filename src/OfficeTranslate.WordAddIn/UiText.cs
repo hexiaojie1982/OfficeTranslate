@@ -28,6 +28,24 @@ namespace OfficeTranslate.WordAddIn
             ["ChatCopy"] = new[] { "复制", "複製", "복사", "コピー", "Copy" },
             ["ChatCopied"] = new[] { "已复制", "已複製", "복사됨", "コピーしました", "Copied" },
             ["ChatCopyFailed"] = new[] { "复制失败", "複製失敗", "복사 실패", "コピーに失敗しました", "Copy failed" },
+            ["ChatWritebackChangelog"] = new[] {
+                "OfficeTranslate 2.3.8.0\r\n• Chat 所有模式发送开始即清空输入框，回答完成时保留下一条草稿。\r\n• 手动提问完成后可确认替换选中或插入下方，不提供插入到开头。\r\n• 包含 2.3.7 翻译按钮和 2.3.6 CJK 空格清理。\r\n\r\n",
+                "OfficeTranslate 2.3.8.0\r\n• Chat 所有模式開始傳送即清空輸入框，回答完成時保留下一則草稿。\r\n• 手動提問完成後可確認取代選取或插入下方，不提供插入到開頭。\r\n• 包含 2.3.7 翻譯按鈕和 2.3.6 CJK 空格清理。\r\n\r\n",
+                "OfficeTranslate 2.3.8.0\r\n• 모든 Chat 모드에서 전송 즉시 입력란을 비우고 답변 완료 시 다음 초안을 유지합니다.\r\n• 질문 답변을 확인 후 선택 영역에 바꾸거나 아래에 삽입할 수 있습니다. 문서 시작에는 삽입하지 않습니다.\r\n• 2.3.7 번역 버튼과 2.3.6 CJK 공백 정리를 포함합니다.\r\n\r\n",
+                "OfficeTranslate 2.3.8.0\r\n• すべてのChatモードで送信開始時に入力欄をクリアし、回答完了時に次の下書きを保持します。\r\n• 質問の回答は確認後に選択範囲を置換するか下に挿入できます。文書先頭への挿入は行いません。\r\n• 2.3.7の翻訳ボタンと2.3.6のCJK空白除去を含みます。\r\n\r\n",
+                "OfficeTranslate 2.3.8.0\r\n• All Chat modes clear input when sending starts and preserve the next draft on completion.\r\n• Question answers can replace the selection or insert below after confirmation, without inserting at the document start.\r\n• Includes the 2.3.7 translation button and 2.3.6 CJK spacing cleanup.\r\n\r\n" },
+            ["TranslateChangelog"] = new[] {
+                "OfficeTranslate 2.3.7.0\r\n• Chat 新增翻译按钮，直接使用翻译服务的目标语言，流式显示译文。\r\n• 可自定义翻译系统提示词；译文支持替换选中或插入下方。\r\n\r\n",
+                "OfficeTranslate 2.3.7.0\r\n• Chat 新增翻譯按鈕，直接使用翻譯服務的目標語言，串流顯示譯文。\r\n• 可自訂翻譯系統提示詞；譯文支援取代選取或插入下方。\r\n\r\n",
+                "OfficeTranslate 2.3.7.0\r\n• Chat 번역 버튼이 번역 서비스의 대상 언어로 번역하고 스트리밍으로 표시합니다.\r\n• 번역 시스템 프롬프트를 편집하고 선택 영역을 바꾸거나 아래에 삽입할 수 있습니다.\r\n\r\n",
+                "OfficeTranslate 2.3.7.0\r\n• Chat の翻訳ボタンで翻訳サービスの翻訳先言語に翻訳し、ストリーミング表示します。\r\n• 翻訳システムプロンプトの編集、選択範囲の置換、下への挿入に対応します。\r\n\r\n",
+                "OfficeTranslate 2.3.7.0\r\n• Chat translates into the translation service's target language with streamed output.\r\n• Customize the translation system prompt; replace the selection or insert below.\r\n\r\n" },
+            ["CjkSpacingChangelog"] = new[] {
+                "OfficeTranslate 2.3.6.0\r\n• Chat 回复完成后自动删除中日文字符之间的多余空格，显示、历史、导出与复制保持一致。\r\n• 保留中英、中数、韩文间距，以及代码块和行内代码。\r\n\r\n",
+                "OfficeTranslate 2.3.6.0\r\n• Chat 回覆完成後自動刪除中日文字元之間的多餘空格，顯示、歷史、匯出與複製保持一致。\r\n• 保留中英、中數、韓文間距，以及程式碼區塊和行內程式碼。\r\n\r\n",
+                "OfficeTranslate 2.3.6.0\r\n• Chat 답변 완료 후 중국어·일본어 문자 사이의 불필요한 공백을 제거하고 화면, 기록, 내보내기, 복사에 동일하게 적용합니다.\r\n• 한국어, 영문·숫자 경계, 코드 블록과 인라인 코드의 공백을 보존합니다.\r\n\r\n",
+                "OfficeTranslate 2.3.6.0\r\n• Chat回答の完了後、中国語・日本語の文字間の余分な空白を除去し、表示・履歴・エクスポート・コピーに反映します。\r\n• 韓国語、英数字との間隔、コードブロックとインラインコードを保持します。\r\n\r\n",
+                "OfficeTranslate 2.3.6.0\r\n• Completed Chat answers remove extra spaces between Chinese/Japanese characters consistently across display, history, export and copy.\r\n• Preserve Korean spacing, English/number boundaries, fenced and inline code.\r\n\r\n" },
             ["CopyChangelog"] = new[] {
                 "OfficeTranslate 2.3.5.0\r\n• 聊天气泡和历史消息支持一键复制原文，AI 回复保留 Markdown。\r\n• 流式输出完成后显示复制按钮，提供复制成功或失败提示。\r\n\r\n",
                 "OfficeTranslate 2.3.5.0\r\n• 聊天氣泡與歷史訊息支援一鍵複製原文，AI 回覆保留 Markdown。\r\n• 串流輸出結束後顯示複製按鈕，提供複製成功或失敗提示。\r\n\r\n",
@@ -36,6 +54,7 @@ namespace OfficeTranslate.WordAddIn
                 "OfficeTranslate 2.3.5.0\r\n• Copy original messages from chat bubbles and history, preserving AI Markdown.\r\n• Copy buttons appear after streaming ends, with success or failure feedback.\r\n\r\n" },
             ["ChatUserAvatar"] = new[] { "你", "你", "나", "私", "You" },
             ["ChatAiAvatar"] = new[] { "AI", "AI", "AI", "AI", "AI" },
+            ["ChatTranslate"] = new[] { "翻译","翻譯","번역","翻訳","Translate" },
             ["ChatSummary"] = new[] { "总结","總結","요약","要約","Summarize" },
             ["ChatRewrite"] = new[] { "改写","改寫","다시 작성","書き直し","Rewrite" },
             ["ChatClear"] = new[] { "清空","清空","지우기","クリア","Clear" },
@@ -88,6 +107,7 @@ namespace OfficeTranslate.WordAddIn
             ["ChatFull"] = new[] { "全文","全文","전체 문서","文書全体","Entire document" },
             ["ChatNoDocument"] = new[] { "上下文不可用，请打开文档并更新上下文。","無法讀取內容，請開啟文件並更新內容。","문맥을 사용할 수 없습니다. 문서를 열고 문맥을 업데이트하세요.","文脈を読み取れません。文書を開いて文脈を更新してください。","Context unavailable. Open a document and update the context." },
             ["ChatCleared"] = new[] { "当前会话已清空，已保存的历史仍保留。","目前會話已清空，已儲存的歷史仍保留。","현재 대화를 지웠습니다. 저장된 기록은 유지됩니다.","現在の会話をクリアしました。保存済みの履歴は保持されます。","Current conversation cleared. Saved history is retained." },
+            ["ChatTranslateRequest"] = new[] { "请将以下内容翻译成{0}","請將以下內容翻譯成{0}","다음 내용을 {0}(으)로 번역하세요.","以下の内容を{0}に翻訳してください。","Please translate the following content into {0}." },
             ["ChatSummaryRequest"] = new[] { "请总结当前文档上下文。","請總結目前文件內容。","현재 문서 문맥을 요약하세요.","現在の文書の文脈を要約してください。","Please summarize the current document context." },
             ["ChatRewriteRequest"] = new[] { "请改写当前文档上下文，保留原意和事实，只返回改写后的正文。","請改寫目前文件內容，保留原意和事實，只傳回改寫後的正文。","의미와 사실을 보존하여 현재 문서 문맥을 다시 작성하세요. 다시 작성한 본문만 반환하세요.","意味と事実を保ち、現在の文書の文脈を書き直してください。書き直した本文のみ返してください。","Please rewrite the current document context, preserving meaning and facts. Return only the rewritten text." },
             ["ChatNeedInput"] = new[] { "请输入问题。","請輸入問題。","질문을 입력하세요.","質問を入力してください。","Enter a question." },
@@ -118,6 +138,7 @@ namespace OfficeTranslate.WordAddIn
             ["ChatWriteError"] = new[] { "无法写回：原文档可能已关闭、目标已更改、受保护或超出宿主限制。请复制结果后手动处理。","無法寫回：原文件可能已關閉、目標已變更、受保護或超出宿主限制。請複製結果後手動處理。","원래 문서가 닫혔거나 변경 또는 보호되었거나 호스트 제한을 초과하여 쓸 수 없습니다. 결과를 복사하여 수동으로 처리하세요.","書き込めません。元の文書が閉じられた、対象が変更された、保護されている、またはホストの制限を超えています。結果をコピーして手動で処理してください。","Cannot write back: the original document may be closed, changed, protected, or beyond host limits. Copy the result for manual use." },
             ["ChatReplaceUnavailable"] = new[] { "当前上下文无法整体替换；可插入结果。Excel 替换仅支持单个未合并单元格或单个文本框。","目前內容無法整體取代；可插入結果。Excel 取代僅支援單一未合併儲存格或單一文字方塊。","이 문맥 전체를 바꿀 수 없습니다. 결과를 삽입하세요. Excel에서는 병합되지 않은 단일 셀 또는 단일 텍스트 상자만 바꿀 수 있습니다.","この文脈全体は置換できません。結果を挿入してください。Excelでは結合されていない単一セルまたは単一テキストボックスのみ置換できます。","This context cannot be replaced as a whole; insert the result instead. Excel replacement supports a single unmerged cell or text box." },
             ["ChatQuestionPrompt"] = new[] { "问答系统提示词","問答系統提示詞","질문 시스템 프롬프트","質問のシステムプロンプト","Question system prompt" },
+            ["ChatTranslatePrompt"] = new[] { "翻译系统提示词","翻譯系統提示詞","번역 시스템 프롬프트","翻訳のシステムプロンプト","Translation system prompt" },
             ["ChatSummaryPrompt"] = new[] { "总结系统提示词","總結系統提示詞","요약 시스템 프롬프트","要約のシステムプロンプト","Summary system prompt" },
             ["ChatRewritePrompt"] = new[] { "改写系统提示词","改寫系統提示詞","다시 작성 시스템 프롬프트","書き直しのシステムプロンプト","Rewrite system prompt" },
             ["ChatBudget"] = new[] { "模型上下文 token 预算（按模型实际上限设置；保守按 UTF-8 字节估算）","模型內容 token 預算（按模型實際上限設定；保守按 UTF-8 位元組估算）","모델 문맥 토큰 예산 (모델의 실제 한도 사용, UTF-8 바이트로 보수적 추정)","モデルの文脈トークン予算（モデルの実際の上限を使用、UTF-8バイト数で保守的に推定）","Model context token budget (use the model limit; estimated conservatively by UTF-8 bytes)" },
@@ -205,6 +226,7 @@ namespace OfficeTranslate.WordAddIn
         public static string Get(string language, string key)
         {
             if (key == "ChatQuestionDefaultPrompt") return OfficeTranslate.Core.ChatPrompts.Default(language, OfficeTranslate.Core.ChatMode.Question);
+            if (key == "ChatTranslateDefaultPrompt") return OfficeTranslate.Core.ChatPrompts.Default(language, OfficeTranslate.Core.ChatMode.Translate);
             if (key == "ChatSummaryDefaultPrompt") return OfficeTranslate.Core.ChatPrompts.Default(language, OfficeTranslate.Core.ChatMode.Summarize);
             if (key == "ChatRewriteDefaultPrompt") return OfficeTranslate.Core.ChatPrompts.Default(language, OfficeTranslate.Core.ChatMode.Rewrite);
             var index = System.Array.IndexOf(LanguageCodes, language);
