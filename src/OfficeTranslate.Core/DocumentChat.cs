@@ -7,7 +7,7 @@ using System.Threading.Tasks;
 
 namespace OfficeTranslate.Core
 {
-    public enum ChatMode { Question, Summarize, Rewrite }
+    public enum ChatMode { Question, Summarize, Rewrite, Translate }
     public enum ChatWriteAction { ReplaceSelection, InsertBelow, InsertAtStart }
     public sealed class ChatMessage
     {
@@ -31,7 +31,7 @@ namespace OfficeTranslate.Core
         public static ChatContext Capture(string? selection, Func<string> fullText, Action<ChatWriteAction, string>? write = null, bool canReplace = false, string documentName = "", string host = "") =>
             !string.IsNullOrWhiteSpace(selection) ? new ChatContext(selection!, true, write, canReplace, documentName, host) : new ChatContext(fullText(), false, write, documentName: documentName, host: host);
         public bool Allows(ChatMode mode, ChatWriteAction action, string result) => Write != null && !string.IsNullOrWhiteSpace(result) &&
-            (mode == ChatMode.Summarize ? action == ChatWriteAction.InsertAtStart : mode == ChatMode.Rewrite &&
+            (mode == ChatMode.Summarize ? action == ChatWriteAction.InsertAtStart : (mode == ChatMode.Rewrite || mode == ChatMode.Translate) &&
              (action == ChatWriteAction.InsertBelow || action == ChatWriteAction.ReplaceSelection && CanReplace));
         public void Apply(ChatMode mode, ChatWriteAction action, string result)
         {
@@ -105,8 +105,8 @@ namespace OfficeTranslate.Core
             if (string.IsNullOrWhiteSpace(context.Text) || string.IsNullOrWhiteSpace(question)) throw new InvalidOperationException("Empty chat input.");
             if (settings.ChatContextTokens < 2048 || settings.ChatContextTokens > 1048576 || settings.ChatOutputTokens < 256 ||
                 settings.ChatOutputTokens > settings.ChatContextTokens / 2) throw new ChatException(ChatFailure.Budget, "Invalid chat context/output budget.");
-            var system = mode == ChatMode.Summarize ? settings.ChatSummarySystemPrompt : mode == ChatMode.Rewrite ? settings.ChatRewriteSystemPrompt : settings.ChatQuestionSystemPrompt;
-            system += "\n" + ChatPrompts.Safety(settings.UiLanguage);
+            var system = mode == ChatMode.Translate ? settings.ChatTranslateSystemPrompt : mode == ChatMode.Summarize ? settings.ChatSummarySystemPrompt : mode == ChatMode.Rewrite ? settings.ChatRewriteSystemPrompt : settings.ChatQuestionSystemPrompt;
+            system += "\n" + ChatPrompts.Safety(settings.UiLanguage, mode);
             system = ChatPrompts.AppendTranslationSettings(system, settings);
             var messages = new List<ChatMessage> { new ChatMessage("system", system) };
             var inputBudget = settings.ChatContextTokens - settings.ChatOutputTokens;

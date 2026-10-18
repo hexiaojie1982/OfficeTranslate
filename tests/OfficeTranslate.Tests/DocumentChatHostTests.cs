@@ -31,14 +31,15 @@ namespace OfficeTranslate.Tests
         private static ChatContext Capture(string host, object window) => (ChatContext)Host(host).GetType("OfficeTranslate.WordAddIn.DocumentChatHost",true)!
             .GetMethod("Capture",BindingFlags.Static|BindingFlags.NonPublic)!.Invoke(null,new[]{window})!;
         [DataTestMethod]
-        [DataRow(true)] [DataRow(false)]
-        public void Word_RealAdapterSelectsSelectionOrFullTextAndWritesOnlyOnApply(bool selected)
+        [DataRow(true, ChatMode.Rewrite)] [DataRow(false, ChatMode.Rewrite)]
+        [DataRow(true, ChatMode.Translate)] [DataRow(false, ChatMode.Translate)]
+        public void Word_RealAdapterSelectsSelectionOrFullTextAndWritesOnlyOnApply(bool selected, ChatMode mode)
         {
             dynamic target=Range(selected?"selection":""); dynamic content=Range("whole document\r");
             dynamic document=Obj(("Name","sample.docx"),("Content",content),("Shapes",new ChatItems())); dynamic window=Obj(("Document",document),("Selection",Obj(("Range",target))));
             ChatContext context=Capture("Word",(object)window); Assert.AreEqual("sample.docx",context.DocumentName); Assert.AreEqual(selected,context.IsSelection); Assert.AreEqual(selected?"selection":"whole document\r",context.Text);
             Assert.AreEqual("Word",context.Host); Assert.AreEqual(selected,context.CanReplace); Assert.AreEqual(selected?"selection":"",(string)target.Text);
-            if(selected) { context.Apply(ChatMode.Rewrite,ChatWriteAction.ReplaceSelection,"rewritten"); Assert.AreEqual("rewritten",(string)target.Text); }
+            if(selected) { context.Apply(mode,ChatWriteAction.ReplaceSelection,"rewritten"); Assert.AreEqual("rewritten",(string)target.Text); }
         }
         [TestMethod]
         public void Word_ChangedSelectionRejectsWriteback_AndShapeIsContext()
@@ -49,8 +50,9 @@ namespace OfficeTranslate.Tests
             range.Text="edited"; Assert.ThrowsException<InvalidOperationException>(()=>context.Apply(ChatMode.Rewrite,ChatWriteAction.ReplaceSelection,"result")); Assert.AreEqual("edited",(string)range.Text);
         }
         [DataTestMethod]
-        [DataRow(true)] [DataRow(false)]
-        public void Excel_RealAdapterExtractsSelectionOrEntireWorkbook(bool selected)
+        [DataRow(true, ChatMode.Rewrite)] [DataRow(false, ChatMode.Rewrite)]
+        [DataRow(true, ChatMode.Translate)] [DataRow(false, ChatMode.Translate)]
+        public void Excel_RealAdapterExtractsSelectionOrEntireWorkbook(bool selected, ChatMode mode)
         {
             dynamic range=Obj(("Value2",selected?"selection":""),("CountLarge",1d),("MergeCells",false),("Formula",selected?"selection":""),("Row",2),("Rows",Obj(("Count",1)))); range.Areas=new ChatItems(range);
             dynamic used=Obj(("Value2","whole sheet")); used.Areas=new ChatItems(used);
@@ -58,7 +60,7 @@ namespace OfficeTranslate.Tests
             dynamic window=Obj(("ActiveSheet",sheet),("RangeSelection",range)); dynamic app=Obj(); app.ActiveWindow=window; app.Intersect=(Func<object,object,object>)((a,b)=>range); window.Application=app;
             ChatContext context=Capture("Excel",(object)window); Assert.AreEqual("sample.xlsx",context.DocumentName); Assert.AreEqual(selected,context.IsSelection); StringAssert.Contains(context.Text,selected?"selection":"whole sheet");
             Assert.AreEqual("Excel",context.Host);
-            if(selected) { context.Apply(ChatMode.Rewrite,ChatWriteAction.ReplaceSelection,"=2+2"); Assert.AreEqual("'=2+2",(string)range.Value2); }
+            if(selected) { context.Apply(mode,ChatWriteAction.ReplaceSelection,"=2+2"); Assert.AreEqual("'=2+2",(string)range.Value2); }
         }
         [TestMethod]
         public void Excel_MultipleCellsCannotReplace_AndSummaryInsertsTopRow()
@@ -71,15 +73,16 @@ namespace OfficeTranslate.Tests
             context.Apply(ChatMode.Summarize,ChatWriteAction.InsertAtStart,"summary"); CollectionAssert.AreEqual(new[]{1},insertions); Assert.AreEqual("'summary",(string)cell.Value2);
         }
         [DataTestMethod]
-        [DataRow(true)] [DataRow(false)]
-        public void PowerPoint_RealAdapterSelectsTextOrEntirePresentation(bool selected)
+        [DataRow(true, ChatMode.Rewrite)] [DataRow(false, ChatMode.Rewrite)]
+        [DataRow(true, ChatMode.Translate)] [DataRow(false, ChatMode.Translate)]
+        public void PowerPoint_RealAdapterSelectsTextOrEntirePresentation(bool selected, ChatMode mode)
         {
             dynamic target=Range("selected text"); dynamic shape=Obj(("Type",1),("HasTable",0),("HasTextFrame",-1),("TextFrame",Obj(("TextRange",Range("whole slide")))));
             dynamic slide=Obj(("Shapes",new ChatItems(shape))); dynamic presentation=Obj(("Name","sample.pptx"),("Slides",new ChatItems(slide)));
             dynamic selection=Obj(("Type",selected?3:0),("TextRange",target)); dynamic window=Obj(("Presentation",presentation),("Selection",selection));
             ChatContext context=Capture("PowerPoint",(object)window); Assert.AreEqual("sample.pptx",context.DocumentName); Assert.AreEqual(selected,context.IsSelection); StringAssert.Contains(context.Text,selected?"selected text":"whole slide");
             Assert.AreEqual("PowerPoint",context.Host);
-            if(selected) { context.Apply(ChatMode.Rewrite,ChatWriteAction.InsertBelow,"rewrite"); Assert.AreEqual("selected text\rrewrite",(string)target.Text); }
+            if(selected) { context.Apply(mode,ChatWriteAction.InsertBelow,"rewrite"); Assert.AreEqual("selected text\rrewrite",(string)target.Text); }
         }
         [TestMethod]
         public void PowerPoint_SummaryCreatesNewFirstSlide_AndDoesNotModifyExistingSlide()
@@ -99,7 +102,7 @@ namespace OfficeTranslate.Tests
             var pane=assembly.GetType("OfficeTranslate.WordAddIn.DocumentChatPane",true)!; Assert.IsTrue(typeof(UserControl).IsAssignableFrom(pane));
             Assert.AreEqual("OfficeTranslate."+host+"ChatPane",pane.GetCustomAttribute<System.Runtime.InteropServices.ProgIdAttribute>()!.Value);
             using(var stream=assembly.GetManifestResourceStream("OfficeTranslate."+host+"AddIn.Ribbon.xml")) using(var reader=new StreamReader(stream!)) StringAssert.Contains(reader.ReadToEnd(),"onAction=\"OpenChat\"");
-            Assert.AreEqual(new Version(2,3,5,0),assembly.GetName().Version);
+            Assert.AreEqual(new Version(2,3,7,0),assembly.GetName().Version);
         }
         internal static void Sta(Action action)
         {

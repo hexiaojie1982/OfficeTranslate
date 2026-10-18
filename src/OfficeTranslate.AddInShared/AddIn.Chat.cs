@@ -62,11 +62,9 @@ namespace OfficeTranslate.PowerPointAddIn
             {
                 stage = "initialize-control";
                 var content = (DocumentChatPane)pane.ContentControl;
-#if WORD
-                content.Initialize(() => DocumentChatHost.Capture(window), () => _settingsStore.Load());
-#else
-                content.Initialize(() => DocumentChatHost.Capture(window), () => _store.Load());
-#endif
+                // TargetLanguage is session-only. Load persisted service settings and
+                // overlay the current ribbon languages, just like document translation.
+                content.Initialize(() => DocumentChatHost.Capture(window), LoadForTranslation);
                 stage = "show-pane";
                 pane.DockPosition = Microsoft.Office.Core.MsoCTPDockPosition.msoCTPDockPositionRight; pane.Width = 440;
                 pane.Visible = true; _chatPanes.Add(id, pane);

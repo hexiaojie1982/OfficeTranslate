@@ -105,10 +105,10 @@ namespace OfficeTranslate.Tests
         [TestMethod]
         public async Task CustomPromptsAndChangingModelBudgets_AreAppliedPerRequest()
         {
-            var session=new DocumentChatSession();var settings=Settings();settings.ChatQuestionSystemPrompt="QUESTION SYSTEM";settings.ChatSummarySystemPrompt="SUMMARY SYSTEM";settings.ChatRewriteSystemPrompt="REWRITE SYSTEM";
+            var session=new DocumentChatSession();var settings=Settings();settings.ChatTranslateSystemPrompt="TRANSLATE SYSTEM";settings.ChatQuestionSystemPrompt="QUESTION SYSTEM";settings.ChatSummarySystemPrompt="SUMMARY SYSTEM";settings.ChatRewriteSystemPrompt="REWRITE SYSTEM";
             foreach(ChatMode mode in Enum.GetValues(typeof(ChatMode)))
                 await session.SendAsync(new ChatContext(new string('d',200),true),"Q",mode,settings,(m,s,n,o,t)=>{
-                    StringAssert.StartsWith(m[0].Content,mode==ChatMode.Question?"QUESTION SYSTEM":mode==ChatMode.Summarize?"SUMMARY SYSTEM":"REWRITE SYSTEM");
+                    StringAssert.StartsWith(m[0].Content,mode==ChatMode.Translate?"TRANSLATE SYSTEM":mode==ChatMode.Question?"QUESTION SYSTEM":mode==ChatMode.Summarize?"SUMMARY SYSTEM":"REWRITE SYSTEM");
                     Assert.IsTrue(ChatBudget.Cost(m)+n<=s.ChatContextTokens);return Task.FromResult(new ChatReply(new string('a',1500),false));},_=>{},(i,n)=>{},CancellationToken.None);
             settings.ChatContextTokens=2048;settings.ChatOutputTokens=256;
             await session.SendAsync(new ChatContext("doc",false),"Q",ChatMode.Question,settings,(m,s,n,o,t)=>{

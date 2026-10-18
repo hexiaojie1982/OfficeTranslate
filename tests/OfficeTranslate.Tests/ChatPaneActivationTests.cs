@@ -41,6 +41,36 @@ namespace OfficeTranslate.Tests
         }
 
         [DataTestMethod]
+        [DataRow("Word")] [DataRow("Excel")] [DataRow("PowerPoint")]
+        public void PaneSettings_UseLiveTargetLanguageAndLatestPersistedTranslationSettings(string host)
+        {
+            DocumentChatHostTests.Sta(() =>
+            {
+                using (var f = new Activation(host))
+                {
+                    var path = (string)typeof(SettingsStore).GetField("_path", PrivateInstance)!.GetValue(f.Store)!;
+                    try
+                    {
+                        var saved = new TranslationSettings { ChatTranslateSystemPrompt = "custom translation prompt", Glossary = "old glossary" };
+                        f.Store.Save(saved);
+                        f.SessionSettings.TargetLanguage = "英语";
+                        f.Open();
+                        var provider = (Func<TranslationSettings>)f.Content.GetType().GetField("_settings", PrivateInstance)!.GetValue(f.Content)!;
+                        Assert.AreEqual("英语", provider().TargetLanguage);
+                        Assert.AreEqual(saved.ChatTranslateSystemPrompt, provider().ChatTranslateSystemPrompt);
+                        f.SessionSettings.TargetLanguage = "한국어";
+                        saved.Glossary = "latest glossary"; saved.ChatUseTranslationSettings = true; f.Store.Save(saved);
+                        var latest = provider();
+                        Assert.AreEqual("한국어", latest.TargetLanguage);
+                        Assert.AreEqual("latest glossary", latest.Glossary); Assert.IsTrue(latest.ChatUseTranslationSettings);
+                        Assert.AreEqual("简体中文", f.Store.Load().TargetLanguage, "Target language must remain session-only.");
+                    }
+                    finally { File.Delete(path); }
+                }
+            });
+        }
+
+        [DataTestMethod]
         [DataRow("Word", false)] [DataRow("Excel", false)] [DataRow("PowerPoint", false)]
         [DataRow("Word", true)] [DataRow("Excel", true)] [DataRow("PowerPoint", true)]
         public void FailedActivation_DiscardsPaneAndPreservesOriginalFailure(string host, bool failShow)
@@ -124,6 +154,8 @@ namespace OfficeTranslate.Tests
             internal readonly IDictionary Panes;
             internal int Created, Deleted;
             internal bool Visible, FailContent, FailShow, FailDelete;
+            internal TranslationSettings SessionSettings => (TranslationSettings)_type.GetField("_settings", PrivateInstance)!.GetValue(_addin)!;
+            internal SettingsStore Store => (SettingsStore)_type.GetField(_type.Namespace == "OfficeTranslate.WordAddIn" ? "_settingsStore" : "_store", PrivateInstance)!.GetValue(_addin)!;
             internal Activation(string host)
             {
                 _type = AddIn(host); _addin = Activator.CreateInstance(_type)!;
