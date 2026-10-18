@@ -153,7 +153,7 @@ namespace OfficeTranslate.Tests
                     var question = input.Text;
                     EnterKey(input);
                     Pump(() => calls == 1);
-                    Assert.AreEqual(question, input.Text, "Enter must be suppressed instead of inserting a newline.");
+                    Assert.AreEqual("", input.Text, "Enter sends and clears immediately without inserting a newline.");
                     EnterKey(input);
                     Assert.AreEqual(1, calls, "Enter while a request is pending must not send twice.");
                     completion.SetResult(new ChatReply("answer", false));

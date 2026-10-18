@@ -1,6 +1,10 @@
 # OfficeTranslate for Microsoft Office（原生 COM 加载项）
 
-当前开发版本：**2.3.7.0**，分支 `feat/chat-translate-button`，从 `main` 的 `a6bbdfa`（2.3.5）创建；尚未合并、打 tag 或 push。Word / Excel / PowerPoint 共用 Chat 面板实现。2.3.6 的 `feat/cjk-space-cleanup` 不包含在本分支中。
+当前验收版本：**2.3.8.0**，分支 `feat/chat-writeback-fix`，从 `feat/chat-translate-button` 的 `7293983`（2.3.7）创建，并合入 `feat/cjk-space-cleanup` 的 `34023c9`（2.3.6）。Word / Excel / PowerPoint 共用 Chat 面板实现；未合并到 main、未打 tag、未 push，原 native-word 工作树和分支保持不变。
+
+2.3.8：包含 2.3.7 翻译按钮、翻译提示词及翻译设置开关，以及 2.3.6 CJK 空格清理。所有 Chat 模式发送开始即清空输入框，完成时保留用户新输入的下一条草稿。Question / Rewrite / Translate 完成后提供「替换选中」（可替换时启用）与「插入到下方」，不提供「插入到开头」；Summarize 仅提供「插入到开头」。所有写回仍需点击并确认。测试、构建和 MSI 核验见 [2.3.8 验证记录](tests/VALIDATION-2.3.8-CHAT-WRITEBACK.md)。
+
+2.3.8 全量回归 **929/929 通过，0 失败、0 跳过**（本次新增 31 项，另合入 CJK 的 40 项），Release 干净构建 **0 错误、7 条既有 nullable 警告**。MSI 与四个 DLL 载荷版本均已核对为 2.3.8.0。
 
 2.3.7：Chat 功能组按「翻译 / 总结 / 改写 / Chat 设置」排列。「翻译」一键发送当前上下文（选中优先，无选中时全文），直接使用翻译服务设置当前的 `TargetLanguage` 原值，不弹出语言选择；结果沿用 Chat SSE 流式、历史、复制和导出。翻译系统提示词可在 Chat 设置中单独编辑，随设置保存；「使用翻译设置」开关决定是否追加共享风格、额外要求和术语表。译文可替换可写选区或插入下方，不提供插入到开头。五种 UI 语言及三宿主同步。全量回归 **858/858 通过，0 失败、0 跳过**（新增 55 项），Release 构建 0 错误。验证见 [翻译按钮验证记录](tests/VALIDATION-2.3.7-CHAT-TRANSLATE.md)。
 

@@ -70,7 +70,7 @@ namespace OfficeTranslate.Tests
                         settings.TargetLanguage = selected ? "英语" : "한국어";
                         var fullReads = 0;
                         context = ChatContext.Capture(selected ? "new selected text" : "", () => { fullReads++; return "new whole document"; },
-                            (a, text) => { Assert.AreEqual("中 文 **AI**", text); applied.Add(a); }, true, "fixture", host);
+                            (a, text) => { Assert.AreEqual("中文 **AI**", text); applied.Add(a); }, true, "fixture", host);
                         Assert.AreEqual(selected ? 0 : 1, fullReads);
                         var completion = new TaskCompletionSource<ChatReply>(TaskCreationOptions.RunContinuationsAsynchronously);
                         ChatTransport transport = (messages, s, n, output, token) =>
@@ -95,7 +95,7 @@ namespace OfficeTranslate.Tests
                         Assert.IsTrue(Button(writes, "ChatInsertBelow").Enabled);
                         if (!selected) StringAssert.Contains(((Label)Field(pane, "_status")!).Text, UiText.Get(language, "ChatReplaceUnavailable"));
                         var session = (DocumentChatSession)Field(pane, "_session")!;
-                        Assert.AreEqual("中 文 **AI**", session.History.Last().Content, "Keep main's original CJK spacing and raw Markdown.");
+                        Assert.AreEqual("中文 **AI**", session.History.Last().Content, "Completed translations share CJK cleanup and preserve raw Markdown.");
                         Button(writes, action == ChatWriteAction.ReplaceSelection ? "ChatReplace" : "ChatInsertBelow").PerformClick();
                         Assert.AreEqual(action, applied.Last()); Assert.IsFalse(writes.Enabled);
                         Button(writes, "ChatInsertBelow").PerformClick();
@@ -104,7 +104,7 @@ namespace OfficeTranslate.Tests
                     Assert.AreEqual(3, history.Store.Read(history.Store.List(out var unreadable).Single().SessionId)!.Turns.Count);
                     Assert.AreEqual(0, unreadable);
                     window.ClientSize = new Size(440, 760); Application.DoEvents();
-                    var dir = Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "../../../../../TestResults/chat-translate-2.3.7"));
+                    var dir = Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "../../../../../TestResults/chat-translate-2.3.8"));
                     Directory.CreateDirectory(dir);
                     using (var bitmap = new Bitmap(pane.Width, pane.Height)) { pane.DrawToBitmap(bitmap, pane.ClientRectangle); bitmap.Save(Path.Combine(dir, host + "-" + language + ".png")); }
                 }

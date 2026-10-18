@@ -31,7 +31,7 @@ namespace OfficeTranslate.Core
         public static ChatContext Capture(string? selection, Func<string> fullText, Action<ChatWriteAction, string>? write = null, bool canReplace = false, string documentName = "", string host = "") =>
             !string.IsNullOrWhiteSpace(selection) ? new ChatContext(selection!, true, write, canReplace, documentName, host) : new ChatContext(fullText(), false, write, documentName: documentName, host: host);
         public bool Allows(ChatMode mode, ChatWriteAction action, string result) => Write != null && !string.IsNullOrWhiteSpace(result) &&
-            (mode == ChatMode.Summarize ? action == ChatWriteAction.InsertAtStart : (mode == ChatMode.Rewrite || mode == ChatMode.Translate) &&
+            (mode == ChatMode.Summarize ? action == ChatWriteAction.InsertAtStart : (mode == ChatMode.Question || mode == ChatMode.Rewrite || mode == ChatMode.Translate) &&
              (action == ChatWriteAction.InsertBelow || action == ChatWriteAction.ReplaceSelection && CanReplace));
         public void Apply(ChatMode mode, ChatWriteAction action, string result)
         {

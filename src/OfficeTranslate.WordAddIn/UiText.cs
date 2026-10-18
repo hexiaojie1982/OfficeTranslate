@@ -28,6 +28,12 @@ namespace OfficeTranslate.WordAddIn
             ["ChatCopy"] = new[] { "复制", "複製", "복사", "コピー", "Copy" },
             ["ChatCopied"] = new[] { "已复制", "已複製", "복사됨", "コピーしました", "Copied" },
             ["ChatCopyFailed"] = new[] { "复制失败", "複製失敗", "복사 실패", "コピーに失敗しました", "Copy failed" },
+            ["ChatWritebackChangelog"] = new[] {
+                "OfficeTranslate 2.3.8.0\r\n• Chat 所有模式发送开始即清空输入框，回答完成时保留下一条草稿。\r\n• 手动提问完成后可确认替换选中或插入下方，不提供插入到开头。\r\n• 包含 2.3.7 翻译按钮和 2.3.6 CJK 空格清理。\r\n\r\n",
+                "OfficeTranslate 2.3.8.0\r\n• Chat 所有模式開始傳送即清空輸入框，回答完成時保留下一則草稿。\r\n• 手動提問完成後可確認取代選取或插入下方，不提供插入到開頭。\r\n• 包含 2.3.7 翻譯按鈕和 2.3.6 CJK 空格清理。\r\n\r\n",
+                "OfficeTranslate 2.3.8.0\r\n• 모든 Chat 모드에서 전송 즉시 입력란을 비우고 답변 완료 시 다음 초안을 유지합니다.\r\n• 질문 답변을 확인 후 선택 영역에 바꾸거나 아래에 삽입할 수 있습니다. 문서 시작에는 삽입하지 않습니다.\r\n• 2.3.7 번역 버튼과 2.3.6 CJK 공백 정리를 포함합니다.\r\n\r\n",
+                "OfficeTranslate 2.3.8.0\r\n• すべてのChatモードで送信開始時に入力欄をクリアし、回答完了時に次の下書きを保持します。\r\n• 質問の回答は確認後に選択範囲を置換するか下に挿入できます。文書先頭への挿入は行いません。\r\n• 2.3.7の翻訳ボタンと2.3.6のCJK空白除去を含みます。\r\n\r\n",
+                "OfficeTranslate 2.3.8.0\r\n• All Chat modes clear input when sending starts and preserve the next draft on completion.\r\n• Question answers can replace the selection or insert below after confirmation, without inserting at the document start.\r\n• Includes the 2.3.7 translation button and 2.3.6 CJK spacing cleanup.\r\n\r\n" },
             ["TranslateChangelog"] = new[] {
                 "OfficeTranslate 2.3.7.0\r\n• Chat 新增翻译按钮，直接使用翻译服务的目标语言，流式显示译文。\r\n• 可自定义翻译系统提示词；译文支持替换选中或插入下方。\r\n\r\n",
                 "OfficeTranslate 2.3.7.0\r\n• Chat 新增翻譯按鈕，直接使用翻譯服務的目標語言，串流顯示譯文。\r\n• 可自訂翻譯系統提示詞；譯文支援取代選取或插入下方。\r\n\r\n",

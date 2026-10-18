@@ -252,6 +252,7 @@ namespace OfficeTranslate.WordAddIn
                 default: question = _input.Text.Trim(); break;
             }
             if (string.IsNullOrWhiteSpace(question)) { SetStatus("ChatNeedInput", true); return; }
+            _input.Clear();
             var ui = OfficeUiDispatcher.Capture("Chat");
             var cancellation = new CancellationTokenSource();
             lock (_streamSync) { _pending = cancellation; _queuedOutput = null; _recovering = false; _acceptingStream = true; }
@@ -277,7 +278,6 @@ namespace OfficeTranslate.WordAddIn
                         if (IsDisposed || cancellation.IsCancellationRequested) return;
                         EndStream(false); _result = reply.Text; _hasTurn = false; RenderTranscript();
                         _turnQuestion = ""; _turnHistory = new ChatMessage[0]; _resultMode = mode; _resultContext = context; _written = false;
-                        if (mode == ChatMode.Question) _input.Clear();
                         SetStatus(reply.UsedFallback ? "ChatFallback" : "ChatDone");
                         if (reply.UsedSummaries) AppendStatus("ChatReduced");
                         BuildWrites();
@@ -303,12 +303,12 @@ namespace OfficeTranslate.WordAddIn
         }
         private void BuildWrites()
         {
-            // Translation and rewriting correspond to the source position: replace the
+            // Answers, translations and rewrites use the source position: replace the
             // captured selection or insert below it; never insert at the document start.
-            var sourceResult = _resultMode == ChatMode.Rewrite || _resultMode == ChatMode.Translate;
+            var sourceResult = _resultMode == ChatMode.Question || _resultMode == ChatMode.Rewrite || _resultMode == ChatMode.Translate;
             foreach (ChatWriteAction action in Enum.GetValues(typeof(ChatWriteAction)))
             {
-                if (_resultMode == ChatMode.Question || (_resultMode == ChatMode.Summarize && action != ChatWriteAction.InsertAtStart) ||
+                if ((_resultMode == ChatMode.Summarize && action != ChatWriteAction.InsertAtStart) ||
                     (sourceResult && action == ChatWriteAction.InsertAtStart)) continue;
                 var allowed = _resultContext?.Allows(_resultMode, action, _result) == true;
                 var key = action == ChatWriteAction.ReplaceSelection ? "ChatReplace" : action == ChatWriteAction.InsertBelow ? "ChatInsertBelow" : "ChatInsertStart";

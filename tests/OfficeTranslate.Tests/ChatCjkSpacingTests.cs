@@ -85,7 +85,7 @@ namespace OfficeTranslate.Tests
         }
 
         [DataTestMethod]
-        [DataRow(ChatMode.Question)] [DataRow(ChatMode.Summarize)] [DataRow(ChatMode.Rewrite)]
+        [DataRow(ChatMode.Question)] [DataRow(ChatMode.Summarize)] [DataRow(ChatMode.Rewrite)] [DataRow(ChatMode.Translate)]
         public async Task CompletedAnswer_IsCleanBeforeFailedSaveRetry_AndNextRequest(ChatMode mode)
         {
             using (var sandbox = new HistorySandbox())
