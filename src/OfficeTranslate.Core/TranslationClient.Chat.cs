@@ -18,20 +18,42 @@ namespace OfficeTranslate.Core
             var data = new StringBuilder();
             var done = false;
             var firstLine = true;
-            string? line;
-            while (!done && (line = await reader.ReadLineAsync().ConfigureAwait(false)) != null)
+            var line = new StringBuilder();
+            var buffer = new char[4096];
+            var total = 0;
+            var afterCr = false;
+            void ConsumeLine()
             {
-                token.ThrowIfCancellationRequested();
-                if (firstLine) { line = line.TrimStart('\uFEFF'); firstLine = false; }
-                if (line.Length == 0) done = ReadEvent(data, text, output);
-                else if (line.StartsWith("data:", StringComparison.Ordinal))
+                var value = line.ToString(); line.Clear();
+                if (firstLine) { value = value.TrimStart('\uFEFF'); firstLine = false; }
+                if (value.Length == 0) done = ReadEvent(data, text, output);
+                else if (value.StartsWith("data:", StringComparison.Ordinal))
                 {
-                    var value = line.Substring(5);
-                    data.Append(value.StartsWith(" ", StringComparison.Ordinal) ? value.Substring(1) : value).Append('\n');
+                    value = value.Substring(5);
+                    if (value.StartsWith(" ", StringComparison.Ordinal)) value = value.Substring(1);
+                    if (data.Length + value.Length + 1 > ResponseLimits.Chat) throw ChatErrors.ResponseTooLarge();
+                    data.Append(value).Append('\n');
                 }
                 // Comments/keep-alives, event, id and retry fields do not carry completion text.
             }
+            while (!done)
+            {
+                token.ThrowIfCancellationRequested();
+                var count = await reader.ReadAsync(buffer, 0, Math.Min(buffer.Length, ResponseLimits.Chat - total + 1)).ConfigureAwait(false);
+                if (count == 0) break;
+                total += count;
+                if (total > ResponseLimits.Chat) throw ChatErrors.ResponseTooLarge();
+                for (var i = 0; i < count && !done; i++)
+                {
+                    var ch = buffer[i];
+                    if (afterCr && ch == '\n') { afterCr = false; continue; }
+                    afterCr = ch == '\r';
+                    if (ch == '\r' || ch == '\n') ConsumeLine();
+                    else line.Append(ch);
+                }
+            }
             token.ThrowIfCancellationRequested();
+            if (!done && line.Length > 0) ConsumeLine();
             if (!done && data.Length > 0) done = ReadEvent(data, text, output);
             if (!done || string.IsNullOrWhiteSpace(text.ToString()))
                 throw new ChatException(ChatFailure.Protocol, "Interrupted or empty SSE response.");
@@ -55,7 +77,10 @@ namespace OfficeTranslate.Core
                 if (choice.TryGetValue("finish_reason", out var reason)) ChatErrors.CheckFinish(Convert.ToString(reason));
                 if (choice.TryGetValue("delta", out var d) && d is Dictionary<string, object> delta &&
                     delta.TryGetValue("content", out var value) && value is string content && content.Length > 0)
-                { text.Append(content); output(text.ToString()); }
+                {
+                    if (text.Length + content.Length > ResponseLimits.Chat) throw ChatErrors.ResponseTooLarge();
+                    text.Append(content); output(text.ToString());
+                }
             }
             return false;
         }
@@ -79,7 +104,7 @@ namespace OfficeTranslate.Core
             if (!ollama)
             {
                 try { return await SendChatAttemptAsync(endpoint, messages, settings, outputTokens, true, replaceOutput, token).ConfigureAwait(false); }
-                catch (ChatException ex) when (ex.Failure == ChatFailure.Protocol || ex.Failure == ChatFailure.Network || ex.Failure == ChatFailure.StreamUnsupported)
+                catch (ChatException ex) when (!ex.ResponseLimitExceeded && (ex.Failure == ChatFailure.Protocol || ex.Failure == ChatFailure.Network || ex.Failure == ChatFailure.StreamUnsupported))
                 {
                     token.ThrowIfCancellationRequested();
                     streamingFailure = ex;
@@ -120,35 +145,39 @@ namespace OfficeTranslate.Core
                     {
                         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue(streaming ? "text/event-stream" : "application/json"));
                         using (var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, deadline.Token).ConfigureAwait(false))
-                        using (var stream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false))
-                        using (deadline.Token.Register(() => stream.Dispose()))
-                        using (var reader = new StreamReader(stream, Encoding.UTF8))
                         {
-                            var sse = string.Equals(response.Content.Headers.ContentType?.MediaType, "text/event-stream", StringComparison.OrdinalIgnoreCase);
-                            if (response.IsSuccessStatusCode && streaming && sse)
-                                return new ChatReply(await ChatSseParser.ReadAsync(reader, output, deadline.Token).ConfigureAwait(false), false);
-                            var raw = await reader.ReadToEndAsync().ConfigureAwait(false);
-                            deadline.Token.ThrowIfCancellationRequested();
-                            if (!response.IsSuccessStatusCode) throw ChatErrors.HttpFailure((int)response.StatusCode, raw, streaming);
-                            var root = ChatErrors.ParseJson(raw);
-                            ChatErrors.ThrowServerError(root);
-                            string? text = null;
-                            if (ollama)
+                            if (response.Content.Headers.ContentLength > ResponseLimits.Chat) throw ChatErrors.ResponseTooLarge();
+                            using (var stream = await ResponseLimits.OpenStreamAsync(response.Content, deadline.Token).ConfigureAwait(false))
+                            using (deadline.Token.Register(() => stream.Dispose()))
+                            using (var limited = new LimitedReadStream(stream, ResponseLimits.Chat, ChatErrors.ResponseTooLarge))
+                            using (var reader = new StreamReader(limited, Encoding.UTF8))
                             {
-                                if (root.TryGetValue("done_reason", out var reason)) ChatErrors.CheckFinish(Convert.ToString(reason));
-                                if (root.TryGetValue("message", out var m) && m is Dictionary<string, object> message && message.TryGetValue("content", out var content)) text = content as string;
-                                if (root.TryGetValue("done", out var done) && done is bool completed && !completed)
-                                    throw new ChatException(ChatFailure.Protocol, "Incomplete Ollama response.");
+                                var sse = string.Equals(response.Content.Headers.ContentType?.MediaType, "text/event-stream", StringComparison.OrdinalIgnoreCase);
+                                if (response.IsSuccessStatusCode && streaming && sse)
+                                    return new ChatReply(await ChatSseParser.ReadAsync(reader, output, deadline.Token).ConfigureAwait(false), false);
+                                var raw = await ReadChatJsonAsync(reader, deadline.Token).ConfigureAwait(false);
+                                deadline.Token.ThrowIfCancellationRequested();
+                                if (!response.IsSuccessStatusCode) throw ChatErrors.HttpFailure((int)response.StatusCode, raw, streaming);
+                                var root = ChatErrors.ParseJson(raw);
+                                ChatErrors.ThrowServerError(root);
+                                string? text = null;
+                                if (ollama)
+                                {
+                                    if (root.TryGetValue("done_reason", out var reason)) ChatErrors.CheckFinish(Convert.ToString(reason));
+                                    if (root.TryGetValue("message", out var m) && m is Dictionary<string, object> message && message.TryGetValue("content", out var content)) text = content as string;
+                                    if (root.TryGetValue("done", out var done) && done is bool completed && !completed)
+                                        throw new ChatException(ChatFailure.Protocol, "Incomplete Ollama response.");
+                                }
+                                else if (root.TryGetValue("choices", out var c) && c is object[] choices && choices.FirstOrDefault() is Dictionary<string, object> choice)
+                                {
+                                    if (choice.TryGetValue("finish_reason", out var reason)) ChatErrors.CheckFinish(Convert.ToString(reason));
+                                    if (choice.TryGetValue("message", out var m) && m is Dictionary<string, object> message && message.TryGetValue("content", out var content)) text = content as string;
+                                }
+                                if (string.IsNullOrWhiteSpace(text)) throw new ChatException(ChatFailure.Protocol, "Empty or unrecognized chat response.");
+                                output(text!);
+                                // Some compatible servers ignore stream=true and return a complete JSON reply.
+                                return new ChatReply(text!, true);
                             }
-                            else if (root.TryGetValue("choices", out var c) && c is object[] choices && choices.FirstOrDefault() is Dictionary<string, object> choice)
-                            {
-                                if (choice.TryGetValue("finish_reason", out var reason)) ChatErrors.CheckFinish(Convert.ToString(reason));
-                                if (choice.TryGetValue("message", out var m) && m is Dictionary<string, object> message && message.TryGetValue("content", out var content)) text = content as string;
-                            }
-                            if (string.IsNullOrWhiteSpace(text)) throw new ChatException(ChatFailure.Protocol, "Empty or unrecognized chat response.");
-                            output(text!);
-                            // Some compatible servers ignore stream=true and return a complete JSON reply.
-                            return new ChatReply(text!, true);
                         }
                     }
                 }
@@ -160,6 +189,21 @@ namespace OfficeTranslate.Core
                         throw new ChatException(ChatFailure.Network, ex.GetType().Name + ": Chat request timed out after " + settings.TimeoutSeconds + " seconds.");
                     throw new ChatException(ChatFailure.Network, ChatErrors.NetworkDetails(ex, settings, messages));
                 }
+            }
+        }
+
+        private static async Task<string> ReadChatJsonAsync(TextReader reader, CancellationToken token)
+        {
+            var text = new StringBuilder();
+            var buffer = new char[4096];
+            while (true)
+            {
+                token.ThrowIfCancellationRequested();
+                var count = await reader.ReadAsync(buffer, 0, Math.Min(buffer.Length, ResponseLimits.Chat - text.Length + 1)).ConfigureAwait(false);
+                token.ThrowIfCancellationRequested();
+                if (count == 0) return text.ToString();
+                if (text.Length + count > ResponseLimits.Chat) throw ChatErrors.ResponseTooLarge();
+                text.Append(buffer, 0, count);
             }
         }
     }

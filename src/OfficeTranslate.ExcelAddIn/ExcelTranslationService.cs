@@ -187,6 +187,7 @@ namespace OfficeTranslate.ExcelAddIn
                 var plans = new List<Tuple<ImageTranslationRegion, PlannedOverlay, string>>();
                 foreach (var region in regions)
                 {
+                    token.ThrowIfCancellationRequested();
                     var overlayText = region.DisplayText(settings.BilingualMode);
                     var plan = region.RequiresReview
                         ? new PlannedOverlay(ImageOverlayVerdict.SideNote, region.ReviewReason, 0F, 0F, 0F, 0F, 0F)
@@ -210,6 +211,7 @@ namespace OfficeTranslate.ExcelAddIn
                 var noteEntries = new List<string>();
                 foreach (var item in plans)
                 {
+                    token.ThrowIfCancellationRequested();
                     var plan = item.Item2;
                     var overlayText = item.Item3;
                     if (plan.Verdict == ImageOverlayVerdict.SideNote)
@@ -274,9 +276,9 @@ namespace OfficeTranslate.ExcelAddIn
                 // Cleanup once per image, never once per owner-tagged chunk.
                 if (noteEntries.Count > 0)
                 {
-                    summary.RecordImageNeedsReview();
+                    if (!recognition.RegionsTruncated) summary.RecordImageNeedsReview();
                     ImageOverlayNotes.Place(noteEntries, ImageOverlayNotes.NoteWidth(imageWidth), imageTop + imageHeight + 6F,
-                        (chunk, top) => PlaceCombinedNote(sheet, ownerId, chunk.Text, imageLeft, top, imageWidth),
+                        (chunk, top) => { token.ThrowIfCancellationRequested(); return PlaceCombinedNote(sheet, ownerId, chunk.Text, imageLeft, top, imageWidth); },
                         (chunk, error) => summary.RecordImageNoteFailure(ownerId, chunk.Text, error.Message));
                 }
             });
@@ -636,7 +638,7 @@ namespace OfficeTranslate.ExcelAddIn
                             // cell; the rest read as empty, so no dedup is needed.
                             // Cells is 1-based relative to the area.
                             var targetCell = (Excel.Range)area.Cells[r + 1, c + 1];
-                            result.Add(new Target(value, (text, bilingual) => { targetCell.Value2 = text; if (bilingual) targetCell.WrapText = true; }));
+                            result.Add(new Target(value, (text, bilingual) => { targetCell.Value2 = ExcelCellText.Literal(text); if (bilingual) targetCell.WrapText = true; }));
                         }
                     }
             }

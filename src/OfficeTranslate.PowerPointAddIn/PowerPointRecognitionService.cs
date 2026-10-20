@@ -143,6 +143,7 @@ namespace OfficeTranslate.PowerPointAddIn
                 var plans = new List<Tuple<ImageTranslationRegion, PlannedOverlay, string>>();
                 foreach (var region in regions)
                 {
+                    token.ThrowIfCancellationRequested();
                     var overlayText = region.Source;
                     var plan = region.RequiresReview
                         ? new PlannedOverlay(ImageOverlayVerdict.SideNote, region.ReviewReason, 0F, 0F, 0F, 0F, 0F)
@@ -166,6 +167,7 @@ namespace OfficeTranslate.PowerPointAddIn
                     var noteEntries = new List<string>();
                     foreach (var item in plans)
                     {
+                        token.ThrowIfCancellationRequested();
                         var plan = item.Item2;
                         var overlayText = item.Item3;
                         if (plan.Verdict == ImageOverlayVerdict.SideNote)
@@ -208,9 +210,9 @@ namespace OfficeTranslate.PowerPointAddIn
                     }
                     if (noteEntries.Count > 0)
                     {
-                        summary.RecordImageNeedsReview();
+                        if (!recognition.RegionsTruncated) summary.RecordImageNeedsReview();
                         ImageOverlayNotes.Place(noteEntries, ImageOverlayNotes.NoteWidth(imageWidth), imageTop + imageHeight + 6F,
-                            (chunk, top) => OcrPlaceCombinedNote(slide, ownerId, ImageRecognitionText.NoteText(chunk), imageLeft, top, imageWidth),
+                            (chunk, top) => { token.ThrowIfCancellationRequested(); return OcrPlaceCombinedNote(slide, ownerId, ImageRecognitionText.NoteText(chunk), imageLeft, top, imageWidth); },
                             (chunk, error) => summary.RecordImageNoteFailure(ownerId, ImageRecognitionText.NoteText(chunk), error.Message));
                     }
                 });

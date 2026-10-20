@@ -1,6 +1,8 @@
 # OfficeTranslate for Microsoft Office（原生 COM 加载项）
 
-当前正式版本：**2.3.8.0**，发布分支 `main`，Git tag：`v2.3.8`。由 `feat/chat-writeback-fix` 合并，包含 2.3.7 Chat 翻译按钮、2.3.6 CJK 空格清理及 2.3.8 输入框与 Question 写回修复。Word / Excel / PowerPoint 共用 Chat 面板实现；用户真机验收通过。正式包哈希及构建结果见随包的 `manifest.json`。
+当前开发版本：**2.3.9.0**，分支 `fix/security-audit-findings`，基于 main `3fba5c2`（v2.3.8）。修复四条 confirmed 安全审计发现：Excel 公式注入、Chat 响应读取无界、HTTP API Key 保存警告及 OCR 响应/区域数量/取消边界。本次仅提交 PR，尚未合并、打 tag、发布或分发。
+
+2.3.9 新增 73 项安全回归均通过，包含真实 Excel 字面文本写回；全量 996/1002 通过，6 项既有剪贴板失败，尚未全量通过，PR 保持草稿。实现、测试及验证限制见 [安全审计验证记录](tests/VALIDATION-2.3.9-SECURITY-AUDIT.md)。Word / Excel / PowerPoint 的原有 Chat 功能和历史版本说明如下。
 
 2.3.8：包含 2.3.7 翻译按钮、翻译提示词及翻译设置开关，以及 2.3.6 CJK 空格清理。所有 Chat 模式发送开始即清空输入框，完成时保留用户新输入的下一条草稿。Question / Rewrite / Translate 完成后提供「替换选中」（可替换时启用）与「插入到下方」，不提供「插入到开头」；Summarize 仅提供「插入到开头」。所有写回仍需点击并确认。测试、构建和 MSI 核验见 [2.3.8 验证记录](tests/VALIDATION-2.3.8-CHAT-WRITEBACK.md)。
 
