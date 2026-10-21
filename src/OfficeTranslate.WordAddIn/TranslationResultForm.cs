@@ -17,7 +17,7 @@ namespace OfficeTranslate.WordAddIn
         internal TranslationResultForm(string uiLanguage, TranslationTaskSummary summary, TranslationTaskFailure? failure = null)
         {
             _uiLanguage = uiLanguage;
-            _requiresAcknowledgement = summary.UnplacedImageNotes.Count > 0 || summary.TextBlockFailures.Count > 0;
+            _requiresAcknowledgement = summary.UnplacedImageNotes.Count > 0 || summary.TextBlockFailures.Count > 0 || summary.OcrRegionLimitDropped > 0;
             Text = UiText.Get(uiLanguage, "SummaryTitle");
             Width = 520; Height = 300; MinimumSize = new Size(480, 280);
             MaximizeBox = false; MinimizeBox = false; ShowInTaskbar = false;
@@ -55,6 +55,8 @@ namespace OfficeTranslate.WordAddIn
             {
                 Text = failure != null ? UiText.Get(uiLanguage, failure.HeadingKey) : summary.TextBlockFailures.Count > 0
                     ? string.Format(UiText.Get(uiLanguage, "SummaryTextFailures"), summary.TextBlockFailures.Count)
+                    : summary.OcrRegionLimitDropped > 0
+                    ? UiText.Get(uiLanguage, "ImageRegionLimitTitle")
                     : _requiresAcknowledgement
                     ? string.Format(UiText.Get(uiLanguage, "SummaryUnplaced"), summary.UnplacedImageNotes.Count)
                     : string.Format(UiText.Get(uiLanguage, "SummaryCompleted"), summary.Total),
@@ -90,6 +92,8 @@ namespace OfficeTranslate.WordAddIn
                 details.Text += "\r\n\r\n" + string.Format(UiText.Get(uiLanguage, "OcrRegionDetails"),
                     summary.OcrImages, summary.OcrRawRegions, summary.OcrKeptRegions, summary.OcrDroppedRegions,
                     summary.OcrBboxNotes, summary.OcrEmptyTranslations, summary.ImageNeedsReview);
+            if (summary.OcrRegionLimitDropped > 0)
+                details.Text += "\r\n\r\n" + string.Format(UiText.Get(uiLanguage, "ImageRegionLimit"), summary.OcrRegionLimitDropped);
             if (summary.UnplacedImageNotes.Count > 0)
                 details.Text += "\r\n\r\n" + UiText.Get(uiLanguage, "UnplacedNoteDetails") + "\r\n\r\n"
                     + string.Join("\r\n\r\n", summary.UnplacedImageNotes);

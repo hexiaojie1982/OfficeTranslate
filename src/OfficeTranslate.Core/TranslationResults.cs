@@ -85,6 +85,7 @@ namespace OfficeTranslate.Core
         public int OcrRawRegions { get; private set; }
         public int OcrKeptRegions { get; private set; }
         public int OcrDroppedRegions { get; private set; }
+        public int OcrRegionLimitDropped { get; private set; }
         public int OcrBboxNotes { get; private set; }
         public int OcrEmptyTranslations { get; private set; }
         public IReadOnlyList<string> UnplacedImageNotes => _unplacedImageNotes.AsReadOnly();
@@ -126,8 +127,10 @@ namespace OfficeTranslate.Core
             OcrRawRegions += result.Statistics.RawCount;
             OcrKeptRegions += result.Statistics.RetainedCount;
             OcrDroppedRegions += result.Statistics.DroppedCount;
+            OcrRegionLimitDropped += result.Statistics.RegionLimitDroppedCount;
             OcrBboxNotes += result.Statistics.InvalidBboxDowngradedCount;
             OcrEmptyTranslations += result.Statistics.EmptyTranslationCount;
+            if (result.RegionsTruncated) RecordImageNeedsReview();
             if (result.Regions.Count == 0) OcrNoText++;
             else if (result.Regions.Any(r => !string.IsNullOrWhiteSpace(r.Translation))) Translated++;
             // A source-only result is NOT a translated image or empty OCR.

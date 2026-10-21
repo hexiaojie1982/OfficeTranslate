@@ -182,9 +182,7 @@ namespace OfficeTranslate.WordAddIn
         }
         private static void ExcelLiteral(dynamic cell, string text)
         {
-            if (text.Length > 32767) throw new InvalidOperationException();
-            // Leading apostrophe stores text literally, including strings beginning with =,+,-,@.
-            cell.Value2 = "'" + text;
+            cell.Value2 = ExcelCellText.Literal(text);
         }
         private static void ExcelStart(dynamic sheet, string text)
         { if (text.Length > 32767) throw new InvalidOperationException(); sheet.Rows[1].Insert(); ExcelLiteral(sheet.Cells[1, 1], text); }

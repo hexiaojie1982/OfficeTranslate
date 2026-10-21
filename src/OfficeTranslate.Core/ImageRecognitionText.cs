@@ -18,6 +18,7 @@ namespace OfficeTranslate.Core
                 RawCount = response.Statistics.RawCount,
                 NonDictionaryCount = response.Statistics.NonDictionaryCount,
                 EmptyTextCount = response.Statistics.EmptyTextCount,
+                RegionLimitDroppedCount = response.Statistics.RegionLimitDroppedCount,
                 InvalidBboxCount = response.Statistics.InvalidBboxCount
             };
             foreach (var item in response.Regions)

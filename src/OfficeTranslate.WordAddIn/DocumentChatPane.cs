@@ -338,6 +338,7 @@ namespace OfficeTranslate.WordAddIn
     }
     internal sealed class ChatSettingsForm : Form
     {
+        internal Func<bool>? ConfirmPlaintextKey { get; set; }
         public ChatSettingsForm(SettingsStore store)
         {
             var settings = store.Load(); string T(string key) => UiText.Get(settings.UiLanguage, key);
@@ -352,7 +353,7 @@ namespace OfficeTranslate.WordAddIn
             var output = new NumericUpDown { Minimum = 256, Maximum = 524288, Value = Math.Max(256, Math.Min(524288, settings.ChatOutputTokens)), Dock = DockStyle.Fill }; root.Controls.Add(output);
             var save = new Button { Text = T("Save"), AutoSize = true, FlatStyle = FlatStyle.Flat, BackColor = Color.FromArgb(45,108,223), ForeColor = Color.White }; save.FlatAppearance.BorderSize = 0;
             save.Click += (a, b) => { if (output.Value > budget.Value / 2 || string.IsNullOrWhiteSpace(t.Text) || string.IsNullOrWhiteSpace(q.Text) || string.IsNullOrWhiteSpace(s.Text) || string.IsNullOrWhiteSpace(r.Text)) { MessageBox.Show(this, T("ChatInvalidSettings"), Text); return; }
-                try { settings.ChatTranslateSystemPrompt = t.Text; settings.ChatQuestionSystemPrompt = q.Text; settings.ChatSummarySystemPrompt = s.Text; settings.ChatRewriteSystemPrompt = r.Text; settings.ChatContextTokens = (int)budget.Value; settings.ChatOutputTokens = (int)output.Value; store.Save(settings); Close(); } catch { MessageBox.Show(this, T("ChatSettingsError"), Text); } };
+                try { if (!EndpointWarning.Confirm(this, settings, ConfirmPlaintextKey)) return; settings.ChatTranslateSystemPrompt = t.Text; settings.ChatQuestionSystemPrompt = q.Text; settings.ChatSummarySystemPrompt = s.Text; settings.ChatRewriteSystemPrompt = r.Text; settings.ChatContextTokens = (int)budget.Value; settings.ChatOutputTokens = (int)output.Value; store.Save(settings); Close(); } catch { MessageBox.Show(this, T("ChatSettingsError"), Text); } };
             root.Controls.Add(save); Controls.Add(root); AcceptButton = save;
         }
     }

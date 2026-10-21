@@ -1,29 +1,31 @@
 # OfficeTranslate 应用说明
 
-当前正式版本：**2.3.8.0**，发布分支 `main`，Git tag：`v2.3.8`。由 `feat/chat-writeback-fix` 合并，包含 2.3.7 Chat 翻译按钮、2.3.6 CJK 空格清理，以及 2.3.8 输入框与 Question 写回修复。
+当前开发版本：**2.3.9.0**；分支 `fix/security-audit-findings`，基于 main `3fba5c2`（v2.3.8）。本次只提交 PR，未合并、打 tag、发布、安装或发送文件。
 
-三宿主共用 Chat 面板：功能组为「翻译 / 总结 / 改写 / Chat 设置」。翻译直接读取当前翻译服务的目标语言，按选中优先、否则全文获取上下文；结果走现有 Chat SSE 流式显示。翻译系统提示词可编辑并持久化；风格、额外要求和术语表沿用「使用翻译设置」开关。译文提供「替换选中」（目标可替换时启用）和「插入到下方」，不提供插入到开头。
+## 安全修复
 
-## 构建
+- Excel 替换与双语翻译通过共享字面文本 helper 写回，避免模型输出成为公式。
+- Chat 响应最多 8 MiB 实际字节/累计字符，图片响应最多 16 MiB 实际字节；错误响应同样受限。
+- 翻译设置和 Chat 设置保存时，公网 HTTP 携带 API Key 会明确警告明文传输风险，默认选择不保存。localhost、私有网段、链路本地和仅解析到本地地址的局域网域名不弹该警告。
+- 图片最多处理前 512 个区域；超出部分显示丢弃数量及待检查提示，结果窗保持打开供确认。Word / Excel / PowerPoint 的 OCR 和图片翻译写回逐条检查取消。
 
-在 `main` 工作树根目录先执行 `dotnet clean OfficeTranslate.Word.sln -c Release`，再执行 `./build.ps1 -Configuration Release`，构建 Word、Excel、PowerPoint 加载项和 WiX MSI。`VERSION.txt`、三宿主程序集、Core 包版本及 MSI/COM 注册统一为 **2.3.8.0**。正式包的字节数、SHA-256、合并提交及载荷核验记录见随包的 `manifest.json`。
+## 构建与测试
 
-安装包：`artifacts/OfficeTranslate.Office.x64.msi`，仅适用于 64 位 Office。
+在此分支根目录执行：
 
-## 安装或升级
+```powershell
+./build.ps1 -Configuration Release -SkipInstaller
+dotnet test OfficeTranslate.Word.sln -c Release --no-build --no-restore --logger 'trx;LogFileName=security-after.trx' --results-directory TestResults
+```
 
-1. 关闭 Word、Excel、PowerPoint，保存未完成的文档。
-2. 运行 MSI，按安装向导完成安装或升级；不要仅替换 DLL，侧栏依赖 MSI 中的 COM 注册。
-3. 重新启动 Office，打开「工具 → 文档内 Chat」，检查翻译按钮位于总结之前、Chat 设置位于功能组最后。
-4. 切换翻译服务的目标语言，分别以选中文字和无选中全文翻译；检查流式、复制、历史、导出与写回确认。
-5. 编辑翻译系统提示词，关闭重开设置窗确认保存；保存翻译服务设置后再次确认提示词仍保留。
+全量测试包含真实窗口、键盘、剪贴板及 Excel COM 集成用例，须在已登录的交互桌面运行。不要通过过滤或跳过测试来声称全量通过。基线、最终结果及环境限制见 [2.3.9 验证记录](tests/VALIDATION-2.3.9-SECURITY-AUDIT.md)。
 
-静默部署命令：`msiexec /i OfficeTranslate.Office.x64.msi /qn /l*v install.log`。
+`VERSION.txt`、三宿主 AssemblyVersion / FileVersion、Core Version 均为 **2.3.9.0**。WiX 的 ProductVersion 和 COM 注册版本由构建脚本读取同一版本文件。本次使用 `-SkipInstaller`，未生成或验证 2.3.9 MSI；现存 artifacts 下的旧包不能代表本次代码。
 
-本次已合入 2.3.6 CJK 清理：最终回答、历史、复制、导出和写回共用清理后的文本。保留用户原文、韩文间距、中英/中数边界、换行及代码。原 native-word 工作树仍在 2.3.6，保持原样。
+## 功能使用
 
-所有模式发送开始即清空输入框；Question 与 Rewrite / Translate 一样提供替换选中和插入下方（替换可用性仍由上下文决定），Summarize 仅插入开头。完成回调不再清空下一条草稿；写回仍需点击并确认。
+Word / Excel / PowerPoint 共用 Chat 面板，功能组为「翻译 / 总结 / 改写 / Chat 设置」。翻译直接使用翻译服务当前目标语言，选中优先，否则读取全文。Chat 提示词可编辑并持久化；「使用翻译设置」控制是否追加风格、额外要求和术语表。
 
-超出上下文预算时沿用现有分段摘要机制，译文会基于摘要，界面有提示。开发阶段测试、候选包哈希和验证边界见 [2.3.8 验证报告](tests/VALIDATION-2.3.8-CHAT-WRITEBACK.md)；正式包以 `manifest.json` 为准。用户已完成真机验收并通过。
+Question / Rewrite / Translate 完成后可确认替换选中或插入下方；Summarize 仅插入开头。所有模式在发送开始时清空输入框，完成回调保留下一条草稿。CJK 清理保留韩文间距、中英/中数边界、换行及代码。
 
-全量回归 **929/929 通过，0 失败、0 跳过**（本次新增 31 项，另合入 CJK 的 40 项）；Release 干净构建 **0 错误、7 条既有 nullable 警告**。MSI 实际数据库、6 条 COM 注册和四个 DLL 载荷版本均为 2.3.8.0，载荷哈希与 Release 输出一致。
+合并、正式包构建、安装、发布及邮件发送均由后续独立核验流程执行。

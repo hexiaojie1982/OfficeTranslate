@@ -313,6 +313,7 @@ namespace OfficeTranslate.WordAddIn
             var plans = new List<Tuple<ImageTranslationRegion, PlannedOverlay, string>>();
             foreach (var region in regions)
             {
+                token.ThrowIfCancellationRequested();
                 var overlayText = region.DisplayText(settings.BilingualMode);
                 PlannedOverlay plan;
                 if (region.RequiresReview)
@@ -359,6 +360,7 @@ namespace OfficeTranslate.WordAddIn
                 var noteEntries = new List<string>();
                 foreach (var item in plans)
                 {
+                    token.ThrowIfCancellationRequested();
                     var plan = item.Item2;
                     var overlayText = item.Item3;
                     if (plan.Verdict == ImageOverlayVerdict.SideNote)
@@ -415,10 +417,10 @@ namespace OfficeTranslate.WordAddIn
                         noteRelH = image.RelativeHorizontalPosition;
                         noteRelV = image.RelativeVerticalPosition;
                     }
-                    summary.RecordImageNeedsReview();
+                    if (!recognition.RegionsTruncated) summary.RecordImageNeedsReview();
                     ImageOverlayNotes.Place(noteEntries, ImageOverlayNotes.NoteWidth(image.Width), noteTop,
-                        (chunk, top) => PlaceCombinedNote(image, ownerId, chunk.Text,
-                            noteLeft, top, noteRelH, noteRelV),
+                        (chunk, top) => { token.ThrowIfCancellationRequested(); return PlaceCombinedNote(image, ownerId, chunk.Text,
+                            noteLeft, top, noteRelH, noteRelV); },
                         (chunk, error) => summary.RecordImageNoteFailure(ownerId, chunk.Text, error.Message));
                 }
             });

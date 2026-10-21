@@ -15,7 +15,8 @@ namespace OfficeTranslate.Core
         public int EmptyTranslationDroppedCount { get; internal set; }
         public int NonDictionaryCount { get; internal set; }
         public int EmptyTextCount { get; internal set; }
-        public int DroppedCount => NonDictionaryCount + EmptyTextCount;
+        public int RegionLimitDroppedCount { get; internal set; }
+        public int DroppedCount => NonDictionaryCount + EmptyTextCount + RegionLimitDroppedCount;
         public int ReviewCount { get; internal set; }
     }
 
@@ -27,23 +28,28 @@ namespace OfficeTranslate.Core
         public ImageRecognitionStatistics Statistics { get; }
         public string FinishReason { get; internal set; } = "unknown";
         public bool Truncated { get; internal set; }
+        public bool RegionsTruncated => Statistics.RegionLimitDroppedCount > 0;
     }
 
     // Host-independent parsing; counts are returned, including empty results.
     public static class ImageRegionParser
     {
+        public const int MaximumRegions = 512;
         public static ImageRecognitionResult Parse(string content)
         {
+            if (content.Length > ResponseLimits.Image) throw new InvalidOperationException("图片区域 JSON 超过 16 MiB 字符上限。");
             var start = content.IndexOf('{'); var end = content.LastIndexOf('}');
             if (start < 0 || end <= start) throw new InvalidOperationException("图片模型没有返回有效的 JSON 坐标。");
-            var root = new JavaScriptSerializer { MaxJsonLength = int.MaxValue }
+            var root = new JavaScriptSerializer { MaxJsonLength = ResponseLimits.Image }
                 .DeserializeObject(content.Substring(start, end - start + 1)) as Dictionary<string, object>;
             if (root == null || !root.TryGetValue("regions", out var value) || !(value is object[] items))
                 throw new InvalidOperationException("图片模型返回的 regions 格式无效。");
-            var stats = new ImageRecognitionStatistics { RawCount = items.Length };
+            var stats = new ImageRecognitionStatistics { RawCount = items.Length,
+                RegionLimitDroppedCount = Math.Max(0, items.Length - MaximumRegions) };
             var regions = new List<ImageTranslationRegion>();
-            foreach (var item in items)
+            for (var i = 0; i < Math.Min(items.Length, MaximumRegions); i++)
             {
+                var item = items[i];
                 if (!(item is Dictionary<string, object> dict)) { stats.NonDictionaryCount++; continue; }
                 var region = new ImageTranslationRegion { Source = Text(dict, "source"), Translation = Text(dict, "translation") };
                 var boxOk = dict.TryGetValue("bbox", out var b) && b is object[] box && box.Length == 4;

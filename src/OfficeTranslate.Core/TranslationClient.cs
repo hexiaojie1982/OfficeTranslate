@@ -185,7 +185,8 @@ namespace OfficeTranslate.Core
                 throw new InvalidOperationException("图片模型返回的 JSON 区域无法解析；未写回。请检查诊断中的截断标志或更换图片模型。", ex);
             }
             catch (ImageOcrTimeoutException) { status = "timeout"; throw; }
-            catch (OperationCanceledException) when (token.IsCancellationRequested) { status = "cancelled"; throw; }
+            catch (OperationCanceledException) when (token.IsCancellationRequested)
+            { status = "cancelled"; token.ThrowIfCancellationRequested(); throw; }
             catch (OperationCanceledException ex)
             {
                 throw new InvalidOperationException("图片识别请求被服务或网络中断（非用户取消），当前图片译文未写入。请重试或检查服务。", ex);
@@ -240,7 +241,7 @@ namespace OfficeTranslate.Core
                         throw new ImageFormatNotSupportedException($"图片识别服务不支持结构化输出参数，已回退为纯提示词模式: {raw}");
                     throw new InvalidOperationException($"图片识别服务返回 {(int)response.StatusCode}: {raw}");
                 }
-                var root = DeserializeJson(raw) as Dictionary<string, object>;
+                var root = new JavaScriptSerializer { MaxJsonLength = ResponseLimits.Image }.DeserializeObject(raw) as Dictionary<string, object>;
                 var imageResponse = settings.Provider == ProviderKind.Ollama ? ReadOllama(root) : ReadOpenAi(root);
                 var finish = ReadImageFinishReason(root, settings.Provider);
                 try
@@ -475,9 +476,10 @@ namespace OfficeTranslate.Core
                 HttpResponseMessage? response = null;
                 try
                 {
-                    // Default ResponseContentRead covers the complete non-streaming
-                    // JSON body, not just the arrival of HTTP headers.
-                    response = await _imageHttp.SendAsync(request, linked.Token).ConfigureAwait(false);
+                    // Bound the body before HttpClient can buffer it; keep the same deadline
+                    // through the complete read, including chunked and error responses.
+                    response = await _imageHttp.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, linked.Token).ConfigureAwait(false);
+                    await ResponseLimits.BufferImageAsync(response, linked.Token).ConfigureAwait(false);
                     userToken.ThrowIfCancellationRequested();
                     deadline.Token.ThrowIfCancellationRequested();
                     return response;
@@ -510,6 +512,13 @@ namespace OfficeTranslate.Core
                 {
                     response?.Dispose(); throw new ImageOcrTimeoutException(_imageRequestTimeout, ex);
                 }
+                catch (Exception ex) when ((ex is IOException || ex is ObjectDisposedException) && linked.IsCancellationRequested)
+                {
+                    response?.Dispose();
+                    userToken.ThrowIfCancellationRequested();
+                    throw new ImageOcrTimeoutException(_imageRequestTimeout, ex);
+                }
+                catch { response?.Dispose(); throw; }
             }
         }
 

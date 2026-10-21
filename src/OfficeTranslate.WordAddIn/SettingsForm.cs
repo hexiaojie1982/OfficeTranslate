@@ -9,6 +9,7 @@ namespace OfficeTranslate.WordAddIn
 {
     internal sealed class SettingsForm : Form
     {
+        internal Func<bool>? ConfirmPlaintextKey { get; set; }
         private readonly SettingsStore _store;
         private readonly ComboBox _uiLanguage = new ComboBox();
         private readonly ComboBox _provider = new ComboBox();
@@ -242,10 +243,26 @@ namespace OfficeTranslate.WordAddIn
 
         private void SaveClicked(object sender, EventArgs e)
         {
-            try { _store.Save(BuildSettings(true)); DialogResult = DialogResult.OK; Close(); }
+            try
+            {
+                var settings = BuildSettings(true);
+                if (!EndpointWarning.Confirm(this, settings, ConfirmPlaintextKey)) return;
+                _store.Save(settings); DialogResult = DialogResult.OK; Close();
+            }
             catch (Exception ex) { MessageBox.Show(ex.Message, T("SaveError"), MessageBoxButtons.OK, MessageBoxIcon.Warning); }
         }
 
         private string T(string key) => UiText.Get(_existing.UiLanguage, key);
+    }
+
+    internal static class EndpointWarning
+    {
+        internal static bool Confirm(IWin32Window owner, TranslationSettings settings, Func<bool>? confirm = null)
+        {
+            if (!EndpointSecurity.RequiresPlaintextKeyWarning(settings.BaseUrl, settings.ApiKey)) return true;
+            return confirm != null ? confirm() : MessageBox.Show(owner,
+                UiText.Get(settings.UiLanguage, "PlaintextKeyWarning"), UiText.Get(settings.UiLanguage, "Save"),
+                MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) == DialogResult.Yes;
+        }
     }
 }

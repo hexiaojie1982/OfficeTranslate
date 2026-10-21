@@ -68,7 +68,8 @@ namespace OfficeTranslate.Core
                 throw new InvalidOperationException("图片模型返回的 JSON 区域无法解析；未写回。请检查诊断中的截断标志或更换图片模型。", ex);
             }
             catch (ImageOcrTimeoutException) { status = "timeout"; throw; }
-            catch (OperationCanceledException) when (token.IsCancellationRequested) { status = "cancelled"; throw; }
+            catch (OperationCanceledException) when (token.IsCancellationRequested)
+            { status = "cancelled"; token.ThrowIfCancellationRequested(); throw; }
             catch (OperationCanceledException ex)
             {
                 throw new InvalidOperationException("图片识别请求被服务或网络中断（非用户取消），当前图片识别结果未写入。请重试或检查服务。", ex);

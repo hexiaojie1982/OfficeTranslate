@@ -17,7 +17,7 @@ namespace OfficeTranslate.WordAddIn
         internal OcrResultForm(string uiLanguage, TranslationTaskSummary? summary, Exception? error)
         {
             _uiLanguage = uiLanguage;
-            _keepOpen = error != null || summary?.UnplacedImageNotes.Count > 0;
+            _keepOpen = error != null || summary?.UnplacedImageNotes.Count > 0 || summary?.OcrRegionLimitDropped > 0;
             Text = UiText.Get(uiLanguage, "OcrResultTitle");
             Width = 520; Height = 300; MinimumSize = new Size(480, 280);
             MaximizeBox = false; MinimizeBox = false; ShowInTaskbar = false;
@@ -71,6 +71,8 @@ namespace OfficeTranslate.WordAddIn
             {
                 message += "\r\n" + string.Format(UiText.Get(uiLanguage, "OcrResultDetails"),
                     summary.OcrImages, summary.OcrKeptRegions, summary.OcrNoText, summary.ImageNeedsReview);
+                if (summary.OcrRegionLimitDropped > 0)
+                    message += "\r\n\r\n" + string.Format(UiText.Get(uiLanguage, "ImageRegionLimit"), summary.OcrRegionLimitDropped);
                 if (summary.UnplacedImageNotes.Count > 0)
                     message += "\r\n\r\n" + UiText.Get(uiLanguage, "OcrResultUnplacedNotes") + "\r\n\r\n" +
                         string.Join("\r\n\r\n", summary.UnplacedImageNotes);

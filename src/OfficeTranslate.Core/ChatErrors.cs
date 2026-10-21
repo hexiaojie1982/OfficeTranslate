@@ -16,10 +16,13 @@ namespace OfficeTranslate.Core
     {
         public ChatException(ChatFailure failure, string message) : base(message) { Failure = failure; }
         public ChatFailure Failure { get; }
+        internal bool ResponseLimitExceeded { get; set; }
     }
 
     public static class ChatErrors
     {
+        internal static ChatException ResponseTooLarge() => new ChatException(ChatFailure.Protocol,
+            "Chat response exceeds the 8 MiB byte/character limit.") { ResponseLimitExceeded = true };
         public static string UiKey(Exception error)
         {
             if (error is ChatException chat)
@@ -67,7 +70,8 @@ namespace OfficeTranslate.Core
         {
             try
             {
-                return new JavaScriptSerializer { MaxJsonLength = int.MaxValue }.DeserializeObject(payload) as Dictionary<string, object>
+                if (payload.Length > ResponseLimits.Chat) throw ResponseTooLarge();
+                return new JavaScriptSerializer { MaxJsonLength = ResponseLimits.Chat }.DeserializeObject(payload) as Dictionary<string, object>
                     ?? throw new ChatException(ChatFailure.Protocol, "Chat response is not a JSON object.");
             }
             catch (Exception ex) when (ex is ArgumentException || ex is InvalidOperationException)

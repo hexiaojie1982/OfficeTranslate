@@ -9,6 +9,25 @@ namespace OfficeTranslate.WordAddIn
 
         private static readonly Dictionary<string, string[]> Texts = new Dictionary<string, string[]>
         {
+            ["ImageRegionLimitTitle"] = new[] { "图片区域过多，需检查", "圖片區域過多，需檢查", "이미지 영역 초과: 검토 필요", "画像領域が多すぎます：要確認", "Too many image regions; review required" },
+            ["ImageRegionLimit"] = new[] {
+                "每张图片最多保留前 512 个区域；本次有 {0} 个超限区域未写回。请分批识别并检查遗漏内容。",
+                "每張圖片最多保留前 512 個區域；本次有 {0} 個超限區域未寫回。請分批識別並檢查遺漏內容。",
+                "이미지당 처음 512개 영역만 유지합니다. 한도를 초과한 {0}개 영역은 기록하지 않았습니다. 나누어 인식하고 누락된 내용을 확인하세요.",
+                "画像ごとに先頭512領域まで保持します。上限を超えた{0}領域は書き込まれていません。分割して認識し、欠落内容を確認してください。",
+                "Only the first 512 regions per image are retained; {0} excess regions were not written. Recognize in smaller batches and review missing content." },
+            ["SecurityChangelog"] = new[] {
+                "OfficeTranslate 2.3.9.0\r\n• Excel 翻译按字面文本写回，防止公式注入。\r\n• Chat 与图片响应增加大小上限，图片区域最多保留 512 条，超出标记待检查。\r\n• 公网 HTTP 发送 API Key 前保存设置需确认；图片写回逐条检查取消。\r\n\r\n",
+                "OfficeTranslate 2.3.9.0\r\n• Excel 翻譯以字面文字寫回，防止公式注入。\r\n• Chat 與圖片回應增加大小上限，圖片區域最多保留 512 條，超出標記待檢查。\r\n• 公網 HTTP 傳送 API Key 前儲存設定需確認；圖片寫回逐條檢查取消。\r\n\r\n",
+                "OfficeTranslate 2.3.9.0\r\n• Excel 번역을 리터럴 텍스트로 기록하여 수식 주입을 방지합니다.\r\n• Chat 및 이미지 응답 크기를 제한합니다. 이미지 영역은 최대 512개이며 초과 시 검토가 필요합니다.\r\n• 공용 HTTP의 API Key 평문 전송을 설정 저장 시 확인합니다. 이미지 기록 중 취소를 확인합니다.\r\n\r\n",
+                "OfficeTranslate 2.3.9.0\r\n• Excelの翻訳を文字列として書き込み、数式インジェクションを防ぎます。\r\n• Chatと画像応答のサイズを制限します。画像領域は最大512件とし、超過時は要確認にします。\r\n• 公開HTTPでのAPI Key平文送信を設定保存時に確認し、画像書き込み中のキャンセルを確認します。\r\n\r\n",
+                "OfficeTranslate 2.3.9.0\r\n• Write Excel translations as literal text to prevent formula injection.\r\n• Bound Chat and image response sizes; retain at most 512 image regions and flag excess for review.\r\n• Confirm public HTTP plaintext API Key use when saving settings; check cancellation during image writeback.\r\n\r\n" },
+            ["PlaintextKeyWarning"] = new[] {
+                "当前服务使用公网 HTTP，API Key 将以明文发送，可能被窃取。建议改用 HTTPS。仍要保存吗？",
+                "目前服務使用公網 HTTP，API Key 將以明文傳送，可能被竊取。建議改用 HTTPS。仍要儲存嗎？",
+                "현재 서비스는 공용 HTTP를 사용합니다. API Key가 평문으로 전송되어 도난당할 수 있습니다. HTTPS를 권장합니다. 저장하시겠습니까?",
+                "現在のサービスは公開ネットワーク上のHTTPを使用します。API Keyは平文で送信され、盗まれる可能性があります。HTTPSを推奨します。保存しますか？",
+                "This service uses public HTTP. Your API Key will be sent in plaintext and could be stolen. Use HTTPS when possible. Save anyway?" },
             ["WordTextConcurrency"] = new[] { "Word 文本并发数", "Word 文字並行數", "Word 텍스트 동시 요청", "Word テキスト同時実行数", "Word text concurrency" },
             ["WordConcurrencyInvalid"] = new[] { "Word 文本并发数必须在 1–32 之间。", "Word 文字並行數必須介於 1–32。", "Word 텍스트 동시 요청 수는 1–32여야 합니다.", "Word テキスト同時実行数は1–32で指定してください。", "Word text concurrency must be between 1 and 32." },
             ["TextTranslating"] = new[] { "OfficeTranslate：正在翻译 {0}/{1}", "OfficeTranslate：正在翻譯 {0}/{1}", "OfficeTranslate: 번역 중 {0}/{1}", "OfficeTranslate：翻訳中 {0}/{1}", "OfficeTranslate: translating {0}/{1}" },

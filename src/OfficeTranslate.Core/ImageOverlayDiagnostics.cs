@@ -156,12 +156,12 @@ namespace OfficeTranslate.Core
             if (Array.IndexOf(safeFinish, finish) < 0) finish = "other";
             if (host != "Word" && host != "Excel" && host != "PowerPoint") host = "Image";
             return string.Format(CultureInfo.InvariantCulture,
-                "{0:O} host={1} event=ocr_summary png={2}x{3} parsed={4} raw={5} kept={6} dropped={7} bbox_invalid={8} bbox_note={9} empty_translation={10} empty_translation_dropped={11} non_dictionary={12} review={13} finish_reason={14} truncated={15} status={16} elapsed_ms={17} capture={18} capture_reason={19}",
+                "{0:O} host={1} event=ocr_summary png={2}x{3} parsed={4} raw={5} kept={6} dropped={7} bbox_invalid={8} bbox_note={9} empty_translation={10} empty_translation_dropped={11} non_dictionary={12} review={13} finish_reason={14} truncated={15} status={16} elapsed_ms={17} capture={18} capture_reason={19} region_limit_dropped={20}",
                 DateTime.UtcNow, host, width, height, s != null, s?.RawCount ?? -1, s?.RetainedCount ?? -1,
                 s?.DroppedCount ?? -1, s?.InvalidBboxCount ?? -1, s?.InvalidBboxDowngradedCount ?? -1,
                 s?.EmptyTranslationCount ?? -1, s?.EmptyTranslationDroppedCount ?? -1, s?.NonDictionaryCount ?? -1,
                 s?.ReviewCount ?? -1, finish, truncated, status, milliseconds,
-                captureSource == "original" || captureSource == "fallback" ? captureSource : "unknown", SafeCaptureReason(captureReason));
+                captureSource == "original" || captureSource == "fallback" ? captureSource : "unknown", SafeCaptureReason(captureReason), s?.RegionLimitDroppedCount ?? -1);
         }
 
         private static string SafeCaptureReason(string reason) =>
